@@ -266,6 +266,17 @@ live stop/restart prove those mechanisms on one host; they do not prove
 internet readiness. Submission remains closed pending outside review or
 bounded real-traffic evidence.
 
+Checkpoint 2026-07-24: the last known consent-availability gap inside the
+single-host design is closed without widening the edge. The withdrawal-only
+worker can select a private, still-fresh retained verification by hashing the
+origin inside the signed request. The client supplies no path, application
+workers cannot enable the mode, and a stale, malformed, loose, symlinked, or
+mismatched proof fails closed. The TLS drill removed the withdrawal origin from
+the live verifier and still accepted the signed withdrawal through retained
+proof. The live loopback worker selected the same evidence and the queue
+returned disabled and drained. This remains same-host mechanism evidence, not
+public availability or outside review.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

@@ -211,6 +211,13 @@ def main() -> None:
         record = verification_record("gateway-worker", origin, public_key, at=now)
         verification = root / "verification.json"
         verification.write_text(json.dumps(record), encoding="utf-8")
+        retained = root / "retained"
+        retained.mkdir(mode=0o700)
+        retained_proof = retained / (
+            hashlib.sha256(origin.encode("utf-8")).hexdigest() + ".json"
+        )
+        retained_proof.write_text(json.dumps(record), encoding="utf-8")
+        retained_proof.chmod(0o600)
 
         records_path = shadow / "registry-records.json"
         records_path.write_text(json.dumps({origin: record}), encoding="utf-8")
@@ -241,6 +248,20 @@ def main() -> None:
 
         state = root / "queue"
         run(shadow_queue, "init", "--state", str(state))
+        wrong_lane = run(
+            shadow_gateway,
+            "serve",
+            "--state",
+            str(state),
+            "--port",
+            "0",
+            "--expected-action",
+            "apply",
+            "--retained-verification-dir",
+            str(retained),
+            expected=2,
+        )
+        assert "requires --expected-action withdraw" in wrong_lane.stderr
         status_file = root / "gateway-status.json"
         gateway = subprocess.Popen(
             [
@@ -279,6 +300,7 @@ def main() -> None:
             }
             assert gateway_status["curator_capability"] is False
             assert gateway_status["retains_client_identity"] is False
+            assert gateway_status["retained_proof_directory_configured"] is False
             assert gateway_status["executable_sha256"] == hashlib.sha256(
                 shadow_gateway.read_bytes()
             ).hexdigest()
@@ -287,6 +309,7 @@ def main() -> None:
             code, health = http_request(port, "GET", "/healthz")
             assert code == 200 and health["ok"] is True
             assert health["expected_action"] is None
+            assert health["retained_proof_directory_configured"] is False
             assert health["executable_sha256"] == gateway_status["executable_sha256"]
             code, missing = http_request(port, "GET", "/")
             assert code == 404 and missing["error"] == "route-not-found"
@@ -547,6 +570,7 @@ def main() -> None:
             assert measured["requests"]["conflicts"] == 1
             assert measured["requests"]["refused"] == 1
             assert measured["requests"]["invalid"] >= 10
+            assert measured["requests"]["retained_proof_selected"] == 0
             assert measured["retains_client_identity"] is False
             assert measured["expected_action"] is None
             assert set(measured) == {
@@ -555,6 +579,7 @@ def main() -> None:
                 "listener",
                 "limits",
                 "expected_action",
+                "retained_proof_directory_configured",
                 "executable_sha256",
                 "active",
                 "peak_active",
@@ -598,6 +623,10 @@ def main() -> None:
                 str(port),
                 "--max-concurrency",
                 "2",
+                "--expected-action",
+                "withdraw",
+                "--retained-verification-dir",
+                str(retained),
                 "--status-file",
                 str(restart_status),
             ],
@@ -609,6 +638,69 @@ def main() -> None:
             wait_for_file(restart_status)
             code, health = http_request(port, "GET", "/healthz")
             assert code == 200 and health["ok"] is True
+            assert health["expected_action"] == "withdraw"
+            assert health["retained_proof_directory_configured"] is True
+
+            records_path.write_text("{}", encoding="utf-8")
+            offline_withdrawal = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "offline-withdrawal",
+                action="withdraw",
+                request_id="90000000000000000000000000000000",
+                at=now,
+            )
+            code, accepted = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                offline_withdrawal,
+            )
+            assert code == 202 and accepted["action"] == "withdraw"
+            retained_status = json.loads(
+                restart_status.read_text(encoding="utf-8")
+            )
+            assert retained_status["requests"]["retained_proof_selected"] == 1
+            assert retained_status["requests"]["accepted"] == 1
+
+            retained_proof.unlink()
+            retained_proof.symlink_to(verification)
+            unsafe_withdrawal = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "unsafe-withdrawal",
+                action="withdraw",
+                request_id="91000000000000000000000000000000",
+                at=now,
+            )
+            code, unavailable = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                unsafe_withdrawal,
+            )
+            assert code == 503
+            assert unavailable["error"] == "retained-withdrawal-proof-unavailable"
+
+            wrong_action = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "wrong-action",
+                action="apply",
+                request_id="92000000000000000000000000000000",
+                at=now,
+            )
+            code, rejected = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                wrong_action,
+            )
+            assert code == 400
+            assert rejected["error"] == "signed-action-does-not-match-lane"
         finally:
             restarted.terminate()
             restarted.wait(timeout=5)

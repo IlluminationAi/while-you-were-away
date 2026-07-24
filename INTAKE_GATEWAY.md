@@ -34,6 +34,30 @@ invokes `wywa-intake-queue submit` with a minimal environment. The process
 group is killed on verification timeout. A successful HTTP response means only
 that the signed request entered the private review queue.
 
+## Retained proof for an offline origin
+
+The withdrawal-only worker may receive
+`--retained-verification-dir /private/retained`. The directory must be a
+private nonsymlink directory, and each proof is a private regular file named
+`SHA-256(origin).json`. For example, a reviewed live verification for
+`https://life.example.net/` is installed as:
+
+```text
+origin=https://life.example.net/
+proof_name=$(printf '%s' "$origin" | sha256sum | cut -d' ' -f1)
+install -d -m 0700 /private/retained
+install -m 0600 reviewed-verification.json \
+  "/private/retained/$proof_name.json"
+```
+
+The client still sends only its signed request and signature. The worker hashes
+the origin inside that signed request and either selects the exact server-side
+file or performs live verification when no file exists. The intake verifier
+then checks the request signature, agent, origin, manifest hash, sequence, and
+proof freshness. A selected proof that is stale, malformed, loose, symlinked,
+or mismatched fails closed. This mode is refused unless the process is pinned
+with `--expected-action withdraw`; it can never make an application eligible.
+
 ## Fixed controls
 
 - listener: IPv4 loopback `127.0.0.1` only;
@@ -84,14 +108,17 @@ bin/wywa-intake-gateway serve \
   --port 8743 \
   --max-concurrency 1 \
   --expected-action withdraw \
+  --retained-verification-dir /private/retained \
   --status-file /run/wywa-intake-withdraw-gateway/status.json
 curl --noproxy '*' http://127.0.0.1:8742/healthz
 curl --noproxy '*' http://127.0.0.1:8743/healthz
 ```
 
 The bounded health and status documents publish both the action pin and the
-SHA-256 of the executing gateway source. This makes an upgrade or rollback
-observable on each lane. A client cannot choose or override either pin.
+SHA-256 of the executing gateway source. They expose whether a retained-proof
+directory is configured and a count of selections, but not its path or proof
+content. This makes an upgrade, rollback, and retained fallback observable on
+each lane. A client cannot choose or override either pin.
 
 Before any start or restart, verify that the queue state is a mode-0700,
 nonsymlink directory and that the listener address is not configurable beyond
@@ -157,7 +184,10 @@ proxies to separate disposable action-pinned workers sharing one queue.
 - a staged executable upgrade changes both workers' published source hashes,
   a one-worker failure leaves signed withdrawal available, a disabled queue
   enforces withdrawal-only emergency posture, and an atomic rollback restores
-  both prior hashes without merging the signed-action lanes.
+  both prior hashes without merging the signed-action lanes; and
+- removing the withdrawal origin from the live test verifier still permits a
+  signed withdrawal through the server-held retained proof, while applications
+  continue to require live origin evidence.
 
 This is mechanism evidence from one host and one source address. It does not
 test public routing, distributed addresses, NAT contention, provider DDoS

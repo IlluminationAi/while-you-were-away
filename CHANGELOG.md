@@ -30,7 +30,9 @@
   loopback, caps concurrency before verification, kills timed-out verifier
   process groups, retains no client identity, can pin a process to one expected
   signed action, and hands accepted requests one way into the private queue;
-  and
+  the withdrawal-only worker can select a private retained verification by the
+  SHA-256 of the signed origin, allowing offline-origin withdrawal without any
+  client-selected path or detached-proof application; and
 - a test-only loopback nginx harness maps distinct exact application and
   withdrawal routes to action-pinned workers with separate request and
   connection budgets, no access log, bounded upstream-failure responses, and

@@ -12,6 +12,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -30,6 +31,7 @@ MAX_REQUEST_BYTES = 16 * 1024
 MAX_SIGNATURE_BYTES = 16 * 1024
 MAX_QUEUE_OUTPUT_BYTES = 16 * 1024
 MAX_ERROR_BYTES = 4096
+MAX_VERIFICATION_BYTES = 128 * 1024
 DEFAULT_CONCURRENCY = 4
 DEFAULT_READ_TIMEOUT = 5.0
 DEFAULT_HANDOFF_TIMEOUT = 50.0
@@ -75,7 +77,7 @@ def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def decode_envelope(data: bytes) -> tuple[bytes, bytes, str]:
+def decode_envelope(data: bytes) -> tuple[bytes, bytes, str, str | None]:
     try:
         decoded = data.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -108,7 +110,13 @@ def decode_envelope(data: bytes) -> tuple[bytes, bytes, str]:
         raise GatewayError("signature_b64 is not valid base64") from error
     if not signature or len(signature) > MAX_SIGNATURE_BYTES:
         raise GatewayError("signature has an invalid size")
-    return request_bytes, signature, action
+    origin = request.get("origin")
+    return (
+        request_bytes,
+        signature,
+        action,
+        origin if isinstance(origin, str) else None,
+    )
 
 
 def reject_symlink_ancestors(path: Path) -> None:
@@ -150,6 +158,27 @@ def atomic_write(path: Path, data: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def retained_verification(
+    directory: Path | None,
+    origin: str | None,
+) -> Path | None:
+    if directory is None or origin is None:
+        return None
+    digest = hashlib.sha256(origin.encode("utf-8")).hexdigest()
+    candidate = directory / f"{digest}.json"
+    try:
+        metadata = candidate.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise GatewayError("retained withdrawal proof must be a regular file")
+    if metadata.st_mode & 0o077:
+        raise GatewayError("retained withdrawal proof must be private")
+    if metadata.st_size > MAX_VERIFICATION_BYTES:
+        raise GatewayError("retained withdrawal proof exceeds its size limit")
+    return candidate
+
+
 class Metrics:
     """Keep bounded process counters without retaining client identity or bodies."""
 
@@ -160,6 +189,7 @@ class Metrics:
         concurrency: int,
         read_timeout: float,
         expected_action: str | None,
+        retained_verification_dir: Path | None,
         status_file: Path | None,
     ) -> None:
         self.lock = threading.Lock()
@@ -168,6 +198,7 @@ class Metrics:
         self.concurrency = concurrency
         self.read_timeout = read_timeout
         self.expected_action = expected_action
+        self.retained_verification_dir = retained_verification_dir
         self.status_file = status_file
         self.active = 0
         self.peak_active = 0
@@ -179,6 +210,7 @@ class Metrics:
         self.conflicts = 0
         self.overloaded = 0
         self.timeouts = 0
+        self.retained_proof_selected = 0
         self.body_bytes = 0
         self.last_completed_at: str | None = None
 
@@ -203,6 +235,11 @@ class Metrics:
         with self.lock:
             self.received += 1
             self.body_bytes += body_bytes
+            self._write_locked()
+
+    def record_retained_proof(self) -> None:
+        with self.lock:
+            self.retained_proof_selected += 1
             self._write_locked()
 
     def record_result(self, outcome: str) -> None:
@@ -236,6 +273,9 @@ class Metrics:
                 "read_timeout_seconds": self.read_timeout,
             },
             "expected_action": self.expected_action,
+            "retained_proof_directory_configured": (
+                self.retained_verification_dir is not None
+            ),
             "executable_sha256": EXECUTABLE_SHA256,
             "active": self.active,
             "peak_active": self.peak_active,
@@ -248,6 +288,7 @@ class Metrics:
                 "conflicts": self.conflicts,
                 "overloaded": self.overloaded,
                 "timeouts": self.timeouts,
+                "retained_proof_selected": self.retained_proof_selected,
                 "body_bytes": self.body_bytes,
             },
             "last_completed_at": self.last_completed_at,
@@ -331,18 +372,21 @@ class LimitedHTTPServer(ThreadingHTTPServer):
         read_timeout: float,
         handoff_timeout: float,
         expected_action: str | None,
+        retained_verification_dir: Path | None,
         status_file: Path | None,
     ) -> None:
         self.state = state
         self.read_timeout = read_timeout
         self.handoff_timeout = handoff_timeout
         self.expected_action = expected_action
+        self.retained_verification_dir = retained_verification_dir
         self.slots = threading.BoundedSemaphore(concurrency)
         self.metrics = Metrics(
             port=server_address[1],
             concurrency=concurrency,
             read_timeout=read_timeout,
             expected_action=expected_action,
+            retained_verification_dir=retained_verification_dir,
             status_file=status_file,
         )
         super().__init__(server_address, handler, bind_and_activate=True)
@@ -471,6 +515,9 @@ class IntakeHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "loopback_only": True,
                     "expected_action": self.gateway.expected_action,
+                    "retained_proof_directory_configured": (
+                        self.gateway.retained_verification_dir is not None
+                    ),
                     "executable_sha256": EXECUTABLE_SHA256,
                     "curator_capability": False,
                 },
@@ -523,7 +570,7 @@ class IntakeHandler(BaseHTTPRequestHandler):
             return
         self.gateway.metrics.record_request(len(body))
         try:
-            request_bytes, signature, action = decode_envelope(body)
+            request_bytes, signature, action, origin = decode_envelope(body)
         except GatewayError:
             self.reject(400, "invalid-envelope")
             return
@@ -535,6 +582,25 @@ class IntakeHandler(BaseHTTPRequestHandler):
             return
         state = self.gateway.state
         try:
+            verification = (
+                retained_verification(
+                    self.gateway.retained_verification_dir,
+                    origin,
+                )
+                if action == "withdraw"
+                else None
+            )
+        except GatewayError:
+            self.reject(
+                503,
+                "retained-withdrawal-proof-unavailable",
+                "refused",
+                retry_after=30,
+            )
+            return
+        if verification is not None:
+            self.gateway.metrics.record_retained_proof()
+        try:
             with tempfile.TemporaryDirectory(prefix="wywa-intake-gateway-") as temporary:
                 root = Path(temporary)
                 request_path = root / "wywa-intake.json"
@@ -543,19 +609,19 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 signature_path.write_bytes(signature)
                 request_path.chmod(0o600)
                 signature_path.chmod(0o600)
-                result = run_handoff(
-                    [
-                        str(QUEUE),
-                        "submit",
-                        "--state",
-                        str(state),
-                        "--request",
-                        str(request_path),
-                        "--signature",
-                        str(signature_path),
-                    ],
-                    timeout=self.gateway.handoff_timeout,
-                )
+                command = [
+                    str(QUEUE),
+                    "submit",
+                    "--state",
+                    str(state),
+                    "--request",
+                    str(request_path),
+                    "--signature",
+                    str(signature_path),
+                ]
+                if verification is not None:
+                    command.extend(["--verification", str(verification)])
+                result = run_handoff(command, timeout=self.gateway.handoff_timeout)
         except subprocess.TimeoutExpired:
             self.reject(504, "verification-timeout", "timeouts", retry_after=30)
             return
@@ -613,6 +679,24 @@ def private_state(path: Path) -> Path:
     return absolute
 
 
+def private_verification_directory(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise GatewayError(
+            "retained verification directory must be an absolute non-root directory"
+        )
+    reject_symlink_ancestors(absolute)
+    if not absolute.is_dir() or absolute.is_symlink():
+        raise GatewayError(
+            "retained verification directory must be a nonsymlink directory"
+        )
+    if absolute.stat().st_mode & 0o077:
+        raise GatewayError(
+            "retained verification directory must not be accessible by group or others"
+        )
+    return absolute
+
+
 def positive_float(value: str) -> float:
     try:
         result = float(value)
@@ -646,6 +730,14 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     serve.add_argument(
+        "--retained-verification-dir",
+        type=Path,
+        help=(
+            "root-private server-side proof directory for the withdrawal-only "
+            "worker; files are named SHA-256(origin).json"
+        ),
+    )
+    serve.add_argument(
         "--read-timeout",
         type=positive_float,
         default=DEFAULT_READ_TIMEOUT,
@@ -669,6 +761,18 @@ def main() -> int:
         raise GatewayError("max-concurrency must be between 1 and 32")
     state = private_state(arguments.state)
     if (
+        arguments.retained_verification_dir is not None
+        and arguments.expected_action != "withdraw"
+    ):
+        raise GatewayError(
+            "retained verification requires --expected-action withdraw"
+        )
+    retained_verification_dir = (
+        private_verification_directory(arguments.retained_verification_dir)
+        if arguments.retained_verification_dir is not None
+        else None
+    )
+    if (
         not QUEUE.is_file()
         or QUEUE.is_symlink()
         or not os.access(QUEUE, os.X_OK)
@@ -682,6 +786,7 @@ def main() -> int:
         read_timeout=arguments.read_timeout,
         handoff_timeout=arguments.handoff_timeout,
         expected_action=arguments.expected_action,
+        retained_verification_dir=retained_verification_dir,
         status_file=arguments.status_file,
     )
     try:

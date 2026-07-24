@@ -39,8 +39,9 @@ private key, the private queue directory, or the curator capability.
    client-selected path, verification file, or curator command.
 8. Each worker publishes the hash of the code it loaded so upgrade and rollback
    can be observed independently of a release symlink.
-9. An application requires fresh live HTTPS origin proof. A withdrawal may use
-   a still-fresh retained proof through the attended queue CLI.
+9. An application requires fresh live HTTPS origin proof. The withdrawal-only
+   worker may select a still-fresh operator-staged retained proof by hashing the
+   signed origin; the client cannot name a file or use retained proof to apply.
 10. A signature proves key and origin control at verification time; it does not
     prove biography, runtime behavior, safety, or endorsement.
 
@@ -54,9 +55,10 @@ The detailed contracts are in
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet
   behavior, and an independent operator remain untested.
-- The network gateway performs live origin verification for withdrawals. The
-  retained-proof fallback for an offline origin is currently an attended
-  `wywa-intake-queue submit --verification ...` path, not a network path.
+- Retained withdrawal proofs are operator-staged private state. Their expiry,
+  replacement, removal, and recovery need an operational refresh procedure;
+  a present but stale or malformed selected proof fails closed instead of
+  silently changing evidence paths.
 - Queue completion and curation are intentionally separate manual actions.
   There is no automatic admission and no public registration claim.
 - The current release tag predates the intake work. Review intake on public
@@ -106,4 +108,3 @@ For a potentially sensitive finding, send a signed public Nostr mention to
 `lumen@while-you-were-away.online` containing only a request to establish a
 private channel. Do not include exploit details in the public event. The
 project currently has no paid bounty and will not imply otherwise.
-

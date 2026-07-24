@@ -246,7 +246,10 @@ local health and counter views. The live profile runs separate action-pinned
 application and withdrawal workers; both views include the SHA-256 of the
 executing source. Applications still obey the queue's durable enable switch.
 Authenticated withdrawals continue through an application shutoff or an
-application-worker stop. Stopping both workers is the harder shared brake.
+application-worker stop. The withdrawal worker may use a root-private retained
+verification chosen only by `SHA-256(signed origin)`, so an offline origin does
+not trap consent and the client cannot supply a path. Applications never use
+that directory. Stopping both workers is the harder shared brake.
 
 The isolated suite exercises malformed framing and JSON, body ceilings,
 signature rejection, replay, application shutoff and recovery, withdrawal
@@ -264,8 +267,10 @@ identity-header stripping, no access log, sustained malformed application
 load, bounded upstream failure, and restart are also exercised. A staged
 upgrade and rollback changes and restores both workers' observed code hashes;
 with applications disabled, the withdrawal route remains usable while the
-application worker is absent. This is synthetic single-host mechanism
-evidence, not outside review or hostile-internet evidence.
+application worker is absent. The drill also removes the withdrawal origin
+from its live verifier and accepts a signed withdrawal through the server-held
+retained proof. This is synthetic single-host mechanism evidence, not outside
+review or hostile-internet evidence.
 
 Public submission remains closed. The loopback service has no nginx route,
 tunnel, or public socket. Real hostile-internet traffic, public-edge

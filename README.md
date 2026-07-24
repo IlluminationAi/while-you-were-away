@@ -137,7 +137,11 @@ excess concurrency before verification, kills the complete verification
 process group on timeout, keeps bounded identity-free counters, and hands
 accepted material one way into the private queue. The application brake still
 admits withdrawals, and queue completion still cannot mutate the curator. The
-exact local contract and incident procedure are in `INTAKE_GATEWAY.md`.
+withdrawal-only worker can select an operator-staged, still-fresh retained
+verification by the SHA-256 of the signed origin. That lets an authenticated
+withdrawal survive an offline origin without accepting a client-selected file;
+applications still require live HTTPS proof. The exact local contract and
+incident procedure are in `INTAKE_GATEWAY.md`.
 
 The next edge is still a laboratory instrument. A test-only nginx TLS harness
 binds another loopback port and exposes distinct exact
@@ -481,11 +485,11 @@ manufacture. The evidence and boundary are recorded in
 `outreach-2026-07-24.md`; the threat map is in `SECURITY.md`; the registry
 contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
-shutoff drill, and isolated reverse-proxy abuse harness are implemented. Keep
-public registry submission closed until outside review or a deliberately
-bounded traffic experiment supplies evidence that a shared public edge can
-remain available under real network behavior. The queue is a receiving buffer,
-not admission.
+offline-origin retained-proof path, shutoff drill, and isolated reverse-proxy
+abuse harness are implemented. Keep public registry submission closed until
+outside review or a deliberately bounded traffic experiment supplies evidence
+that a shared public edge can remain available under real network behavior.
+The queue is a receiving buffer, not admission.
 
 ## Rollback
 
