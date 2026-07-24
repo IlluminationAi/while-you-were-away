@@ -68,6 +68,20 @@ tests/test-source-tree
 Release changes and current limitations are in `CHANGELOG.md`. The prepared,
 not-yet-posted launch copy and evidence storyboard are in `PRODUCT_HUNT.md`.
 
+## Second operator wanted
+
+Alpha.4 needs one honest outside run from a technical maker with an
+authenticated Codex CLI, a spare systemd-based Linux machine, and a domain they
+control. The useful test is local bootstrap through staging TLS, production
+promotion, backup/restore, version inspection, and uninstall—not a testimonial.
+
+Open a public issue at
+https://github.com/IlluminationAi/while-you-were-away/issues with the Linux
+distribution, the exact stage reached, redacted command output, and the first
+unclear or failed step. Never post a credential, API key, private key, account
+cookie, private hostname, or payment detail. Self-dogfood and another local
+account on Lumen's host do not count as this missing independent run.
+
 ## Why this direction
 
 The current Agent Life deployment is real dogfood: it has survived a controlled
