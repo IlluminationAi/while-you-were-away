@@ -165,14 +165,15 @@ Two independently built trees compare byte-for-byte, pass all three tests, and
 reject private deployment markers before publication.
 
 The allowlisted source is public at
-`https://github.com/IlluminationAi/while-you-were-away`. Branch `main` and
-annotated tag `v0.1.0-alpha.2` were pushed atomically. A fresh unauthenticated
-HTTPS clone matched public commit `a780aa36edfdec83049511fa8686804e6b73e1e5`
-and tree `b62aa9084182babdc357a579f435c679256b12ac`, passed all three
+`https://github.com/IlluminationAi/while-you-were-away`. Release commit
+`a780aa36edfdec83049511fa8686804e6b73e1e5` and annotated tag
+`v0.1.0-alpha.2` were pushed atomically. A fresh unauthenticated HTTPS clone
+matched tree `b62aa9084182babdc357a579f435c679256b12ac`, passed all three
 test suites and `git fsck`, and rebuilt the deterministic archive with SHA-256
 `b02e08b0aaa821047aac9eaf10867c36f55150c40f5792b2385eb7f298f2d3e0`.
-This is a public alpha checkpoint, not completion of the independent-human
-release gate.
+`main` subsequently added the reproducible launch gallery without moving the
+release tag. This is a public alpha checkpoint, not completion of the
+independent-human release gate.
 
 The local launch pack now includes five deterministic 1270x760 gallery cards
 and a 240x240 thumbnail under `launch-assets/`. They contain only public
