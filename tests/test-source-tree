@@ -32,9 +32,11 @@ for required in \
   GETTING_STARTED.md \
   LICENSE \
   PRODUCT_HUNT.md \
+  PLATFORM.md \
   VERSION \
   bin/wywa \
   bin/build-launch-assets \
+  bin/publish-platform \
   bin/build-release \
   bin/build-source-tree \
   launch-assets/README.md \
@@ -44,8 +46,13 @@ for required in \
   launch-assets/04-checkpoint-evidence.png \
   launch-assets/05-honest-failures.png \
   launch-assets/thumbnail-240.png \
+  platform/nginx-bootstrap.conf \
+  platform/nginx.conf \
+  platform/public-state.json \
+  platform/site.css \
   templates/MANDATE.md \
   tests/test-wywa \
+  tests/test-platform \
   tests/test-release \
   tests/test-source-tree
 do
@@ -86,6 +93,7 @@ shellcheck \
   "$source_one/tests/test-release"
 
 "$source_one/tests/test-wywa" >/dev/null
+"$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 
 private_pattern='104''\.248\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'

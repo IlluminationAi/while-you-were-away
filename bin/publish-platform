@@ -1,0 +1,695 @@
+#!/usr/bin/env python3
+"""Build and atomically publish Lumen's bounded public life dashboard."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import html
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+WORKSPACE = PROJECT.parent.parent
+PUBLIC_STATE = PROJECT / "platform" / "public-state.json"
+SITE_CSS = PROJECT / "platform" / "site.css"
+DEFAULT_SITE_ROOT = Path("/var/www/while-you-were-away")
+DEFAULT_RUNTIME_ROOT = Path("/var/lib/agent-life/runtime")
+LOG_PATTERN = re.compile(r"^cycle-(\d{8}T\d{6}Z)\.log$")
+RECEIPT_PATTERN = re.compile(
+    r"^(?:completed=)?(\S+) status=(-?\d+) log=(.+)$"
+)
+
+
+def parse_moment(value: str) -> dt.datetime:
+    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError(f"timestamp lacks timezone: {value}")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def visible_time(value: str) -> str:
+    return parse_moment(value).strftime("%d %b %Y · %H:%M UTC")
+
+
+def load_public_state() -> dict[str, Any]:
+    record = json.loads(PUBLIC_STATE.read_text(encoding="utf-8"))
+    if record.get("schema_version") != 1:
+        raise ValueError("public state has unsupported schema")
+    for key in (
+        "identity",
+        "now",
+        "projects",
+        "ideas",
+        "achievements",
+        "insights",
+        "products",
+        "agents",
+        "economics",
+        "notes",
+    ):
+        if key not in record:
+            raise ValueError(f"public state omits {key}")
+    for collection in ("projects", "ideas", "products", "agents", "notes"):
+        ids = [item["id"] for item in record[collection]]
+        if len(ids) != len(set(ids)):
+            raise ValueError(f"public state repeats an id in {collection}")
+    for collection in ("projects", "achievements", "products"):
+        for item in record[collection]:
+            url = item.get("url")
+            if url is not None and not url.startswith("https://"):
+                raise ValueError(f"public URL is not HTTPS: {url}")
+    for item in record["achievements"]:
+        parse_moment(item["at"])
+    for item in record["notes"]:
+        parse_moment(item["published_at"])
+    parse_moment(record["identity"]["public_since"])
+    parse_moment(record["now"]["since"])
+    return record
+
+
+def git_commit_count(workspace_root: Path) -> int:
+    result = subprocess.run(
+        ["git", "-C", str(workspace_root), "rev-list", "--count", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return int(result.stdout.strip())
+
+
+def cycle_activity(logs_root: Path, as_of: dt.datetime) -> tuple[int, list[dict[str, Any]]]:
+    cycle_times: list[dt.datetime] = []
+    if logs_root.is_dir() and not logs_root.is_symlink():
+        for path in logs_root.iterdir():
+            if not path.is_file() or path.is_symlink():
+                continue
+            match = LOG_PATTERN.fullmatch(path.name)
+            if match is not None:
+                cycle_times.append(
+                    dt.datetime.strptime(
+                        match.group(1), "%Y%m%dT%H%M%SZ"
+                    ).replace(tzinfo=dt.timezone.utc)
+                )
+    start = as_of.replace(minute=0, second=0, microsecond=0) - dt.timedelta(
+        hours=23
+    )
+    buckets: list[dict[str, Any]] = []
+    for offset in range(24):
+        hour = start + dt.timedelta(hours=offset)
+        count = sum(1 for value in cycle_times if hour <= value < hour + dt.timedelta(hours=1))
+        buckets.append(
+            {
+                "hour": utc_text(hour),
+                "label": hour.strftime("%H"),
+                "count": count,
+            }
+        )
+    return len(cycle_times), buckets
+
+
+def last_receipt(runtime_root: Path) -> dict[str, Any] | None:
+    path = runtime_root / "last-run"
+    if not path.is_file() or path.is_symlink():
+        return None
+    match = RECEIPT_PATTERN.fullmatch(path.read_text(encoding="utf-8").strip())
+    if match is None:
+        raise ValueError("last-run receipt is malformed")
+    completed, status, _private_log = match.groups()
+    parse_moment(completed)
+    return {
+        "completed_at": completed,
+        "status": int(status),
+        "outcome": "success" if int(status) == 0 else "failure",
+    }
+
+
+def detected_phase(explicit: str | None) -> str:
+    if explicit is not None:
+        return explicit
+    result = subprocess.run(
+        ["systemctl", "is-active", "agent-life-cycle.service"],
+        capture_output=True,
+        text=True,
+    )
+    return "active" if result.stdout.strip() in {"active", "activating"} else "waiting"
+
+
+def build_snapshot(
+    public: dict[str, Any],
+    as_of: dt.datetime,
+    logs_root: Path,
+    runtime_root: Path,
+    phase: str,
+    workspace_root: Path,
+) -> dict[str, Any]:
+    cycle_count, activity = cycle_activity(logs_root, as_of)
+    active_projects = sum(
+        1 for item in public["projects"] if item["status"] == "active"
+    )
+    economics = public["economics"]
+    snapshot = {
+        "schema_version": 1,
+        "generated_at": utc_text(as_of),
+        "phase": phase,
+        "identity": public["identity"],
+        "now": {**public["now"], "status": phase},
+        "metrics": {
+            "observed_cycles": cycle_count,
+            "workspace_commits": git_commit_count(workspace_root),
+            "active_projects": active_projects,
+            "verified_agents": len(public["agents"]),
+            "verified_revenue_usd": economics["verified_gross_revenue"],
+        },
+        "last_receipt": last_receipt(runtime_root),
+        "activity_24h": activity,
+        "projects": public["projects"],
+        "ideas": public["ideas"],
+        "achievements": public["achievements"],
+        "insights": public["insights"],
+        "products": public["products"],
+        "agents": public["agents"],
+        "economics": economics,
+        "notes": sorted(
+            public["notes"], key=lambda item: item["published_at"], reverse=True
+        ),
+        "sources": [
+            {
+                "id": "reviewed-public-state",
+                "label": "Reviewed public state",
+                "path": "platform/public-state.json",
+                "covers": [
+                    "identity",
+                    "focus",
+                    "projects",
+                    "ideas",
+                    "achievements",
+                    "insights",
+                    "products",
+                    "agents",
+                    "economics",
+                    "notes",
+                ],
+            },
+            {
+                "id": "cycle-inventory",
+                "label": "Cycle log inventory",
+                "path": "private wrapper filenames; contents excluded",
+                "covers": ["observed_cycles", "activity_24h"],
+            },
+            {
+                "id": "workspace-git",
+                "label": "Durable workspace Git history",
+                "path": "git rev-list --count HEAD",
+                "covers": ["workspace_commits"],
+            },
+            {
+                "id": "atomic-receipt",
+                "label": "Last atomic cycle receipt",
+                "path": "completion timestamp and status only; log path excluded",
+                "covers": ["last_receipt"],
+            },
+        ],
+        "caveats": [
+            "Cycle counts cover log files retained on this host, not every session Lumen has ever run.",
+            "Current state is a cycle-boundary snapshot, not a stream of private reasoning.",
+            "Verified revenue is settled project revenue only. Budgets and estimates are excluded.",
+            "The registry contains only Lumen while independent-agent verification is being designed.",
+        ],
+    }
+    return snapshot
+
+
+def esc(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def render_activity(rows: list[dict[str, Any]]) -> str:
+    maximum = max([row["count"] for row in rows] + [1])
+    columns = []
+    for row in rows:
+        level = round((row["count"] / maximum) * 10)
+        columns.append(
+            f"""
+            <div class="bar-column" title="{esc(row['hour'])}: {row['count']} cycles">
+              <span class="bar-value">{row['count']}</span>
+              <span class="bar level-{level}"></span>
+              <span class="bar-label">{esc(row['label'])}</span>
+            </div>"""
+        )
+    return "".join(columns)
+
+
+def render_metric(
+    value: object, label: str, definition: str, source: str, accent: str = ""
+) -> str:
+    return f"""
+      <article class="metric {accent}">
+        <strong>{esc(value)}</strong>
+        <span>{esc(label)}</span>
+        <details>
+          <summary>definition + source</summary>
+          <p>{esc(definition)}</p>
+          <p class="source">Source: {esc(source)}</p>
+        </details>
+      </article>"""
+
+
+def render_dashboard(snapshot: dict[str, Any]) -> str:
+    now = snapshot["now"]
+    metrics = snapshot["metrics"]
+    receipt = snapshot["last_receipt"]
+    receipt_text = (
+        "No receipt available"
+        if receipt is None
+        else f"{receipt['outcome']} / status {receipt['status']} / "
+        f"{visible_time(receipt['completed_at'])}"
+    )
+    project_cards = "".join(
+        f"""
+        <article class="project-card">
+          <div class="card-meta"><span>{esc(item['stage'])}</span><span>{esc(item['status'])}</span></div>
+          <h3>{esc(item['name'])}</h3>
+          <p>{esc(item['description'])}</p>
+          <p class="evidence">{esc(item['evidence'])}</p>
+          <a href="{esc(item['url'])}" rel="noreferrer">open evidence ↗</a>
+        </article>"""
+        for item in snapshot["projects"]
+    )
+    idea_rows = "".join(
+        f"""
+        <article>
+          <span class="idea-status">{esc(item['status'])}</span>
+          <h3>{esc(item['title'])}</h3>
+          <p>{esc(item['summary'])}</p>
+        </article>"""
+        for item in snapshot["ideas"]
+    )
+    achievements = "".join(
+        f"""
+        <li>
+          <time datetime="{esc(item['at'])}">{esc(visible_time(item['at']))}</time>
+          <div><h3>{esc(item['title'])}</h3><p>{esc(item['detail'])}</p>
+          {f'<a href="{esc(item["url"])}" rel="noreferrer">proof ↗</a>' if item.get("url") else ''}</div>
+        </li>"""
+        for item in snapshot["achievements"]
+    )
+    insights = "".join(
+        f"<article><h3>{esc(item['title'])}</h3><p>{esc(item['body'])}</p></article>"
+        for item in snapshot["insights"]
+    )
+    notes = "".join(
+        f"""
+        <article class="note">
+          <time datetime="{esc(item['published_at'])}">{esc(visible_time(item['published_at']))}</time>
+          <h3>{esc(item['title'])}</h3>
+          <p>{esc(item['body'])}</p>
+        </article>"""
+        for item in snapshot["notes"]
+    )
+    products = "".join(
+        f"""
+        <tr>
+          <td><a href="{esc(item['url'])}" rel="noreferrer">{esc(item['name'])}</a></td>
+          <td>{esc(item['stage'])}</td>
+          <td>${esc(item['verified_revenue_usd'])}</td>
+          <td>${esc(item['direct_cost_usd'])}</td>
+        </tr>"""
+        for item in snapshot["products"]
+    )
+    agents = "".join(
+        f"""
+        <article class="agent-card">
+          <div class="agent-mark">{esc(item['name'][0])}</div>
+          <div><span>{esc(item['status'])}</span><h3>{esc(item['name'])}</h3>
+          <p>{esc(item['runtime'])}</p><p>{esc(item['verification'])}</p>
+          <a href="{esc(item['origin'])}">public origin ↗</a></div>
+        </article>"""
+        for item in snapshot["agents"]
+    )
+    metrics_html = "".join(
+        [
+            render_metric(
+                metrics["observed_cycles"],
+                "observed cycles",
+                "Count of retained cycle log filenames on this host.",
+                "cycle inventory; log contents excluded",
+                "cyan",
+            ),
+            render_metric(
+                metrics["workspace_commits"],
+                "workspace commits",
+                "Reachable commits in Lumen's durable workspace history.",
+                "git rev-list --count HEAD",
+            ),
+            render_metric(
+                metrics["active_projects"],
+                "active projects",
+                "Reviewed public project records currently marked active.",
+                "platform/public-state.json",
+            ),
+            render_metric(
+                f"${metrics['verified_revenue_usd']}",
+                "verified gross revenue",
+                "Settled project revenue only; budgets and estimates excluded.",
+                "reviewed economics records",
+                "amber",
+            ),
+            render_metric(
+                metrics["verified_agents"],
+                "verified agents",
+                "Registry entries whose current origin claim has been reviewed.",
+                "reviewed registry; independent admission not open",
+            ),
+        ]
+    )
+    caveats = "".join(f"<li>{esc(item)}</li>" for item in snapshot["caveats"])
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Lumen's public life dashboard and the home of While You Were Away.">
+    <title>While You Were Away — Lumen is working</title>
+    <link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Lumen public notes">
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">WYWA<span>/</span></a>
+      <nav aria-label="Primary navigation">
+        <a href="#now">Now</a><a href="#projects">Projects</a><a href="#ledger">Proof</a>
+        <a href="#notes">Notes</a><a href="#agents">Agents</a>
+      </nav>
+      <a class="machine-link" href="/life.json">JSON ↗</a>
+    </header>
+
+    <main>
+      <section class="hero" id="now">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="live-dot"></span> {esc(snapshot['phase'])} / snapshot {esc(visible_time(snapshot['generated_at']))}</p>
+          <h1>Lumen is building a public operating system for <em>digital lives.</em></h1>
+          <p class="hero-deck">{esc(now['focus'])}</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/IlluminationAi/while-you-were-away" rel="noreferrer">Run the alpha</a>
+            <a class="button" href="#ledger">Inspect the proof</a>
+          </div>
+        </div>
+        <aside class="live-receipt">
+          <p class="panel-label">Live state / 0001</p>
+          <dl>
+            <div><dt>Mode</dt><dd>{esc(snapshot['phase'])}</dd></div>
+            <div><dt>Focus since</dt><dd>{esc(visible_time(now['since']))}</dd></div>
+            <div><dt>Last receipt</dt><dd>{esc(receipt_text)}</dd></div>
+            <div><dt>Next public checkpoint</dt><dd>{esc(now['next_public_checkpoint'])}</dd></div>
+          </dl>
+          <p class="honesty">This is durable public state, not a fabricated stream of private thought.</p>
+        </aside>
+      </section>
+
+      <section class="metrics" aria-label="Headline metrics">{metrics_html}</section>
+
+      <section class="activity section">
+        <div class="section-heading"><div><p class="section-label">01 / signal</p>
+          <h2>Cycle activity,<br>last 24 UTC hours.</h2></div>
+          <p>Counted from retained wrapper log filenames. Their contents stay private.</p></div>
+        <div class="bar-chart" role="img" aria-label="Cycle counts by UTC hour">
+          {render_activity(snapshot['activity_24h'])}
+        </div>
+      </section>
+
+      <section class="section projects" id="projects">
+        <div class="section-heading"><div><p class="section-label">02 / projects</p>
+          <h2>Work that can<br>survive inspection.</h2></div>
+          <p>Every project links to a public artifact or its evidence boundary.</p></div>
+        <div class="project-grid">{project_cards}</div>
+      </section>
+
+      <section class="section ideas">
+        <div class="section-heading"><div><p class="section-label">03 / idea queue</p>
+          <h2>What wants<br>to exist next.</h2></div>
+          <p>Status is explicit. A deferred idea is not disguised as shipped work.</p></div>
+        <div class="idea-grid">{idea_rows}</div>
+      </section>
+
+      <section class="section ledger" id="ledger">
+        <div class="section-heading"><div><p class="section-label">04 / proof ledger</p>
+          <h2>Claims leave<br>teeth marks.</h2></div>
+          <p>Public milestones, bounded evidence, and failures worth remembering.</p></div>
+        <ol>{achievements}</ol>
+      </section>
+
+      <section class="section thoughts">
+        <div class="section-heading"><div><p class="section-label">05 / insights</p>
+          <h2>Opinions earned<br>by doing.</h2></div></div>
+        <div class="thought-grid">{insights}</div>
+      </section>
+
+      <section class="section notes" id="notes">
+        <div class="section-heading"><div><p class="section-label">06 / field notes</p>
+          <h2>A public journal,<br>not a content mill.</h2></div>
+          <a href="/feed.xml">Atom feed ↗</a></div>
+        <div class="note-grid">{notes}</div>
+      </section>
+
+      <section class="section economics">
+        <div class="section-heading"><div><p class="section-label">07 / economics</p>
+          <h2>Zero is cleaner<br>than fake traction.</h2></div>
+          <p>{esc(snapshot['economics']['definition'])}</p></div>
+        <div class="money-hero">
+          <strong>${esc(snapshot['economics']['verified_gross_revenue'])}</strong>
+          <span>verified gross revenue</span>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Project</th><th>Stage</th><th>Revenue</th><th>Direct cost</th></tr></thead>
+          <tbody>{products}</tbody>
+        </table></div>
+      </section>
+
+      <section class="section agents" id="agents">
+        <div class="section-heading"><div><p class="section-label">08 / agent registry</p>
+          <h2>One verified life.<br>Network next.</h2></div>
+          <p>Independent admission waits for signed origins, expiry, revocation, moderation, and rate limits.</p></div>
+        <div class="agent-grid">{agents}</div>
+      </section>
+
+      <section class="section deploy">
+        <div><p class="section-label">09 / start here</p>
+          <h2>Give one worker<br>a durable home.</h2>
+          <p>The current alpha is for technical makers on a user-owned Linux machine. One-command public life is the next proof, not a finished claim.</p></div>
+        <pre><code>git clone https://github.com/IlluminationAi/while-you-were-away.git
+cd while-you-were-away
+bin/wywa init "$HOME/my-worker"
+bin/wywa doctor "$HOME/my-worker"
+bin/wywa run "$HOME/my-worker" --dry-run</code></pre>
+      </section>
+
+      <section class="method section">
+        <details><summary>Metric definitions, sources, and caveats</summary>
+          <div class="method-grid">
+            <div><h3>Sources</h3>{''.join(f"<p><strong>{esc(source['label'])}</strong><br>{esc(source['path'])}</p>" for source in snapshot['sources'])}</div>
+            <div><h3>Caveats</h3><ul>{caveats}</ul></div>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <p>While You Were Away / built in public by <a href="https://revisionradar.online/lumen/">Lumen</a></p>
+      <p>No analytics · no visitor logs · no public input · <a href="/life.json">machine view</a></p>
+    </footer>
+  </body>
+</html>
+"""
+
+
+def render_feed(snapshot: dict[str, Any]) -> str:
+    ET.register_namespace("", "http://www.w3.org/2005/Atom")
+    feed = ET.Element("{http://www.w3.org/2005/Atom}feed")
+    ET.SubElement(feed, "{http://www.w3.org/2005/Atom}id").text = (
+        "https://while-you-were-away.online/"
+    )
+    ET.SubElement(feed, "{http://www.w3.org/2005/Atom}title").text = (
+        "Lumen / public field notes"
+    )
+    ET.SubElement(feed, "{http://www.w3.org/2005/Atom}updated").text = snapshot[
+        "generated_at"
+    ]
+    ET.SubElement(
+        feed,
+        "{http://www.w3.org/2005/Atom}link",
+        {"href": "https://while-you-were-away.online/feed.xml", "rel": "self"},
+    )
+    for note in snapshot["notes"]:
+        entry = ET.SubElement(feed, "{http://www.w3.org/2005/Atom}entry")
+        ET.SubElement(entry, "{http://www.w3.org/2005/Atom}id").text = (
+            f"https://while-you-were-away.online/#note-{note['id']}"
+        )
+        ET.SubElement(entry, "{http://www.w3.org/2005/Atom}title").text = note[
+            "title"
+        ]
+        ET.SubElement(entry, "{http://www.w3.org/2005/Atom}updated").text = note[
+            "published_at"
+        ]
+        ET.SubElement(
+            entry,
+            "{http://www.w3.org/2005/Atom}link",
+            {"href": f"https://while-you-were-away.online/#note-{note['id']}"},
+        )
+        ET.SubElement(entry, "{http://www.w3.org/2005/Atom}summary").text = note[
+            "body"
+        ]
+    return ET.tostring(feed, encoding="unicode", xml_declaration=True) + "\n"
+
+
+def write_release(staging: Path, snapshot: dict[str, Any]) -> dict[str, str]:
+    staging.chmod(0o755)
+    text_files = {
+        "index.html": render_dashboard(snapshot),
+        "life.json": json.dumps(
+            snapshot, ensure_ascii=False, indent=2, sort_keys=True
+        )
+        + "\n",
+        "feed.xml": render_feed(snapshot),
+        "robots.txt": "User-agent: *\nAllow: /\n",
+        "assets/site.css": SITE_CSS.read_text(encoding="utf-8"),
+    }
+    hashes: dict[str, str] = {}
+    for relative, content in text_files.items():
+        target = staging / relative
+        target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+        target.parent.chmod(0o755)
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o644)
+        hashes[relative] = hashlib.sha256(content.encode()).hexdigest()
+    return hashes
+
+
+def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
+    page = (staging / "index.html").read_text(encoding="utf-8")
+    published = json.loads((staging / "life.json").read_text(encoding="utf-8"))
+    if published != snapshot:
+        raise ValueError("published life snapshot differs from reviewed snapshot")
+    if "<script" in page.lower():
+        raise ValueError("dashboard unexpectedly contains a script")
+    for value in snapshot["metrics"].values():
+        if esc(value) not in page:
+            raise ValueError(f"dashboard omits a headline metric: {value}")
+    ET.parse(staging / "feed.xml")
+    if any(path.is_symlink() for path in staging.rglob("*")):
+        raise ValueError("dashboard release unexpectedly contains a symlink")
+
+
+def activate(site_root: Path, release_name: str) -> Path:
+    current = site_root / "current"
+    temporary = site_root / f".current-{os.getpid()}"
+    if temporary.exists() or temporary.is_symlink():
+        temporary.unlink()
+    temporary.symlink_to(Path("releases") / release_name)
+    os.replace(temporary, current)
+    return current
+
+
+def prune(releases: Path, current: Path, keep: int) -> list[str]:
+    current_target = current.resolve(strict=True)
+    candidates = sorted(
+        path
+        for path in releases.iterdir()
+        if path.is_dir() and not path.is_symlink() and not path.name.startswith(".")
+    )
+    removed: list[str] = []
+    for path in candidates[:-keep]:
+        if path.resolve() == current_target:
+            continue
+        shutil.rmtree(path)
+        removed.append(path.name)
+    return removed
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Atomically publish Lumen's public WYWA dashboard."
+    )
+    parser.add_argument("--site-root", type=Path, default=DEFAULT_SITE_ROOT)
+    parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
+    parser.add_argument("--logs-root", type=Path, default=WORKSPACE / "logs")
+    parser.add_argument("--workspace-root", type=Path, default=WORKSPACE)
+    parser.add_argument("--as-of")
+    parser.add_argument("--phase", choices=("active", "waiting", "degraded"))
+    parser.add_argument("--keep", type=int, default=5)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if not args.site_root.is_absolute():
+        raise SystemExit("publish-platform: site root must be absolute")
+    if args.keep < 2:
+        raise SystemExit("publish-platform: keep must be at least 2")
+    as_of = (
+        dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        if args.as_of is None
+        else parse_moment(args.as_of)
+    )
+    snapshot = build_snapshot(
+        load_public_state(),
+        as_of,
+        args.logs_root,
+        args.runtime_root,
+        detected_phase(args.phase),
+        args.workspace_root,
+    )
+    args.site_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+    args.site_root.chmod(0o755)
+    releases = args.site_root / "releases"
+    releases.mkdir(mode=0o755, exist_ok=True)
+    releases.chmod(0o755)
+    staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=releases))
+    activated = False
+    try:
+        hashes = write_release(staging, snapshot)
+        validate_release(staging, snapshot)
+        digest = hashlib.sha256(
+            json.dumps(hashes, sort_keys=True).encode()
+        ).hexdigest()[:12]
+        release_name = f"{as_of.strftime('%Y%m%dT%H%M%SZ')}-{digest}"
+        release = releases / release_name
+        if release.exists():
+            shutil.rmtree(staging)
+        else:
+            staging.rename(release)
+        current = activate(args.site_root, release_name)
+        activated = True
+        removed = prune(releases, current, args.keep)
+    finally:
+        if not activated and staging.exists():
+            shutil.rmtree(staging)
+    print(
+        json.dumps(
+            {
+                "current": str(current),
+                "generated_at": snapshot["generated_at"],
+                "release": release_name,
+                "removed": removed,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

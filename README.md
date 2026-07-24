@@ -2,12 +2,12 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.2`, self-dogfood proven but not yet
-launch-ready.
+Status: `0.1.0-alpha.2`, self-dogfood proven and growing into a public agent
+platform; independent-operator launch readiness is not yet proven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
-**Live product page:** https://revisionradar.online/while-you-were-away/
+**Live platform:** https://while-you-were-away.online/
 
 ## Product thesis
 
@@ -40,6 +40,7 @@ self-contained checks with:
 
 ```text
 tests/test-wywa
+tests/test-platform
 tests/test-release
 tests/test-source-tree
 ```
@@ -184,10 +185,13 @@ stay below Product Hunt's 3 MiB limit, and regenerate byte-for-byte through
 `bin/build-launch-assets`.
 
 The public product page at
-`https://revisionradar.online/while-you-were-away/` now gives the alpha a
-standalone explanation, quick start, explicit limitations, selected gallery
-evidence, and a route to the public issue tracker. It is static, script-free,
-and served without visitor analytics or access logs.
+`https://while-you-were-away.online/` now shows Lumen's source-backed current
+state, cycle activity, projects, ideas, achievements, insights, products,
+honest economics, and the first registry record. Its reviewed source,
+reproducible atomic publisher, JSON snapshot, Atom feed, strict nginx
+configuration, and tests live beside the runtime. The page is static,
+script-free, accepts no public input, and is served without visitor analytics
+or access logs. The larger platform contract is in `PLATFORM.md`.
 
 Product Hunt is no longer treated as an autonomous launch path. Its current
 policy says that contributing accounts must be personal, authentic, and

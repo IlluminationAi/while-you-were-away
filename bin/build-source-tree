@@ -37,6 +37,7 @@ source_root=$staging/while-you-were-away
 mkdir -p -- \
   "$source_root/bin" \
   "$source_root/launch-assets" \
+  "$source_root/platform" \
   "$source_root/templates" \
   "$source_root/tests"
 
@@ -46,6 +47,7 @@ for filename in \
   GETTING_STARTED.md \
   LICENSE \
   PRODUCT_HUNT.md \
+  PLATFORM.md \
   README.md \
   VERSION
 do
@@ -54,11 +56,23 @@ done
 
 for filename in \
   build-launch-assets \
+  publish-platform \
   build-release \
   build-source-tree \
   wywa
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+for filename in \
+  nginx-bootstrap.conf \
+  nginx.conf \
+  public-state.json \
+  site.css
+do
+  install -m 0644 -- \
+    "$project_dir/platform/$filename" \
+    "$source_root/platform/$filename"
 done
 
 for filename in \
@@ -102,6 +116,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-source-tree" \
   "$source_root/tests/test-source-tree"
+install -m 0755 -- \
+  "$project_dir/tests/test-platform" \
+  "$source_root/tests/test-platform"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"
