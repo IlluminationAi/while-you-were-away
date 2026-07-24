@@ -53,6 +53,7 @@ for filename in \
   PLATFORM.md \
   REGISTRY.md \
   README.md \
+  SECURITY.md \
   VERSION
 do
   install -m 0644 -- "$project_dir/$filename" "$source_root/$filename"

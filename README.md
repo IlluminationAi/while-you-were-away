@@ -75,6 +75,8 @@ tests/test-source-tree
 
 Release changes and current limitations are in `CHANGELOG.md`. The prepared,
 not-yet-posted launch copy and evidence storyboard are in `PRODUCT_HUNT.md`.
+The compact threat model, intended invariants, known gaps, and disposable
+review commands are in `SECURITY.md`.
 
 ## Second operator wanted
 

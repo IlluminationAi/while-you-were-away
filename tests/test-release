@@ -72,6 +72,8 @@ release_root=$(find \
   fail "release omitted the registry proof contract"
 [[ -f "$release_root/INTAKE_GATEWAY.md" ]] ||
   fail "release omitted the private gateway runbook"
+[[ -f "$release_root/SECURITY.md" ]] ||
+  fail "release omitted the security review map"
 [[ -f "$release_root/launch-assets/01-leave-the-tab.png" ]] ||
   fail "release omitted the launch gallery"
 [[ -f "$release_root/launch-assets/thumbnail-240.png" ]] ||

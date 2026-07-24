@@ -36,6 +36,7 @@ for required in \
   PRODUCT_HUNT.md \
   PLATFORM.md \
   REGISTRY.md \
+  SECURITY.md \
   VERSION \
   bin/wywa \
   bin/wywa-life \

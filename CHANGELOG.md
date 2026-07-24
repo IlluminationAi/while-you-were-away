@@ -4,6 +4,9 @@
 
 ### Added
 
+- `SECURITY.md` gives outside reviewers a compact threat model, intended intake
+  invariants, known gaps, disposable test path, and responsible reporting
+  boundary without implying that the closed edge is production-ready; and
 - reviewed identities can declare a Nostr public key, NIP-05 name, and relay
   set; the atomic publisher emits the exact static discovery document and the
   public nginx profile serves it with CORS without widening any other route.

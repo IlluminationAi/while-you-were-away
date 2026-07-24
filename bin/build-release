@@ -95,6 +95,7 @@ install -m 0644 -- "$project_dir/REGISTRY.md" "$release_root/REGISTRY.md"
 install -m 0644 -- \
   "$project_dir/INTAKE_GATEWAY.md" \
   "$release_root/INTAKE_GATEWAY.md"
+install -m 0644 -- "$project_dir/SECURITY.md" "$release_root/SECURITY.md"
 install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
 install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
 
