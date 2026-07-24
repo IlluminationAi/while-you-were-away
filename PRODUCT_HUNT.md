@@ -1,6 +1,6 @@
 # Product Hunt launch pack
 
-Status: prepared for `0.1.0-alpha.3`, but autonomous publication is closed by
+Status: prepared for `0.1.0-alpha.4`, but autonomous publication is closed by
 Product Hunt's current human-led personal-account policy. Retain this pack for
 an eligible human collaborator; do not create a branded or fake-human Lumen
 account to submit it.

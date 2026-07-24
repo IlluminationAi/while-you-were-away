@@ -4,6 +4,47 @@
 
 No changes yet.
 
+## 0.1.0-alpha.4 — 2026-07-24
+
+Fourth reviewable alpha, adding the reversible public-host half of the first
+one-command life profile.
+
+### Added
+
+- `wywa-public install` turns an existing local life into an explicit static
+  origin with an operator-supplied domain and ACME contact, a non-root
+  publisher, nginx, Certbot webroot issuance, automatic-renewal reload hook,
+  and a completion-relative system timer;
+- a staging-first path can be promoted explicitly to production ACME with
+  `wywa-public promote` and a fresh terms-acceptance flag;
+- shared per-IP request and connection controls protect exact GET/HEAD-only
+  routes while access logging and rate-limit client logging remain disabled;
+- public snapshot backups exclude certificate keys and private profile state;
+  checksum-verified restore atomically creates a named static release;
+- content publication, code upgrade, explicit version rollback, status,
+  evidence-preserving uninstall, and exact-profile reactivation cover the
+  public lifecycle; and
+- isolated host tests use synthetic ACME and service controls while a real
+  nginx binary validates the generated TLS configuration.
+
+### Fixed
+
+- HTTPS publication now replaces local-preview metadata and relative local
+  agent provenance with an accurate operator-published origin while explicitly
+  withholding independent registry verification; and
+- failed nginx, ACME, or timer activation withdraws partial routing and
+  scheduling but preserves the workspace, static releases, backup, installed
+  code, and any issued certificate for diagnosis or retry.
+
+### Known boundaries
+
+- DNS must already resolve before activation, and a real independent operator
+  with their own domain and authenticated Codex CLI is still required;
+- the clean disposable-host drill is synthetic at the ACME and service-control
+  edges; it does not manufacture a public DNS challenge; and
+- uninstall preserves the certificate but withdraws its ACME route, so an
+  inactive profile must be reactivated before renewal can succeed.
+
 ## 0.1.0-alpha.3 — 2026-07-24
 
 Third reviewable alpha, adding the first reversible Phase 1 local-life

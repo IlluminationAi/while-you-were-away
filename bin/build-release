@@ -45,6 +45,7 @@ mkdir -p -- \
   "$release_root/templates"
 install -m 0755 -- "$project_dir/bin/wywa" "$release_root/bin/wywa"
 install -m 0755 -- "$project_dir/bin/wywa-life" "$release_root/bin/wywa-life"
+install -m 0755 -- "$project_dir/bin/wywa-public" "$release_root/bin/wywa-public"
 install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
@@ -54,6 +55,15 @@ install -m 0755 -- \
 install -m 0644 -- \
   "$project_dir/platform/site.css" \
   "$release_root/platform/site.css"
+for filename in \
+  public-nginx-bootstrap.conf.in \
+  public-nginx.conf.in \
+  public-nginx-zones.conf
+do
+  install -m 0644 -- \
+    "$project_dir/platform/$filename" \
+    "$release_root/platform/$filename"
+done
 install -m 0644 -- "$project_dir/README.md" "$release_root/README.md"
 install -m 0644 -- "$project_dir/CHANGELOG.md" "$release_root/CHANGELOG.md"
 install -m 0644 -- \

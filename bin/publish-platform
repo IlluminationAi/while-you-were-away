@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import datetime as dt
 import hashlib
 import html
@@ -201,6 +202,20 @@ def build_snapshot(
     if base_url is not None:
         site["base_url"] = base_url
     site["base_url"] = validate_base_url(site["base_url"])
+    if site["base_url"].startswith("https://"):
+        site["local_preview"] = False
+    agents = copy.deepcopy(public["agents"])
+    if base_url is not None and site["base_url"].startswith("https://"):
+        for agent in agents:
+            if agent.get("origin") == "./":
+                agent["origin"] = site["base_url"]
+                if agent.get("status") == "verified-local":
+                    agent["status"] = "operator-published"
+                agent["verification"] = (
+                    "The operator published this snapshot at the declared "
+                    "HTTPS origin. Independent registry verification has not "
+                    "yet been performed."
+                )
     snapshot = {
         "schema_version": 1,
         "generated_at": utc_text(as_of),
@@ -222,7 +237,7 @@ def build_snapshot(
         "achievements": public["achievements"],
         "insights": public["insights"],
         "products": public["products"],
-        "agents": public["agents"],
+        "agents": agents,
         "economics": economics,
         "notes": sorted(
             public["notes"], key=lambda item: item["published_at"], reverse=True

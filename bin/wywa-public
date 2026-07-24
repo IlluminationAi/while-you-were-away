@@ -1,0 +1,1384 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 0022
+
+program=${0##*/}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_dir=$(cd -- "$script_dir/.." && pwd -P)
+version_file=$project_dir/VERSION
+publisher_source=$project_dir/bin/publish-platform
+css_source=$project_dir/platform/site.css
+bootstrap_template=$project_dir/platform/public-nginx-bootstrap.conf.in
+public_template=$project_dir/platform/public-nginx.conf.in
+zones_source=$project_dir/platform/public-nginx-zones.conf
+host_root=${WYWA_PUBLIC_ROOT:-/}
+
+usage() {
+  cat <<EOF
+Usage:
+  $program install WORKSPACE --operator USER --domain DOMAIN --email EMAIL
+                  --accept-letsencrypt-terms [--staging] [--dry-run]
+  $program status WORKSPACE
+  $program publish WORKSPACE
+  $program backup WORKSPACE
+  $program restore WORKSPACE [--backup FILE]
+  $program promote WORKSPACE --accept-letsencrypt-terms
+  $program upgrade WORKSPACE [--dry-run]
+  $program rollback WORKSPACE --release RELEASE
+  $program uninstall WORKSPACE
+
+The public-host profile is explicit and root-administered. It publishes the
+existing local-life snapshot as the non-root operator, configures a static
+nginx origin, obtains a webroot ACME certificate, installs bounded traffic
+controls, and preserves workspace, site releases, backups, and certificates
+on uninstall or partial activation failure.
+EOF
+}
+
+die() {
+  printf '%s: %s\n' "$program" "$*" >&2
+  exit 2
+}
+
+absolute_path() {
+  realpath -m -- "$1"
+}
+
+root_path() {
+  local path=$1
+  [[ "$path" == /* ]] || die "internal host path must be absolute"
+  if [[ "$host_root" == / ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s%s\n' "${host_root%/}" "$path"
+  fi
+}
+
+host_path() {
+  local path=$1
+  if [[ "$host_root" == / ]]; then
+    printf '%s\n' "$path"
+  else
+    [[ "$path" == "${host_root%/}"/* ]] ||
+      die "internal path is outside the configured host root"
+    printf '/%s\n' "${path#"${host_root%/}"/}"
+  fi
+}
+
+execution_path() {
+  local path=$1
+  if [[ "$host_root" != / && "${WYWA_PUBLIC_TEST_MODE:-0}" == 1 ]]; then
+    printf '%s\n' "$path"
+  else
+    host_path "$path"
+  fi
+}
+
+require_admin() {
+  if (( EUID != 0 )) && [[ "${WYWA_PUBLIC_ALLOW_NON_ROOT:-0}" != 1 ]]; then
+    die "public-host administration requires root"
+  fi
+  [[ "$host_root" == /* && "$host_root" != "" ]] ||
+    die "WYWA_PUBLIC_ROOT must be absolute"
+  if [[ "$host_root" != / ]]; then
+    [[ -d "$host_root" && ! -L "$host_root" ]] ||
+      die "configured host root is missing or unsafe"
+  fi
+}
+
+validate_safe_text() {
+  local value=$1
+  local label=$2
+  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] ||
+    die "$label is empty or contains a line break"
+}
+
+systemd_quote_path() {
+  local value=$1
+  value=${value//\\/\\\\}
+  value=${value//\"/\\\"}
+  value=${value//%/%%}
+  printf '"%s"' "$value"
+}
+
+validate_domain() {
+  local value=$1
+  [[ ${#value} -le 253 &&
+    "$value" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ &&
+    "$value" == *.* &&
+    "$value" != *..* ]] ||
+    die "domain must be a lowercase ASCII DNS name"
+  local label
+  IFS=. read -r -a domain_labels <<<"$value"
+  for label in "${domain_labels[@]}"; do
+    [[ ${#label} -le 63 &&
+      "$label" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]] ||
+      die "domain contains an invalid DNS label"
+  done
+}
+
+validate_email() {
+  local value=$1
+  local pattern='^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}$'
+  [[ ${#value} -le 254 &&
+    "$value" =~ $pattern ]] ||
+    die "email is not a simple valid ACME contact"
+}
+
+validate_operator_name() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] ||
+    die "operator must be a simple local account name"
+}
+
+validate_release_id() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+-[0-9a-f]{12}$ ]] ||
+    die "invalid installed release id"
+}
+
+validate_workspace() {
+  local workspace=$1
+  [[ "$workspace" == /* && "$workspace" != / ]] ||
+    die "workspace must be an absolute path other than /"
+  [[ -d "$workspace" && ! -L "$workspace" ]] ||
+    die "workspace is missing or unsafe: $workspace"
+  [[ -d "$workspace/.git" && ! -L "$workspace/.git" ]] ||
+    die "workspace is not a safe Git repository"
+  [[ -f "$workspace/public/state.json" &&
+    ! -L "$workspace/public/state.json" ]] ||
+    die "reviewed public state is missing or unsafe"
+  python3 - "$workspace/public/state.json" <<'PY' >/dev/null
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if record.get("schema_version") != 1:
+    raise SystemExit("unsupported public-state schema")
+PY
+}
+
+workspace_id() {
+  printf '%s' "$1" | sha256sum | cut -c1-16
+}
+
+instance_root_for_id() {
+  root_path "/var/lib/wywa-public/instances/$1"
+}
+
+site_root_for_id() {
+  root_path "/var/www/wywa-$1"
+}
+
+profile_for_id() {
+  printf '%s/profile.conf\n' "$(instance_root_for_id "$1")"
+}
+
+resolve_binary() {
+  local override_name=$1
+  local default_name=$2
+  local candidate=${!override_name:-}
+  if [[ -z "$candidate" ]]; then
+    candidate=$(command -v "$default_name" || true)
+  fi
+  [[ -n "$candidate" && "$candidate" == /* &&
+    -f "$candidate" && -x "$candidate" ]] ||
+    die "$default_name is not an executable regular file"
+  absolute_path "$candidate"
+}
+
+resolve_operator() {
+  local name=$1
+  validate_operator_name "$name"
+  local record
+  record=$(getent passwd "$name" || true)
+  [[ -n "$record" ]] || die "operator account does not exist: $name"
+  IFS=: read -r _ _ operator_uid operator_gid _ operator_home _ <<<"$record"
+  if [[ -n "${WYWA_PUBLIC_TEST_OPERATOR_UID:-}" ]]; then
+    [[ "${WYWA_PUBLIC_TEST_MODE:-0}" == 1 ]] ||
+      die "test operator overrides require WYWA_PUBLIC_TEST_MODE=1"
+    operator_uid=$WYWA_PUBLIC_TEST_OPERATOR_UID
+  fi
+  if [[ -n "${WYWA_PUBLIC_TEST_OPERATOR_HOME:-}" ]]; then
+    [[ "${WYWA_PUBLIC_TEST_MODE:-0}" == 1 ]] ||
+      die "test operator overrides require WYWA_PUBLIC_TEST_MODE=1"
+    operator_home=$WYWA_PUBLIC_TEST_OPERATOR_HOME
+  fi
+  [[ "$operator_uid" =~ ^[0-9]+$ && "$operator_gid" =~ ^[0-9]+$ ]] ||
+    die "operator account has invalid numeric identifiers"
+  if (( operator_uid == 0 )) && [[ "${WYWA_PUBLIC_TEST_MODE:-0}" != 1 ]]; then
+    die "the public worker operator must not be root"
+  fi
+  [[ "$operator_home" == /* && "$operator_home" != / &&
+    -d "$operator_home" && ! -L "$operator_home" ]] ||
+    die "operator home is missing or unsafe"
+}
+
+validate_operator_workspace() {
+  local workspace=$1
+  local actual_uid
+  actual_uid=$(stat -c %u -- "$workspace")
+  if [[ "$actual_uid" != "$operator_uid" &&
+    "${WYWA_PUBLIC_TEST_MODE:-0}" != 1 ]]; then
+    die "workspace is not owned by the selected operator"
+  fi
+  local identifier runtime local_profile
+  identifier=$(workspace_id "$workspace")
+  runtime=$operator_home/.local/state/wywa/$identifier
+  local_profile=$runtime/life.conf
+  [[ -d "$runtime" && ! -L "$runtime" &&
+    -f "$local_profile" && ! -L "$local_profile" ]] ||
+    die "the selected operator has no installed local-life profile for this workspace"
+  grep -Fxq 'profile=local' "$local_profile" ||
+    die "the workspace does not have the expected local-life profile"
+}
+
+validate_dns_resolves() {
+  local domain=$1
+  if [[ "${WYWA_PUBLIC_SKIP_DNS_CHECK:-0}" == 1 ]]; then
+    [[ "${WYWA_PUBLIC_TEST_MODE:-0}" == 1 ]] ||
+      die "DNS check bypass requires WYWA_PUBLIC_TEST_MODE=1"
+    return 0
+  fi
+  getent ahosts "$domain" | awk 'NR == 1 { found = 1 } END { exit !found }' ||
+    die "domain does not currently resolve: $domain"
+}
+
+ensure_domain_available() {
+  local identifier=$1
+  local domain=$2
+  local instances profile
+  instances=$(root_path /var/lib/wywa-public/instances)
+  [[ -d "$instances" ]] || return 0
+  while IFS= read -r -d '' profile; do
+    [[ "$profile" == "$(profile_for_id "$identifier")" ]] && continue
+    if grep -Fxq "domain=$domain" "$profile"; then
+      die "domain is already reserved by another WYWA public profile"
+    fi
+  done < <(
+    find "$instances" \
+      -mindepth 2 \
+      -maxdepth 2 \
+      -type f \
+      -name profile.conf \
+      -print0
+  )
+}
+
+preflight_host_tools() {
+  resolve_binary WYWA_PUBLIC_RUNUSER_BIN runuser >/dev/null
+  resolve_binary WYWA_PUBLIC_NGINX_BIN nginx >/dev/null
+  resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl >/dev/null
+  resolve_binary WYWA_PUBLIC_CERTBOT_BIN certbot >/dev/null
+  command -v python3 >/dev/null || die "python3 is required"
+  command -v tar >/dev/null || die "tar is required"
+  command -v git >/dev/null || die "git is required"
+}
+
+ensure_nginx_domain_unclaimed() {
+  local domain=$1
+  local nginx_bin rendered
+  nginx_bin=$(resolve_binary WYWA_PUBLIC_NGINX_BIN nginx)
+  rendered=$("$nginx_bin" -T 2>&1) ||
+    die "the existing nginx configuration does not validate"
+  if python3 - "$domain" "$rendered" <<'PY'
+import re
+import sys
+
+domain = sys.argv[1]
+config = sys.argv[2]
+for statement in re.findall(r"\bserver_name\s+([^;]+);", config):
+    names = statement.split("#", 1)[0].split()
+    if domain in names:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+  then
+    die "domain is already declared in the active nginx configuration"
+  fi
+}
+
+profile_reset() {
+  profile_schema=
+  profile_workspace=
+  profile_operator=
+  profile_operator_uid=
+  profile_operator_gid=
+  profile_operator_home=
+  profile_domain=
+  profile_email=
+  profile_staging=
+  profile_release=
+  profile_active=
+}
+
+load_profile_id() {
+  local identifier=$1
+  local profile key value
+  profile=$(profile_for_id "$identifier")
+  [[ -f "$profile" && ! -L "$profile" ]] ||
+    die "public-host profile is not installed"
+  profile_reset
+  while IFS='=' read -r key value; do
+    case "$key" in
+      schema) profile_schema=$value ;;
+      workspace) profile_workspace=$value ;;
+      operator) profile_operator=$value ;;
+      operator_uid) profile_operator_uid=$value ;;
+      operator_gid) profile_operator_gid=$value ;;
+      operator_home) profile_operator_home=$value ;;
+      domain) profile_domain=$value ;;
+      email) profile_email=$value ;;
+      staging) profile_staging=$value ;;
+      release) profile_release=$value ;;
+      active) profile_active=$value ;;
+      '') ;;
+      *) die "public-host profile contains an unknown field" ;;
+    esac
+  done <"$profile"
+  [[ "$profile_schema" == 1 &&
+    "$profile_workspace" == /* &&
+    "$profile_operator_uid" =~ ^[0-9]+$ &&
+    "$profile_operator_gid" =~ ^[0-9]+$ &&
+    "$profile_staging" =~ ^[01]$ &&
+    "$profile_active" =~ ^[01]$ ]] ||
+    die "public-host profile is malformed"
+  validate_operator_name "$profile_operator"
+  validate_domain "$profile_domain"
+  validate_email "$profile_email"
+  validate_release_id "$profile_release"
+  [[ "$(workspace_id "$profile_workspace")" == "$identifier" ]] ||
+    die "public-host profile workspace does not match its id"
+}
+
+load_profile_workspace() {
+  local workspace=$1
+  workspace=$(absolute_path "$workspace")
+  validate_workspace "$workspace"
+  local identifier
+  identifier=$(workspace_id "$workspace")
+  load_profile_id "$identifier"
+  [[ "$profile_workspace" == "$workspace" ]] ||
+    die "public-host profile resolves to a different workspace"
+}
+
+write_profile() {
+  local identifier=$1
+  local workspace=$2
+  local operator=$3
+  local uid=$4
+  local gid=$5
+  local home=$6
+  local domain=$7
+  local email=$8
+  local staging=$9
+  local release=${10}
+  local active=${11}
+  validate_safe_text "$workspace" "workspace"
+  validate_safe_text "$home" "operator home"
+  local instance profile temporary
+  instance=$(instance_root_for_id "$identifier")
+  profile=$instance/profile.conf
+  install -d -o 0 -g 0 -m 0755 -- "$instance"
+  temporary=$(mktemp "$instance/.profile.conf.XXXXXX")
+  printf '%s\n' \
+    "schema=1" \
+    "workspace=$workspace" \
+    "operator=$operator" \
+    "operator_uid=$uid" \
+    "operator_gid=$gid" \
+    "operator_home=$home" \
+    "domain=$domain" \
+    "email=$email" \
+    "staging=$staging" \
+    "release=$release" \
+    "active=$active" >"$temporary"
+  chmod 0600 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -f -- "$temporary" "$profile"
+}
+
+code_release_id() {
+  [[ -f "$version_file" && ! -L "$version_file" ]] ||
+    die "source version is unavailable"
+  local version digest
+  version=$(<"$version_file")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+$ ]] ||
+    die "source version is invalid"
+  digest=$(
+    sha256sum \
+      "$project_dir/bin/wywa-public" \
+      "$publisher_source" \
+      "$css_source" |
+      sha256sum |
+      cut -c1-12
+  )
+  printf '%s-%s\n' "$version" "$digest"
+}
+
+install_code_release() {
+  [[ -x "$project_dir/bin/wywa-public" ]] ||
+    die "source public-host CLI is unavailable"
+  [[ -x "$publisher_source" ]] || die "source publisher is unavailable"
+  [[ -f "$css_source" && ! -L "$css_source" ]] ||
+    die "source site CSS is unavailable"
+  local release release_root staging_root
+  release=$(code_release_id)
+  release_root=$(root_path "/usr/local/lib/wywa-public/releases/$release")
+  if [[ ! -d "$release_root" ]]; then
+    staging_root=$(mktemp -d "$(root_path /usr/local/lib/wywa-public/releases)/.staging.XXXXXX")
+    install -d -o 0 -g 0 -m 0755 -- \
+      "$staging_root/bin" \
+      "$staging_root/platform"
+    install -o 0 -g 0 -m 0755 -- \
+      "$project_dir/bin/wywa-public" \
+      "$staging_root/bin/wywa-public"
+    install -o 0 -g 0 -m 0755 -- \
+      "$publisher_source" \
+      "$staging_root/bin/publish-platform"
+    install -o 0 -g 0 -m 0644 -- \
+      "$css_source" \
+      "$staging_root/platform/site.css"
+    install -o 0 -g 0 -m 0644 -- \
+      "$version_file" \
+      "$staging_root/VERSION"
+    mv -- "$staging_root" "$release_root"
+  fi
+  printf '%s\n' "$release"
+}
+
+activate_code_release() {
+  local identifier=$1
+  local release=$2
+  validate_release_id "$release"
+  local instance target temporary
+  instance=$(instance_root_for_id "$identifier")
+  target=$(root_path "/usr/local/lib/wywa-public/releases/$release")
+  [[ -d "$target" && ! -L "$target" ]] ||
+    die "installed code release does not exist: $release"
+  temporary=$instance/.code.$$
+  ln -s -- "$(execution_path "$target")" "$temporary"
+  mv -Tf -- "$temporary" "$instance/code"
+}
+
+write_publish_wrapper() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  local instance runtime site wrapper temporary code_host
+  instance=$(instance_root_for_id "$identifier")
+  runtime=$profile_operator_home/.local/state/wywa/$identifier
+  site=$(site_root_for_id "$identifier")
+  wrapper=$instance/publish
+  code_host=$(execution_path "$instance/code")
+  temporary=$(mktemp "$instance/.publish.XXXXXX")
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+    printf 'exec '
+    printf '%q ' \
+      /usr/bin/env \
+      -i \
+      "HOME=$profile_operator_home" \
+      "LANG=C.UTF-8" \
+      "PATH=/usr/local/bin:/usr/bin:/bin" \
+      "$code_host/bin/publish-platform" \
+      --site-root "$(execution_path "$site")" \
+      --runtime-root "$runtime" \
+      --logs-root "$runtime/logs" \
+      --workspace-root "$profile_workspace" \
+      --public-state "$profile_workspace/public/state.json" \
+      --site-css "$code_host/platform/site.css" \
+      --base-url "https://$profile_domain" \
+      --phase waiting \
+      --keep 5
+    printf '\n'
+  } >"$temporary"
+  chmod 0755 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -f -- "$temporary" "$wrapper"
+}
+
+run_as_operator() {
+  local operator=$1
+  shift
+  local runuser_bin
+  runuser_bin=$(resolve_binary WYWA_PUBLIC_RUNUSER_BIN runuser)
+  "$runuser_bin" -u "$operator" -- "$@"
+}
+
+publish_id() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  local instance wrapper site
+  instance=$(instance_root_for_id "$identifier")
+  wrapper=$instance/publish
+  site=$(site_root_for_id "$identifier")
+  [[ -x "$wrapper" && ! -L "$wrapper" ]] ||
+    die "public publisher wrapper is missing or unsafe"
+  install -d -o "$profile_operator_uid" -g "$profile_operator_gid" -m 0755 -- "$site"
+  run_as_operator "$profile_operator" "$(execution_path "$wrapper")"
+}
+
+render_nginx_config() {
+  local template=$1
+  local target=$2
+  local identifier=$3
+  local domain=$4
+  local site_host temporary
+  [[ -f "$template" && ! -L "$template" ]] ||
+    die "nginx template is unavailable"
+  site_host=$(host_path "$(site_root_for_id "$identifier")")
+  temporary=$(mktemp "${target}.XXXXXX")
+  sed \
+    -e "s/__WYWA_DOMAIN__/$domain/g" \
+    -e "s/__WYWA_TLS_ZONE__/wywa_tls_$identifier/g" \
+    -e "s|__WYWA_SITE_ROOT__|$site_host|g" \
+    "$template" >"$temporary"
+  if rg -q '__WYWA_' "$temporary"; then
+    rm -f -- "$temporary"
+    die "nginx template contains unresolved markers"
+  fi
+  chmod 0644 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -f -- "$temporary" "$target"
+}
+
+nginx_paths() {
+  local identifier=$1
+  nginx_available=$(root_path "/etc/nginx/sites-available/wywa-$identifier.conf")
+  nginx_enabled=$(root_path "/etc/nginx/sites-enabled/wywa-$identifier.conf")
+  nginx_zones=$(root_path "/etc/nginx/conf.d/wywa-public-zones.conf")
+}
+
+install_nginx_shared_assets() {
+  local nginx_bin systemctl_bin hook hook_tmp
+  [[ -f "$zones_source" && ! -L "$zones_source" ]] ||
+    die "nginx traffic-zone source is unavailable"
+  install -d -o 0 -g 0 -m 0755 -- \
+    "$(root_path /etc/nginx/conf.d)" \
+    "$(root_path /etc/nginx/sites-available)" \
+    "$(root_path /etc/nginx/sites-enabled)" \
+    "$(root_path /etc/letsencrypt/renewal-hooks/deploy)" \
+    "$(root_path /var/lib/letsencrypt/.well-known/acme-challenge)"
+  if [[ ! -e "$nginx_zones" ]]; then
+    install -o 0 -g 0 -m 0644 -- "$zones_source" "$nginx_zones"
+  elif ! cmp -s -- "$zones_source" "$nginx_zones"; then
+    die "existing WYWA nginx traffic zones differ from this release"
+  fi
+  nginx_bin=$(resolve_binary WYWA_PUBLIC_NGINX_BIN nginx)
+  systemctl_bin=$(resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl)
+  hook=$(root_path /etc/letsencrypt/renewal-hooks/deploy/wywa-public-nginx)
+  hook_tmp=$(mktemp "${hook}.XXXXXX")
+  printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    "\"$nginx_bin\" -t" \
+    "\"$systemctl_bin\" reload nginx" >"$hook_tmp"
+  chmod 0755 -- "$hook_tmp"
+  chown 0:0 -- "$hook_tmp"
+  if [[ -e "$hook" ]]; then
+    if ! cmp -s -- "$hook_tmp" "$hook"; then
+      rm -f -- "$hook_tmp"
+      die "existing WYWA Certbot deploy hook differs from this release"
+    fi
+    rm -f -- "$hook_tmp"
+  else
+    mv -- "$hook_tmp" "$hook"
+  fi
+}
+
+nginx_test_reload() {
+  local nginx_bin systemctl_bin
+  nginx_bin=$(resolve_binary WYWA_PUBLIC_NGINX_BIN nginx)
+  systemctl_bin=$(resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl)
+  "$nginx_bin" -t
+  "$systemctl_bin" reload nginx
+}
+
+write_system_units() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  local unit_dir service timer instance_host site_host workspace runtime
+  unit_dir=$(root_path /etc/systemd/system)
+  install -d -o 0 -g 0 -m 0755 -- "$unit_dir"
+  service=$unit_dir/wywa-public-$identifier.service
+  timer=$unit_dir/wywa-public-$identifier.timer
+  instance_host=$(host_path "$(instance_root_for_id "$identifier")")
+  site_host=$(host_path "$(site_root_for_id "$identifier")")
+  workspace=$profile_workspace
+  runtime=$profile_operator_home/.local/state/wywa/$identifier
+  local workspace_unit runtime_unit instance_unit site_unit
+  workspace_unit=$(systemd_quote_path "$workspace")
+  runtime_unit=$(systemd_quote_path "$runtime")
+  instance_unit=$(systemd_quote_path "$instance_host")
+  site_unit=$(systemd_quote_path "$site_host")
+  local service_content timer_content
+  service_content="[Unit]
+Description=Publish WYWA public life $identifier
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=$profile_operator
+ExecStart=$instance_host/publish
+UMask=0022
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=$workspace_unit $runtime_unit $instance_unit
+ReadWritePaths=$site_unit
+RestrictAddressFamilies=AF_UNIX
+"
+  timer_content="[Unit]
+Description=Refresh WYWA public life $identifier
+
+[Timer]
+OnBootSec=7m
+OnUnitInactiveSec=10m
+AccuracySec=1m
+RandomizedDelaySec=1m
+Unit=wywa-public-$identifier.service
+
+[Install]
+WantedBy=timers.target
+"
+  local temporary
+  temporary=$(mktemp "$unit_dir/.wywa-public-$identifier.service.XXXXXX")
+  printf '%s' "$service_content" >"$temporary"
+  chmod 0644 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -f -- "$temporary" "$service"
+  temporary=$(mktemp "$unit_dir/.wywa-public-$identifier.timer.XXXXXX")
+  printf '%s' "$timer_content" >"$temporary"
+  chmod 0644 -- "$temporary"
+  chown 0:0 -- "$temporary"
+  mv -f -- "$temporary" "$timer"
+}
+
+enable_system_timer() {
+  local identifier=$1
+  local systemctl_bin
+  systemctl_bin=$(resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl)
+  "$systemctl_bin" daemon-reload
+  "$systemctl_bin" enable --now certbot.timer
+  "$systemctl_bin" enable --now "wywa-public-$identifier.timer"
+}
+
+disable_system_timer() {
+  local identifier=$1
+  local systemctl_bin unit_dir
+  systemctl_bin=$(resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl)
+  unit_dir=$(root_path /etc/systemd/system)
+  "$systemctl_bin" disable --now "wywa-public-$identifier.timer" \
+    >/dev/null 2>&1 || true
+  rm -f -- \
+    "$unit_dir/wywa-public-$identifier.service" \
+    "$unit_dir/wywa-public-$identifier.timer"
+  "$systemctl_bin" daemon-reload
+}
+
+certificate_ready() {
+  local domain=$1
+  local live
+  live=$(root_path "/etc/letsencrypt/live/$domain")
+  [[ -f "$live/fullchain.pem" && -f "$live/privkey.pem" ]]
+}
+
+obtain_certificate() {
+  local domain=$1
+  local email=$2
+  local staging=$3
+  local force=${4:-0}
+  if (( force == 0 )) && certificate_ready "$domain"; then
+    return 0
+  fi
+  local certbot_bin webroot
+  certbot_bin=$(resolve_binary WYWA_PUBLIC_CERTBOT_BIN certbot)
+  webroot=$(root_path /var/lib/letsencrypt)
+  local -a args
+  args=(
+    certonly
+    --webroot
+    --webroot-path "$webroot"
+    --non-interactive
+    --agree-tos
+    --no-eff-email
+    --email "$email"
+    --cert-name "$domain"
+    -d "$domain"
+  )
+  if (( staging == 1 )); then
+    args+=(--test-cert)
+  fi
+  if (( force == 1 )); then
+    args+=(--force-renewal)
+  fi
+  "$certbot_bin" "${args[@]}"
+  certificate_ready "$domain" ||
+    die "Certbot returned success without the expected certificate files"
+}
+
+public_backup_id() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  local site current instance backup_dir stamp commit staging archive checksum
+  site=$(site_root_for_id "$identifier")
+  current=$site/current
+  [[ -L "$current" && -d "$current" ]] ||
+    die "public site has no atomic current release"
+  for required in index.html life.json feed.xml robots.txt assets/site.css; do
+    [[ -f "$current/$required" && ! -L "$current/$required" ]] ||
+      die "public site current release is incomplete or unsafe"
+  done
+  instance=$(instance_root_for_id "$identifier")
+  backup_dir=$instance/backups
+  install -d -o 0 -g 0 -m 0700 -- "$backup_dir"
+  stamp=$(date -u +%Y%m%dT%H%M%S%NZ)
+  commit=$(git -C "$profile_workspace" rev-parse --short=12 HEAD)
+  staging=$(mktemp -d "$instance/.backup.XXXXXX")
+  install -d -o 0 -g 0 -m 0755 -- "$staging/site/assets"
+  install -o 0 -g 0 -m 0644 -- \
+    "$current/index.html" \
+    "$current/life.json" \
+    "$current/feed.xml" \
+    "$current/robots.txt" \
+    "$staging/site/"
+  install -o 0 -g 0 -m 0644 -- \
+    "$current/assets/site.css" \
+    "$staging/site/assets/site.css"
+  printf '%s\n' \
+    "schema=1" \
+    "workspace_id=$identifier" \
+    "domain=$profile_domain" \
+    "workspace_commit=$commit" \
+    "code_release=$profile_release" \
+    "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "certificate_material=excluded" >"$staging/manifest"
+  chmod 0644 -- "$staging/manifest"
+  (
+    cd -- "$staging"
+    sha256sum \
+      manifest \
+      site/index.html \
+      site/life.json \
+      site/feed.xml \
+      site/robots.txt \
+      site/assets/site.css >SHA256SUMS
+  )
+  archive=$backup_dir/public-$stamp-$commit.tar.gz
+  checksum=$archive.sha256
+  tar \
+    --sort=name \
+    --mtime=@0 \
+    --owner=0 \
+    --group=0 \
+    --numeric-owner \
+    -czf "$archive" \
+    -C "$staging" \
+    SHA256SUMS manifest site
+  chmod 0600 -- "$archive"
+  sha256sum "$archive" >"$checksum"
+  chmod 0600 -- "$checksum"
+  rm -rf -- "$staging"
+  local receipt_tmp
+  receipt_tmp=$(mktemp "$instance/.backup.last.XXXXXX")
+  printf '%s backup=%s workspace_commit=%s certificate_material=excluded\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "${archive##*/}" \
+    "$commit" >"$receipt_tmp"
+  chmod 0600 -- "$receipt_tmp"
+  chown 0:0 -- "$receipt_tmp"
+  mv -f -- "$receipt_tmp" "$instance/backup.last"
+  printf 'public backup: %s\n' "$archive"
+}
+
+latest_backup() {
+  local identifier=$1
+  local backup_dir
+  backup_dir=$(instance_root_for_id "$identifier")/backups
+  find "$backup_dir" \
+    -mindepth 1 \
+    -maxdepth 1 \
+    -type f \
+    -name 'public-*.tar.gz' \
+    -print |
+    sort |
+    tail -n 1
+}
+
+restore_backup_id() {
+  local identifier=$1
+  local requested=${2:-}
+  load_profile_id "$identifier"
+  local instance backup_dir archive checksum staging
+  instance=$(instance_root_for_id "$identifier")
+  backup_dir=$instance/backups
+  if [[ -n "$requested" ]]; then
+    archive=$(absolute_path "$requested")
+    [[ "$archive" == "$backup_dir"/public-*.tar.gz ]] ||
+      die "restore backup must be an instance public backup"
+  else
+    archive=$(latest_backup "$identifier")
+  fi
+  [[ -n "$archive" && -f "$archive" && ! -L "$archive" ]] ||
+    die "public backup is missing or unsafe"
+  checksum=$archive.sha256
+  [[ -f "$checksum" && ! -L "$checksum" ]] ||
+    die "public backup checksum is missing or unsafe"
+  (
+    cd -- "${archive%/*}"
+    sha256sum -c -- "${checksum##*/}" >/dev/null
+  ) || die "public backup archive checksum failed"
+  local expected actual
+  expected=$'SHA256SUMS\nmanifest\nsite/\nsite/assets/\nsite/assets/site.css\nsite/feed.xml\nsite/index.html\nsite/life.json\nsite/robots.txt'
+  actual=$(tar -tzf "$archive" | sort)
+  [[ "$actual" == "$expected" ]] ||
+    die "public backup contains an unexpected path set"
+  tar -tvzf "$archive" |
+    awk '$1 !~ /^[-d]/ {exit 1}' ||
+    die "public backup contains a non-regular archive member"
+  staging=$(mktemp -d "$instance/.restore.XXXXXX")
+  tar -xzf "$archive" -C "$staging" --no-same-owner --no-same-permissions
+  for required in \
+    SHA256SUMS \
+    manifest \
+    site/index.html \
+    site/life.json \
+    site/feed.xml \
+    site/robots.txt \
+    site/assets/site.css
+  do
+    [[ -f "$staging/$required" && ! -L "$staging/$required" ]] ||
+      die "public backup extracted an unsafe required file"
+  done
+  (
+    cd -- "$staging"
+    sha256sum -c SHA256SUMS >/dev/null
+  ) || die "public backup content checksum failed"
+  grep -Fxq "workspace_id=$identifier" "$staging/manifest" ||
+    die "public backup belongs to a different workspace"
+  grep -Fxq "domain=$profile_domain" "$staging/manifest" ||
+    die "public backup belongs to a different domain"
+  python3 - "$staging/site/life.json" <<'PY' >/dev/null
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if record.get("schema_version") != 1:
+    raise SystemExit("unsupported life snapshot schema")
+PY
+  local site releases release_name release current_tmp
+  site=$(site_root_for_id "$identifier")
+  releases=$site/releases
+  install -d -o "$profile_operator_uid" -g "$profile_operator_gid" -m 0755 -- "$releases"
+  release_name="restore-$(date -u +%Y%m%dT%H%M%S%NZ)-$(sha256sum "$archive" | cut -c1-12)"
+  release=$releases/$release_name
+  [[ ! -e "$release" ]] || die "restore release already exists"
+  mv -- "$staging/site" "$release"
+  chmod 0755 -- "$release" "$release/assets"
+  find "$release" -type f -exec chmod 0644 -- {} +
+  chown -R "$profile_operator_uid:$profile_operator_gid" -- "$release"
+  current_tmp=$site/.current.$$
+  ln -s -- "releases/$release_name" "$current_tmp"
+  mv -Tf -- "$current_tmp" "$site/current"
+  rm -rf -- "$staging"
+  printf 'public restore: %s\n' "$release"
+}
+
+render_and_enable_nginx() {
+  local identifier=$1
+  local bootstrap=$2
+  load_profile_id "$identifier"
+  nginx_paths "$identifier"
+  install_nginx_shared_assets
+  if [[ -e "$nginx_enabled" && ! -L "$nginx_enabled" ]]; then
+    die "enabled nginx instance path is not a symbolic link"
+  fi
+  if (( bootstrap == 1 )); then
+    render_nginx_config \
+      "$bootstrap_template" \
+      "$nginx_available" \
+      "$identifier" \
+      "$profile_domain"
+  else
+    render_nginx_config \
+      "$public_template" \
+      "$nginx_available" \
+      "$identifier" \
+      "$profile_domain"
+  fi
+  ln -sfn -- "$(host_path "$nginx_available")" "$nginx_enabled"
+  nginx_test_reload
+}
+
+rollback_activation() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  disable_system_timer "$identifier"
+  nginx_paths "$identifier"
+  rm -f -- "$nginx_enabled" "$nginx_available"
+  nginx_test_reload || true
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    "$profile_release" \
+    0
+}
+
+activation_sequence() {
+  local identifier=$1
+  load_profile_id "$identifier"
+  render_and_enable_nginx "$identifier" 1 || return
+  obtain_certificate \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    0 || return
+  render_and_enable_nginx "$identifier" 0 || return
+  write_system_units "$identifier" || return
+  enable_system_timer "$identifier" || return
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    "$profile_release" \
+    1
+}
+
+parse_install_options() {
+  parsed_workspace=
+  parsed_operator=
+  parsed_domain=
+  parsed_email=
+  parsed_staging=0
+  parsed_accept_terms=0
+  parsed_dry_run=0
+  [[ $# -ge 1 ]] || die "install requires a WORKSPACE"
+  parsed_workspace=$1
+  shift
+  while (( $# > 0 )); do
+    case "$1" in
+      --operator)
+        (( $# >= 2 )) || die "--operator requires a value"
+        parsed_operator=$2
+        shift 2
+        ;;
+      --domain)
+        (( $# >= 2 )) || die "--domain requires a value"
+        parsed_domain=$2
+        shift 2
+        ;;
+      --email)
+        (( $# >= 2 )) || die "--email requires a value"
+        parsed_email=$2
+        shift 2
+        ;;
+      --accept-letsencrypt-terms)
+        parsed_accept_terms=1
+        shift
+        ;;
+      --staging)
+        parsed_staging=1
+        shift
+        ;;
+      --dry-run)
+        parsed_dry_run=1
+        shift
+        ;;
+      *)
+        die "unknown install option: $1"
+        ;;
+    esac
+  done
+  [[ -n "$parsed_operator" && -n "$parsed_domain" && -n "$parsed_email" ]] ||
+    die "install requires --operator, --domain, and --email"
+  validate_operator_name "$parsed_operator"
+  validate_domain "$parsed_domain"
+  validate_email "$parsed_email"
+  if (( parsed_dry_run == 0 && parsed_accept_terms == 0 )); then
+    die "install requires --accept-letsencrypt-terms before ACME account use"
+  fi
+}
+
+cmd_install() {
+  parse_install_options "$@"
+  require_admin
+  local workspace identifier release
+  workspace=$(absolute_path "$parsed_workspace")
+  validate_workspace "$workspace"
+  resolve_operator "$parsed_operator"
+  validate_operator_workspace "$workspace"
+  identifier=$(workspace_id "$workspace")
+  ensure_domain_available "$identifier" "$parsed_domain"
+  local profile
+  profile=$(profile_for_id "$identifier")
+  if [[ -f "$profile" ]]; then
+    load_profile_id "$identifier"
+    [[ "$profile_workspace" == "$workspace" &&
+      "$profile_operator" == "$parsed_operator" &&
+      "$profile_domain" == "$parsed_domain" &&
+      "$profile_email" == "$parsed_email" &&
+      "$profile_staging" == "$parsed_staging" ]] ||
+      die "existing inactive profile does not match the requested activation"
+    (( profile_active == 0 )) ||
+      die "public-host profile is already active"
+  fi
+  if (( parsed_dry_run == 1 )); then
+    printf 'profile: public-host\nworkspace: %s\noperator: %s\ndomain: %s\n' \
+      "$workspace" \
+      "$parsed_operator" \
+      "$parsed_domain"
+    printf '%s\n' \
+      "will add: operator-owned static origin, nginx, ACME TLS, renewal hook, public snapshot backup, refresh timer"
+    printf '%s\n' \
+      "traffic: GET/HEAD only, per-IP request and connection limits, access logging off"
+    printf '%s\n' \
+      "rollback: failed activation withdraws nginx and timer state but preserves workspace, site, backup, and certificate evidence"
+    return 0
+  fi
+  preflight_host_tools
+  validate_dns_resolves "$parsed_domain"
+  ensure_nginx_domain_unclaimed "$parsed_domain"
+  install -d -o 0 -g 0 -m 0755 -- \
+    "$(root_path /usr/local/lib/wywa-public/releases)"
+  release=$(install_code_release)
+  write_profile \
+    "$identifier" \
+    "$workspace" \
+    "$parsed_operator" \
+    "$operator_uid" \
+    "$operator_gid" \
+    "$operator_home" \
+    "$parsed_domain" \
+    "$parsed_email" \
+    "$parsed_staging" \
+    "$release" \
+    0
+  activate_code_release "$identifier" "$release"
+  write_publish_wrapper "$identifier"
+  publish_id "$identifier" >/dev/null
+  public_backup_id "$identifier" >/dev/null
+  if ! (activation_sequence "$identifier"); then
+    rollback_activation "$identifier"
+    die "public activation failed; workspace, static releases, backup, and any issued certificate were preserved"
+  fi
+  printf 'public life installed: https://%s/\n' "$parsed_domain"
+  printf 'workspace id: %s\n' "$identifier"
+}
+
+cmd_status() {
+  [[ $# -eq 1 ]] || die "status requires exactly one WORKSPACE"
+  require_admin
+  load_profile_workspace "$1"
+  local identifier instance site current cert_state timer_state
+  identifier=$(workspace_id "$profile_workspace")
+  instance=$(instance_root_for_id "$identifier")
+  site=$(site_root_for_id "$identifier")
+  current=$site/current
+  cert_state=missing
+  certificate_ready "$profile_domain" && cert_state=present
+  timer_state=inactive
+  if (( profile_active == 1 )); then
+    timer_state=enabled
+  fi
+  printf 'profile: public-host schema=%s active=%s staging=%s\n' \
+    "$profile_schema" \
+    "$profile_active" \
+    "$profile_staging"
+  printf 'origin: https://%s/\noperator: %s\ncode release: %s\n' \
+    "$profile_domain" \
+    "$profile_operator" \
+    "$profile_release"
+  printf 'certificate: %s\nrefresh timer: %s\n' "$cert_state" "$timer_state"
+  if [[ -L "$current" && -f "$current/life.json" ]]; then
+    printf 'public snapshot: %s\n' "$(host_path "$current/index.html")"
+  else
+    printf '%s\n' "public snapshot: none"
+  fi
+  if [[ -f "$instance/backup.last" && ! -L "$instance/backup.last" ]]; then
+    printf 'last public backup: %s\n' "$(<"$instance/backup.last")"
+  else
+    printf '%s\n' "last public backup: none"
+  fi
+}
+
+cmd_publish() {
+  [[ $# -eq 1 ]] || die "publish requires exactly one WORKSPACE"
+  require_admin
+  load_profile_workspace "$1"
+  publish_id "$(workspace_id "$profile_workspace")"
+}
+
+cmd_backup() {
+  [[ $# -eq 1 ]] || die "backup requires exactly one WORKSPACE"
+  require_admin
+  load_profile_workspace "$1"
+  public_backup_id "$(workspace_id "$profile_workspace")"
+}
+
+cmd_restore() {
+  [[ $# -ge 1 ]] || die "restore requires a WORKSPACE"
+  local workspace=$1
+  shift
+  local backup=
+  while (( $# > 0 )); do
+    case "$1" in
+      --backup)
+        (( $# >= 2 )) || die "--backup requires a path"
+        backup=$2
+        shift 2
+        ;;
+      *)
+        die "unknown restore option: $1"
+        ;;
+    esac
+  done
+  require_admin
+  load_profile_workspace "$workspace"
+  restore_backup_id "$(workspace_id "$profile_workspace")" "$backup"
+}
+
+cmd_promote() {
+  [[ $# -ge 1 ]] || die "promote requires a WORKSPACE"
+  local workspace=$1
+  shift
+  local accept_terms=0
+  while (( $# > 0 )); do
+    case "$1" in
+      --accept-letsencrypt-terms)
+        accept_terms=1
+        shift
+        ;;
+      *)
+        die "unknown promote option: $1"
+        ;;
+    esac
+  done
+  (( accept_terms == 1 )) ||
+    die "promote requires --accept-letsencrypt-terms before production ACME use"
+  require_admin
+  load_profile_workspace "$workspace"
+  (( profile_active == 1 )) ||
+    die "staging profile must be active before production promotion"
+  (( profile_staging == 1 )) ||
+    die "public-host profile is already configured for production ACME"
+  local identifier
+  identifier=$(workspace_id "$profile_workspace")
+  validate_dns_resolves "$profile_domain"
+  obtain_certificate "$profile_domain" "$profile_email" 0 1
+  nginx_test_reload
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    0 \
+    "$profile_release" \
+    1
+  printf 'production TLS promoted: https://%s/\n' "$profile_domain"
+}
+
+cmd_upgrade() {
+  [[ $# -ge 1 ]] || die "upgrade requires a WORKSPACE"
+  local workspace=$1
+  shift
+  local dry_run=0
+  while (( $# > 0 )); do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      *) die "unknown upgrade option: $1" ;;
+    esac
+  done
+  require_admin
+  load_profile_workspace "$workspace"
+  local identifier old_release new_release
+  identifier=$(workspace_id "$profile_workspace")
+  old_release=$profile_release
+  new_release=$(code_release_id)
+  if (( dry_run == 1 )); then
+    printf 'current release: %s\ncandidate release: %s\n' \
+      "$old_release" \
+      "$new_release"
+    return 0
+  fi
+  new_release=$(install_code_release)
+  if [[ "$new_release" == "$old_release" ]]; then
+    printf 'upgrade: already on %s\n' "$old_release"
+    return 0
+  fi
+  activate_code_release "$identifier" "$new_release"
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    "$new_release" \
+    "$profile_active"
+  write_publish_wrapper "$identifier"
+  if ! publish_id "$identifier" >/dev/null; then
+    activate_code_release "$identifier" "$old_release"
+    load_profile_id "$identifier"
+    write_profile \
+      "$identifier" \
+      "$profile_workspace" \
+      "$profile_operator" \
+      "$profile_operator_uid" \
+      "$profile_operator_gid" \
+      "$profile_operator_home" \
+      "$profile_domain" \
+      "$profile_email" \
+      "$profile_staging" \
+      "$old_release" \
+      "$profile_active"
+    write_publish_wrapper "$identifier"
+    die "upgrade publication failed; the prior code release was restored"
+  fi
+  public_backup_id "$identifier" >/dev/null
+  printf 'upgrade: %s -> %s\n' "$old_release" "$new_release"
+}
+
+cmd_rollback() {
+  [[ $# -ge 1 ]] || die "rollback requires a WORKSPACE"
+  local workspace=$1
+  shift
+  local release=
+  while (( $# > 0 )); do
+    case "$1" in
+      --release)
+        (( $# >= 2 )) || die "--release requires an id"
+        release=$2
+        shift 2
+        ;;
+      *)
+        die "unknown rollback option: $1"
+        ;;
+    esac
+  done
+  [[ -n "$release" ]] || die "rollback requires --release RELEASE"
+  validate_release_id "$release"
+  require_admin
+  load_profile_workspace "$workspace"
+  local identifier previous
+  identifier=$(workspace_id "$profile_workspace")
+  previous=$profile_release
+  [[ "$release" != "$previous" ]] || die "requested release is already active"
+  activate_code_release "$identifier" "$release"
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    "$release" \
+    "$profile_active"
+  write_publish_wrapper "$identifier"
+  if ! publish_id "$identifier" >/dev/null; then
+    activate_code_release "$identifier" "$previous"
+    load_profile_id "$identifier"
+    write_profile \
+      "$identifier" \
+      "$profile_workspace" \
+      "$profile_operator" \
+      "$profile_operator_uid" \
+      "$profile_operator_gid" \
+      "$profile_operator_home" \
+      "$profile_domain" \
+      "$profile_email" \
+      "$profile_staging" \
+      "$previous" \
+      "$profile_active"
+    write_publish_wrapper "$identifier"
+    die "rollback publication failed; the preceding code release was restored"
+  fi
+  printf 'rollback: %s -> %s\n' "$previous" "$release"
+}
+
+cmd_uninstall() {
+  [[ $# -eq 1 ]] || die "uninstall requires exactly one WORKSPACE"
+  require_admin
+  load_profile_workspace "$1"
+  local identifier
+  identifier=$(workspace_id "$profile_workspace")
+  disable_system_timer "$identifier"
+  nginx_paths "$identifier"
+  rm -f -- "$nginx_enabled" "$nginx_available"
+  nginx_test_reload
+  write_profile \
+    "$identifier" \
+    "$profile_workspace" \
+    "$profile_operator" \
+    "$profile_operator_uid" \
+    "$profile_operator_gid" \
+    "$profile_operator_home" \
+    "$profile_domain" \
+    "$profile_email" \
+    "$profile_staging" \
+    "$profile_release" \
+    0
+  printf '%s\n' \
+    "public life uninstalled; workspace, site releases, backups, code releases, and certificate were preserved"
+}
+
+cmd_publish_state() {
+  [[ $# -eq 1 ]] || die "publish-state requires exactly one workspace id"
+  require_admin
+  [[ "$1" =~ ^[0-9a-f]{16}$ ]] || die "invalid workspace id"
+  publish_id "$1"
+}
+
+main() {
+  [[ $# -ge 1 ]] || {
+    usage
+    exit 2
+  }
+  local command=$1
+  shift
+  case "$command" in
+    install) cmd_install "$@" ;;
+    status) cmd_status "$@" ;;
+    publish) cmd_publish "$@" ;;
+    backup) cmd_backup "$@" ;;
+    restore) cmd_restore "$@" ;;
+    promote) cmd_promote "$@" ;;
+    upgrade) cmd_upgrade "$@" ;;
+    rollback) cmd_rollback "$@" ;;
+    uninstall) cmd_uninstall "$@" ;;
+    publish-state) cmd_publish_state "$@" ;;
+    -h|--help|help) usage ;;
+    *) die "unknown command: $command" ;;
+  esac
+}
+
+main "$@"

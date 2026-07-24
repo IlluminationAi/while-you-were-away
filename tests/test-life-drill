@@ -12,6 +12,8 @@ plan=$("$drill" --plan)
 [[ "$plan" == *"ripgrep"* ]]
 [[ "$plan" == *"shellcheck"* ]]
 [[ "$plan" == *"systemd"* ]]
+[[ "$plan" == *"certbot"* ]]
+[[ "$plan" == *"nginx"* ]]
 
 if "$drill" --suite 'resolute;unsafe' --plan >/dev/null 2>&1; then
   printf '%s\n' "FAIL clean-root drill accepted an unsafe suite" >&2

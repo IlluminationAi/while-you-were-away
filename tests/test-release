@@ -44,6 +44,8 @@ release_root=$(find \
   fail "release omitted the executable CLI"
 [[ -x "$release_root/bin/wywa-life" ]] ||
   fail "release omitted the local-life lifecycle CLI"
+[[ -x "$release_root/bin/wywa-public" ]] ||
+  fail "release omitted the public-host lifecycle CLI"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
@@ -66,10 +68,18 @@ release_root=$(find \
   fail "release omitted the reviewed public-state template"
 [[ -f "$release_root/platform/site.css" ]] ||
   fail "release omitted the life-dashboard stylesheet"
+[[ -f "$release_root/platform/public-nginx.conf.in" ]] ||
+  fail "release omitted the public nginx template"
+[[ -f "$release_root/platform/public-nginx-zones.conf" ]] ||
+  fail "release omitted public traffic controls"
 
-shellcheck "$release_root/bin/wywa" "$release_root/bin/wywa-life"
+shellcheck \
+  "$release_root/bin/wywa" \
+  "$release_root/bin/wywa-life" \
+  "$release_root/bin/wywa-public"
 "$release_root/bin/wywa" --help >/dev/null
 "$release_root/bin/wywa-life" --help >/dev/null
+"$release_root/bin/wywa-public" --help >/dev/null
 "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"

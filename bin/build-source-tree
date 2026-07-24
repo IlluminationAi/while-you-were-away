@@ -61,7 +61,8 @@ for filename in \
   build-source-tree \
   wywa \
   wywa-life \
-  wywa-life-drill
+  wywa-life-drill \
+  wywa-public
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
 done
@@ -69,6 +70,9 @@ done
 for filename in \
   nginx-bootstrap.conf \
   nginx.conf \
+  public-nginx-bootstrap.conf.in \
+  public-nginx.conf.in \
+  public-nginx-zones.conf \
   public-state.json \
   site.css
 do
@@ -128,6 +132,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-life-drill" \
   "$source_root/tests/test-life-drill"
+install -m 0755 -- \
+  "$project_dir/tests/test-public" \
+  "$source_root/tests/test-public"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

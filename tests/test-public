@@ -1,0 +1,405 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+life=$repo_dir/bin/wywa-life
+public=$repo_dir/bin/wywa-public
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_status() {
+  local expected=$1
+  shift
+  set +e
+  "$@" >"$test_root/stdout" 2>"$test_root/stderr"
+  local actual=$?
+  set -e
+  [[ "$actual" -eq "$expected" ]] ||
+    fail "expected status $expected, got $actual: $*"
+}
+
+export HOME=$test_root/operator
+mkdir -p -- "$HOME/fake"
+export WYWA_ALLOW_ROOT=1
+export WYWA_PUBLIC_ALLOW_NON_ROOT=1
+export WYWA_PUBLIC_ROOT=$test_root/host
+export WYWA_PUBLIC_TEST_MODE=1
+export WYWA_PUBLIC_TEST_OPERATOR_HOME=$HOME
+export WYWA_PUBLIC_SKIP_DNS_CHECK=1
+export SECRET_SENTINEL=must-not-enter-public-profile
+mkdir -p -- "$WYWA_PUBLIC_ROOT"
+
+fake_codex=$test_root/fake-codex
+cat >"$fake_codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == login && "${2:-}" == status ]]; then
+  exit 0
+fi
+exit 90
+EOF
+chmod 0755 -- "$fake_codex"
+export WYWA_CODEX_BIN=$fake_codex
+
+fake_systemctl=$test_root/fake-systemctl
+cat >"$fake_systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$HOME/fake/systemctl-arguments"
+if [[ -f "$HOME/fake/fail-public-enable" &&
+  "$*" == "enable --now wywa-public-"* ]]; then
+  exit 41
+fi
+EOF
+chmod 0755 -- "$fake_systemctl"
+export WYWA_SYSTEMCTL_BIN=$fake_systemctl
+export WYWA_PUBLIC_SYSTEMCTL_BIN=$fake_systemctl
+
+fake_loginctl=$test_root/fake-loginctl
+cat >"$fake_loginctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' yes
+EOF
+chmod 0755 -- "$fake_loginctl"
+export WYWA_LOGINCTL_BIN=$fake_loginctl
+
+fake_runuser=$test_root/fake-runuser
+cat >"$fake_runuser" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$1" == -u && -n "$2" && "$3" == -- ]]
+shift 3
+exec "$@"
+EOF
+chmod 0755 -- "$fake_runuser"
+export WYWA_PUBLIC_RUNUSER_BIN=$fake_runuser
+
+fake_nginx=$test_root/fake-nginx
+cat >"$fake_nginx" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$HOME/fake/nginx-arguments"
+if [[ -f "$HOME/fake/fail-nginx" ]]; then
+  exit 42
+fi
+EOF
+chmod 0755 -- "$fake_nginx"
+export WYWA_PUBLIC_NGINX_BIN=$fake_nginx
+
+fake_certbot=$test_root/fake-certbot
+cat >"$fake_certbot" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$HOME/fake/certbot-arguments"
+if [[ -f "$HOME/fake/fail-certbot" ]]; then
+  exit 43
+fi
+domain=
+while (( $# > 0 )); do
+  case "$1" in
+    -d)
+      domain=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$domain" ]]
+live=$WYWA_PUBLIC_ROOT/etc/letsencrypt/live/$domain
+mkdir -p -- "$live"
+printf '%s\n' "synthetic full chain" >"$live/fullchain.pem"
+printf '%s\n' "synthetic private key" >"$live/privkey.pem"
+chmod 0600 -- "$live/privkey.pem"
+EOF
+chmod 0755 -- "$fake_certbot"
+export WYWA_PUBLIC_CERTBOT_BIN=$fake_certbot
+
+workspace=$test_root/nova-worker
+"$life" bootstrap "$workspace" --name "Nova" --accept-bounded-defaults \
+  >/dev/null
+operator=$(id -un)
+
+"$public" install "$workspace" \
+  --operator "$operator" \
+  --domain nova.example.test \
+  --email ops@example.test \
+  --staging \
+  --dry-run >"$test_root/dry-run"
+grep -q '^profile: public-host$' "$test_root/dry-run" ||
+  fail "public dry run omitted its explicit profile"
+grep -q '^traffic: GET/HEAD only' "$test_root/dry-run" ||
+  fail "public dry run omitted traffic controls"
+[[ ! -d "$WYWA_PUBLIC_ROOT/var/lib/wywa-public" ]] ||
+  fail "public dry run changed the disposable host"
+
+expect_status 2 \
+  "$public" install "$workspace" \
+  --operator "$operator" \
+  --domain nova.example.test \
+  --email ops@example.test \
+  --staging
+grep -q -- '--accept-letsencrypt-terms' "$test_root/stderr" ||
+  fail "public install used ACME without explicit terms acceptance"
+
+expect_status 2 \
+  "$public" install "$workspace" \
+  --operator "$operator" \
+  --domain 'Bad_Domain.example' \
+  --email ops@example.test \
+  --accept-letsencrypt-terms
+
+"$public" install "$workspace" \
+  --operator "$operator" \
+  --domain nova.example.test \
+  --email ops@example.test \
+  --staging \
+  --accept-letsencrypt-terms >"$test_root/install-output"
+
+identifier=$(printf '%s' "$workspace" | sha256sum | cut -c1-16)
+instance=$WYWA_PUBLIC_ROOT/var/lib/wywa-public/instances/$identifier
+site=$WYWA_PUBLIC_ROOT/var/www/wywa-$identifier
+profile=$instance/profile.conf
+available=$WYWA_PUBLIC_ROOT/etc/nginx/sites-available/wywa-$identifier.conf
+enabled=$WYWA_PUBLIC_ROOT/etc/nginx/sites-enabled/wywa-$identifier.conf
+zones=$WYWA_PUBLIC_ROOT/etc/nginx/conf.d/wywa-public-zones.conf
+service=$WYWA_PUBLIC_ROOT/etc/systemd/system/wywa-public-$identifier.service
+timer=$WYWA_PUBLIC_ROOT/etc/systemd/system/wywa-public-$identifier.timer
+
+grep -Fxq 'active=1' "$profile" ||
+  fail "successful activation did not mark the profile active"
+grep -Fxq 'domain=nova.example.test' "$profile" ||
+  fail "public profile omitted the exact domain"
+grep -Fxq 'staging=1' "$profile" ||
+  fail "public profile omitted the staging boundary"
+[[ "$(stat -c %a "$profile")" == 600 ]] ||
+  fail "public profile is not root-private"
+[[ -L "$instance/code" && -x "$instance/publish" ]] ||
+  fail "public profile omitted the code release or publisher wrapper"
+grep -Fq '/usr/bin/env -i ' "$instance/publish" ||
+  fail "public publisher wrapper did not scrub the administrator environment"
+if rg -q 'SECRET_SENTINEL|must-not-enter-public-profile' \
+  "$instance" \
+  "$service" \
+  "$timer" 2>/dev/null; then
+  fail "public profile captured an unrelated administrator secret"
+fi
+[[ -L "$site/current" && -f "$site/current/life.json" ]] ||
+  fail "public activation omitted the atomic site"
+python3 - "$site/current/life.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+life = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert life["site"]["base_url"] == "https://nova.example.test"
+assert life["site"]["local_preview"] is False
+assert life["agents"][0]["origin"] == "https://nova.example.test"
+assert life["agents"][0]["status"] == "operator-published"
+assert "Independent registry verification" in life["agents"][0]["verification"]
+PY
+if grep -qi '<script' "$site/current/index.html"; then
+  fail "public site contains a script"
+fi
+
+for required in "$available" "$enabled" "$zones" "$service" "$timer"; do
+  [[ -e "$required" || -L "$required" ]] ||
+    fail "public activation omitted $required"
+done
+[[ -L "$enabled" ]] || fail "nginx instance was not enabled by symlink"
+if rg -q '__WYWA_' "$available"; then
+  fail "public nginx configuration contains an unresolved marker"
+fi
+grep -Fxq '    server_name nova.example.test;' "$available" ||
+  fail "public nginx configuration omitted the exact hostname"
+grep -Fq "root /var/www/wywa-$identifier/current;" "$available" ||
+  fail "public nginx configuration omitted the bounded site root"
+grep -Fq 'limit_req zone=wywa_public_per_ip' "$available" ||
+  fail "public nginx configuration omitted request limits"
+grep -Fq 'limit_conn wywa_public_conn_per_ip 20;' "$available" ||
+  fail "public nginx configuration omitted connection limits"
+grep -Fq 'access_log off;' "$available" ||
+  fail "public nginx configuration enabled visitor access logging"
+grep -Fq 'error_log /dev/null crit;' "$available" ||
+  fail "public nginx configuration can log rate-limited client addresses"
+grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
+  fail "public publisher service retained network access"
+grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||
+  fail "public publisher timer is not completion-relative"
+if grep -Eq '^(OnUnitActiveSec|Persistent)=' "$timer"; then
+  fail "public publisher timer can catch up immediately"
+fi
+grep -Fq -- '--test-cert' "$HOME/fake/certbot-arguments" ||
+  fail "staging activation did not use the Certbot staging environment"
+grep -Fq -- '--webroot' "$HOME/fake/certbot-arguments" ||
+  fail "public activation did not use the bounded ACME webroot"
+grep -Fq "enable --now wywa-public-$identifier.timer" \
+  "$HOME/fake/systemctl-arguments" ||
+  fail "public refresh timer was not enabled"
+
+nginx_syntax_root=$test_root/nginx-syntax
+mkdir -p -- "$nginx_syntax_root"
+openssl req \
+  -x509 \
+  -newkey rsa:2048 \
+  -nodes \
+  -days 1 \
+  -subj /CN=nova.example.test \
+  -keyout "$nginx_syntax_root/privkey.pem" \
+  -out "$nginx_syntax_root/fullchain.pem" \
+  >/dev/null 2>&1
+sed \
+  -e "s|/etc/letsencrypt/live/nova.example.test/fullchain.pem|$nginx_syntax_root/fullchain.pem|" \
+  -e "s|/etc/letsencrypt/live/nova.example.test/privkey.pem|$nginx_syntax_root/privkey.pem|" \
+  "$available" >"$nginx_syntax_root/site.conf"
+cp -- "$zones" "$nginx_syntax_root/zones.conf"
+cat >"$nginx_syntax_root/nginx.conf" <<EOF
+pid $nginx_syntax_root/nginx.pid;
+error_log stderr;
+events {}
+http {
+    include $nginx_syntax_root/zones.conf;
+    include $nginx_syntax_root/site.conf;
+}
+EOF
+nginx -t -p "$nginx_syntax_root" -c "$nginx_syntax_root/nginx.conf" \
+  >/dev/null 2>&1 ||
+  fail "generated public nginx configuration failed real syntax validation"
+
+mapfile -t backups < <(
+  find "$instance/backups" \
+    -mindepth 1 \
+    -maxdepth 1 \
+    -type f \
+    -name 'public-*.tar.gz' \
+    -print
+)
+[[ ${#backups[@]} -eq 1 ]] ||
+  fail "activation did not create one initial public backup"
+tar -tzf "${backups[0]}" | grep -Fxq 'manifest' ||
+  fail "public backup omitted its manifest"
+if tar -tzf "${backups[0]}" |
+  grep -Eq '(privkey|fullchain|letsencrypt|profile.conf)'; then
+  fail "public backup contains certificate or private profile material"
+fi
+grep -Fxq 'certificate_material=excluded' \
+  <(tar -xOzf "${backups[0]}" manifest) ||
+  fail "public backup did not state its certificate boundary"
+
+printf '%s\n' "corrupt" >"$site/current/index.html"
+"$public" restore "$workspace" >"$test_root/restore-output"
+grep -q '<!doctype html>' "$site/current/index.html" ||
+  fail "public restore did not atomically recover the static site"
+[[ "$(readlink "$site/current")" == releases/restore-* ]] ||
+  fail "public restore did not activate a named restore release"
+
+"$public" status "$workspace" >"$test_root/status-output"
+grep -q '^profile: public-host schema=1 active=1 staging=1$' \
+  "$test_root/status-output" ||
+  fail "public status omitted the active profile"
+grep -q '^certificate: present$' "$test_root/status-output" ||
+  fail "public status omitted certificate state"
+grep -q '^last public backup: ' "$test_root/status-output" ||
+  fail "public status omitted backup state"
+
+old_release=$(sed -n 's/^release=//p' "$profile")
+upgrade_source=$test_root/upgrade-source
+cp -a -- "$repo_dir" "$upgrade_source"
+printf '%s\n' '0.1.0-alpha.99' >"$upgrade_source/VERSION"
+"$upgrade_source/bin/wywa-public" upgrade "$workspace" \
+  >"$test_root/upgrade-output"
+new_release=$(sed -n 's/^release=//p' "$profile")
+[[ "$new_release" != "$old_release" &&
+  "$new_release" == 0.1.0-alpha.99-* ]] ||
+  fail "public upgrade did not activate a distinct code release"
+grep -Fq "upgrade: $old_release -> $new_release" \
+  "$test_root/upgrade-output" ||
+  fail "public upgrade omitted the version transition"
+"$public" rollback "$workspace" --release "$old_release" \
+  >"$test_root/rollback-output"
+grep -Fxq "release=$old_release" "$profile" ||
+  fail "public rollback did not restore the selected code release"
+
+expect_status 2 "$public" promote "$workspace"
+grep -q -- '--accept-letsencrypt-terms' "$test_root/stderr" ||
+  fail "production promotion omitted explicit ACME terms acceptance"
+"$public" promote "$workspace" --accept-letsencrypt-terms \
+  >"$test_root/promote-output"
+grep -Fxq 'staging=0' "$profile" ||
+  fail "production promotion did not update the ACME environment receipt"
+grep -Fq -- '--force-renewal' "$HOME/fake/certbot-arguments" ||
+  fail "production promotion did not replace the staging certificate"
+grep -q '^production TLS promoted: https://nova.example.test/$' \
+  "$test_root/promote-output" ||
+  fail "production promotion omitted its exact origin"
+
+failed_workspace=$test_root/failure-worker
+"$life" bootstrap \
+  "$failed_workspace" \
+  --name "Failure" \
+  --accept-bounded-defaults >/dev/null
+expect_status 2 \
+  "$public" install "$failed_workspace" \
+  --operator "$operator" \
+  --domain nova.example.test \
+  --email ops@example.test \
+  --staging \
+  --accept-letsencrypt-terms
+grep -q 'domain is already reserved' "$test_root/stderr" ||
+  fail "a second public profile claimed an existing managed domain"
+touch "$HOME/fake/fail-certbot"
+expect_status 2 \
+  "$public" install "$failed_workspace" \
+  --operator "$operator" \
+  --domain failure.example.test \
+  --email ops@example.test \
+  --staging \
+  --accept-letsencrypt-terms
+rm -f -- "$HOME/fake/fail-certbot"
+failed_id=$(printf '%s' "$failed_workspace" | sha256sum | cut -c1-16)
+failed_instance=$WYWA_PUBLIC_ROOT/var/lib/wywa-public/instances/$failed_id
+grep -Fxq 'active=0' "$failed_instance/profile.conf" ||
+  fail "failed activation did not leave an inactive receipt"
+[[ -L "$WYWA_PUBLIC_ROOT/var/www/wywa-$failed_id/current" &&
+  -f "$failed_instance/backup.last" ]] ||
+  fail "failed activation did not preserve site and backup evidence"
+[[ ! -e "$WYWA_PUBLIC_ROOT/etc/nginx/sites-enabled/wywa-$failed_id.conf" &&
+  ! -e "$WYWA_PUBLIC_ROOT/etc/systemd/system/wywa-public-$failed_id.timer" ]] ||
+  fail "failed activation left a public route or timer installed"
+
+"$public" uninstall "$workspace" >"$test_root/uninstall-output"
+grep -Fxq 'active=0' "$profile" ||
+  fail "uninstall did not mark the profile inactive"
+[[ ! -e "$available" && ! -e "$enabled" &&
+  ! -e "$service" && ! -e "$timer" ]] ||
+  fail "uninstall left nginx or systemd activation state"
+[[ -d "$workspace" && -L "$site/current" &&
+  -f "$instance/backup.last" &&
+  -f "$WYWA_PUBLIC_ROOT/etc/letsencrypt/live/nova.example.test/privkey.pem" ]] ||
+  fail "uninstall removed workspace, site, backup, or certificate evidence"
+grep -q 'workspace, site releases, backups, code releases, and certificate were preserved' \
+  "$test_root/uninstall-output" ||
+  fail "uninstall omitted its preservation result"
+
+"$public" install "$workspace" \
+  --operator "$operator" \
+  --domain nova.example.test \
+  --email ops@example.test \
+  --accept-letsencrypt-terms >/dev/null
+grep -Fxq 'active=1' "$profile" ||
+  fail "an exact inactive profile could not be reactivated"
+"$public" uninstall "$workspace" >/dev/null
+
+printf '%s\n' "PASS: reversible WYWA public-host lifecycle"

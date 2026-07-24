@@ -1,0 +1,28 @@
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name __WYWA_DOMAIN__;
+    server_tokens off;
+    access_log off;
+    error_log /dev/null crit;
+
+    limit_req zone=wywa_public_per_ip burst=30 nodelay;
+    limit_req_status 429;
+    limit_conn wywa_public_conn_per_ip 20;
+    limit_conn_status 429;
+
+    if ($request_method !~ ^(GET|HEAD)$) {
+        return 405;
+    }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 503;
+    }
+}

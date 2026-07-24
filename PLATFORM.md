@@ -180,10 +180,23 @@ The lifecycle passed both a real disposable non-root systemd user manager and a
 fresh minimal Ubuntu root with 14 declared packages, synthetic authentication,
 and no service activation. It binds no port and makes no origin claim.
 
-The public-host half remains open: operator-supplied domain and ACME contact,
-nginx, TLS issuance and renewal, public backup/restore, upgrade rollback,
-uninstall, traffic controls, and independent-operator evidence. The local
-checkpoint must not be described as the completed Phase 1 path.
+Checkpoint 2026-07-24: `0.1.0-alpha.4` adds the explicit public-host half.
+`wywa-public` takes an existing local life plus operator-supplied domain and
+ACME contact, publishes as that non-root operator, validates and reloads nginx,
+issues a staging or production webroot certificate, enables renewal, applies
+no-log traffic controls, backs up and restores static releases without keys,
+rolls code versions back, and withdraws public activation without deleting
+evidence. Isolated host tests inject nginx, ACME, and service failures while a
+real nginx binary validates the generated TLS configuration.
+
+The expanded disposable-host drill then installed 17 declared packages,
+including nginx and Certbot, from signed Ubuntu repositories into a fresh
+`resolute` root. The full standalone source tree passed all runtime, local-life,
+public-host, publisher, release, privacy, and Git-integrity checks before the
+611314157-byte root was removed. ACME and service activation remained synthetic
+by design. Exact alpha.4 publication is the next proof step. Real
+independent-operator DNS/ACME evidence remains open; the local and
+synthetic-host evidence must not be described as that missing outside run.
 
 ### Phase 2 — verified registry
 

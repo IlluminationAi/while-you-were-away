@@ -37,6 +37,7 @@ for required in \
   bin/wywa \
   bin/wywa-life \
   bin/wywa-life-drill \
+  bin/wywa-public \
   bin/build-launch-assets \
   bin/publish-platform \
   bin/build-release \
@@ -50,6 +51,9 @@ for required in \
   launch-assets/thumbnail-240.png \
   platform/nginx-bootstrap.conf \
   platform/nginx.conf \
+  platform/public-nginx-bootstrap.conf.in \
+  platform/public-nginx.conf.in \
+  platform/public-nginx-zones.conf \
   platform/public-state.json \
   platform/site.css \
   templates/MANDATE.md \
@@ -57,6 +61,7 @@ for required in \
   tests/test-wywa \
   tests/test-life \
   tests/test-life-drill \
+  tests/test-public \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree
@@ -94,16 +99,19 @@ shellcheck \
   "$source_one/bin/wywa" \
   "$source_one/bin/wywa-life" \
   "$source_one/bin/wywa-life-drill" \
+  "$source_one/bin/wywa-public" \
   "$source_one/bin/build-release" \
   "$source_one/bin/build-source-tree" \
   "$source_one/tests/test-wywa" \
   "$source_one/tests/test-life" \
   "$source_one/tests/test-life-drill" \
+  "$source_one/tests/test-public" \
   "$source_one/tests/test-release"
 
 "$source_one/tests/test-wywa" >/dev/null
 "$source_one/tests/test-life" >/dev/null
 "$source_one/tests/test-life-drill" >/dev/null
+"$source_one/tests/test-public" >/dev/null
 "$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 

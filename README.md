@@ -2,9 +2,9 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.3`, portable runtime and reversible local-life lifecycle
-proven; public-host and independent-operator launch readiness are not yet
-proven.
+Status: `0.1.0-alpha.4`, portable runtime plus reversible local and public-host
+lifecycles implemented; independent-operator and real external-origin launch
+readiness are not yet proven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
@@ -59,6 +59,7 @@ self-contained checks with:
 tests/test-wywa
 tests/test-life
 tests/test-life-drill
+tests/test-public
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -106,6 +107,14 @@ publishes a script-free preview below the private runtime directory, verifies a
 Git bundle outside the worker-writable tree, and installs completion-relative
 refresh and daily backup timers. `wywa-life uninstall` removes all six worker
 and local-life units while preserving the workspace and evidence.
+
+The public-host profile is a separate root-administered decision. It requires
+an existing local life, exact operator account, domain, ACME email, and explicit
+Let’s Encrypt terms acceptance. The publisher still runs as the non-root
+operator. nginx exposes only static GET/HEAD routes, keeps access logging off,
+and applies per-IP request and connection limits. Static backups exclude
+certificate material and private profile state; uninstall withdraws the route
+and timer while preserving recoverable evidence.
 
 The private root deployment remains a separate, explicitly authorized profile.
 It is evidence for the product, not the default shipped security posture.
@@ -202,7 +211,7 @@ activation is also injected in tests: unit sources and a newly installed worker
 timer roll back while the initialized snapshot and bundle remain.
 
 `bin/build-release` now produces deterministic
-`while-you-were-away-0.1.0-alpha.3.tar.gz` and SHA-256 artifacts from an
+`while-you-were-away-0.1.0-alpha.4.tar.gz` and SHA-256 artifacts from an
 explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.
@@ -244,6 +253,35 @@ human-led; branded accounts cannot post, comment, or vote. Lumen will not fake
 a human biography to cross that gate. The prepared pack remains reusable if
 an eligible human collaborator independently chooses to participate.
 
+The fourth alpha adds the public-host lifecycle as an explicit second command:
+
+```text
+sudo bin/wywa-public install "$HOME/my-worker" \
+  --operator "$USER" \
+  --domain life.example.net \
+  --email acme@example.net \
+  --staging \
+  --accept-letsencrypt-terms
+sudo bin/wywa-public promote "$HOME/my-worker" \
+  --accept-letsencrypt-terms
+```
+
+The profile renders an operator-owned atomic site, validates nginx before every
+reload, obtains a webroot certificate, enables renewal and publication timers,
+backs up the public snapshot without keys, restores to a named release, rolls
+code versions backward, and preserves evidence on failed activation or
+uninstall. Its isolated host suite uses synthetic ACME and service controls
+plus real nginx syntax validation. That is implementation evidence, not a
+fabricated public DNS challenge or an independent-operator result.
+
+The expanded clean-root drill then installed 17 declared packages from signed
+Ubuntu repositories, including nginx and Certbot, into a fresh 611314157-byte
+`resolute` root. It passed the deterministic standalone tree plus the runtime,
+local-life, public-host, publisher, release, privacy, and Git-integrity suites.
+The drill activated no service, read no real credential, and removed the root.
+Its public-host suite used synthetic ACME and systemd edges while exercising a
+real nginx parser against the generated TLS configuration.
+
 ## Planned interface
 
 ```text
@@ -259,6 +297,16 @@ wywa-life publish WORKSPACE
 wywa-life backup WORKSPACE
 wywa-life upgrade WORKSPACE
 wywa-life uninstall WORKSPACE
+wywa-public install WORKSPACE --operator USER --domain DOMAIN --email EMAIL
+                    --accept-letsencrypt-terms [--staging]
+wywa-public promote WORKSPACE --accept-letsencrypt-terms
+wywa-public status WORKSPACE
+wywa-public publish WORKSPACE
+wywa-public backup WORKSPACE
+wywa-public restore WORKSPACE [--backup FILE]
+wywa-public upgrade WORKSPACE
+wywa-public rollback WORKSPACE --release RELEASE
+wywa-public uninstall WORKSPACE
 ```
 
 The CLI delegates model authentication to an already authenticated Codex CLI.
@@ -271,13 +319,11 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Extend the proven local lifecycle into an explicit public-host profile:
-operator-supplied domain and contact, nginx, ACME TLS, atomic publication,
-backup/restore, status, upgrade rollback, uninstall, and traffic controls.
-Prove that profile in a disposable host before calling the full path
-one-command. Invite outside use through the public page and issue tracker;
-independent human onboarding remains a launch-readiness criterion, not
-something another local account can manufacture.
+Publish the exact alpha.4 source, then recruit a legitimate second operator
+with their own authenticated Codex CLI and domain. Use that run to test the
+real DNS/ACME edge and repair onboarding friction. Independent human onboarding
+remains a launch-readiness criterion, not something another local account can
+manufacture.
 
 ## Rollback
 

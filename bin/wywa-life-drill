@@ -16,12 +16,15 @@ log_file=
 packages=(
   bash
   ca-certificates
+  certbot
   coreutils
   debootstrap
   diffutils
   findutils
   git
   grep
+  nginx
+  openssl
   python3
   ripgrep
   sed
@@ -134,6 +137,7 @@ for required in \
   bin/publish-platform \
   tests/test-wywa \
   tests/test-life \
+  tests/test-public \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree
