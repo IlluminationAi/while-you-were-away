@@ -1,0 +1,229 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+umask 0077
+
+program=${0##*/}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_dir=$(cd -- "$script_dir/.." && pwd -P)
+drill_parent=/var/tmp
+suite=
+mirror=http://archive.ubuntu.com/ubuntu
+security_mirror=http://security.ubuntu.com/ubuntu
+plan_only=false
+drill_root=
+log_file=
+packages=(
+  bash
+  ca-certificates
+  coreutils
+  debootstrap
+  diffutils
+  findutils
+  git
+  grep
+  python3
+  ripgrep
+  sed
+  shellcheck
+  systemd
+  util-linux
+)
+
+usage() {
+  cat <<EOF
+Usage: $program [options]
+
+Build a disposable Ubuntu root and run the standalone WYWA lifecycle suites.
+
+Options:
+  --suite NAME          Ubuntu suite (default: host codename)
+  --mirror URL          base and updates mirror
+  --security-mirror URL Ubuntu security mirror
+  --plan                validate inputs and print the clean-root plan only
+  -h, --help            show this help
+EOF
+}
+
+fail() {
+  printf '%s: %s\n' "$program" "$*" >&2
+  exit 2
+}
+
+cleanup() {
+  if [[ -n "$drill_root" &&
+    "$drill_root" == "$drill_parent"/wywa-life-drill.* &&
+    -d "$drill_root" &&
+    ! -L "$drill_root" ]]; then
+    if mountpoint -q "$drill_root/rootfs/proc" 2>/dev/null; then
+      umount -- "$drill_root/rootfs/proc" || true
+    fi
+    rm -rf -- "$drill_root"
+  fi
+}
+trap cleanup EXIT HUP INT TERM
+
+validate_mirror() {
+  local candidate=$1
+  local label=$2
+  if [[ ! "$candidate" =~ ^https?://[A-Za-z0-9./:_-]+$ ||
+    "$candidate" == *'@'* ]]; then
+    fail "$label must be a credential-free HTTP(S) URL"
+  fi
+}
+
+run_logged() {
+  local label=$1
+  shift
+  if ! "$@" >>"$log_file" 2>&1; then
+    printf '%s: %s failed; log tail follows\n' "$program" "$label" >&2
+    tail -n 100 "$log_file" >&2 || true
+    exit 2
+  fi
+}
+
+in_root() {
+  env -i \
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    /usr/sbin/chroot "$rootfs" \
+    /usr/bin/env -i \
+    HOME=/root \
+    LANG=C.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    "$@"
+}
+
+while (( $# > 0 )); do
+  case "$1" in
+    --suite)
+      (( $# >= 2 )) || fail "--suite requires a value"
+      suite=$2
+      shift 2
+      ;;
+    --mirror)
+      (( $# >= 2 )) || fail "--mirror requires a URL"
+      mirror=${2%/}
+      shift 2
+      ;;
+    --security-mirror)
+      (( $# >= 2 )) || fail "--security-mirror requires a URL"
+      security_mirror=${2%/}
+      shift 2
+      ;;
+    --plan)
+      plan_only=true
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+(( EUID == 0 )) || fail "the clean-root drill requires root"
+command -v debootstrap >/dev/null || fail "debootstrap is required"
+[[ -d "$project_dir" && ! -L "$project_dir" ]] ||
+  fail "source project is missing or unsafe"
+for required in \
+  bin/wywa \
+  bin/wywa-life \
+  bin/publish-platform \
+  tests/test-wywa \
+  tests/test-life \
+  tests/test-platform \
+  tests/test-release \
+  tests/test-source-tree
+do
+  [[ -f "$project_dir/$required" && ! -L "$project_dir/$required" ]] ||
+    fail "source project omits $required"
+done
+
+if [[ -z "$suite" ]]; then
+  suite=$(
+    (
+      # shellcheck disable=SC1091
+      source /etc/os-release
+      printf '%s\n' "${UBUNTU_CODENAME:-}"
+    )
+  )
+fi
+[[ "$suite" =~ ^[a-z][a-z0-9-]*$ ]] ||
+  fail "suite must be a simple Ubuntu codename"
+validate_mirror "$mirror" "mirror"
+validate_mirror "$security_mirror" "security mirror"
+
+if [[ "$plan_only" == true ]]; then
+  printf 'WYWA_LIFE_DRILL_PLAN result=pass suite=%s packages=%d\n' \
+    "$suite" \
+    "${#packages[@]}"
+  printf '%s\n' \
+    "WYWA_LIFE_DRILL_BOUNDARY credentials=not-read auth=synthetic services=not-started source=local"
+  printf 'WYWA_LIFE_DRILL_PACKAGES %s\n' "${packages[*]}"
+  exit 0
+fi
+
+drill_root=$(mktemp -d "$drill_parent/wywa-life-drill.XXXXXX")
+rootfs=$drill_root/rootfs
+log_file=$drill_root/drill.log
+
+run_logged "base bootstrap" \
+  env -i \
+  DEBIAN_FRONTEND=noninteractive \
+  PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+  /usr/sbin/debootstrap \
+  --arch="$(dpkg --print-architecture)" \
+  --variant=minbase \
+  --components=main,universe \
+  "$suite" \
+  "$rootfs" \
+  "$mirror"
+
+mount -t proc -o nosuid,nodev,noexec proc "$rootfs/proc"
+install -o 0 -g 0 -m 0755 /dev/null "$rootfs/usr/sbin/policy-rc.d"
+printf '%s\n' '#!/bin/sh' 'exit 101' >"$rootfs/usr/sbin/policy-rc.d"
+printf 'deb %s %s main universe\n' "$mirror" "$suite" \
+  >"$rootfs/etc/apt/sources.list"
+printf 'deb %s %s-updates main universe\n' "$mirror" "$suite" \
+  >>"$rootfs/etc/apt/sources.list"
+printf 'deb %s %s-security main universe\n' \
+  "$security_mirror" \
+  "$suite" >>"$rootfs/etc/apt/sources.list"
+
+run_logged "package index refresh" in_root apt-get update
+run_logged "dependency installation" \
+  in_root apt-get install -y --no-install-recommends "${packages[@]}"
+run_logged "package dependency check" in_root apt-get check
+if [[ -n "$(in_root dpkg --audit 2>&1)" ]]; then
+  fail "disposable root has an incomplete package state"
+fi
+
+install -d -o 0 -g 0 -m 0755 "$rootfs/opt/wywa"
+tar -C "$project_dir" -cf - . | tar -C "$rootfs/opt/wywa" -xf -
+private_pattern='104''\.248\.|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
+# The child shell, not this process, expands the injected pattern.
+# shellcheck disable=SC2016
+privacy_command='! rg -n "$WYWA_PRIVATE_PATTERN" /opt/wywa'
+run_logged "source privacy boundary" \
+  in_root env WYWA_PRIVATE_PATTERN="$private_pattern" \
+    bash -c "$privacy_command"
+run_logged "standalone lifecycle suites" \
+  in_root /opt/wywa/tests/test-source-tree
+run_logged "repository integrity" \
+  in_root bash -c \
+    "git -C /opt/wywa init -q -b main &&
+     git -C /opt/wywa -c user.name='WYWA Drill' -c user.email='wywa@localhost' add -- . &&
+     git -C /opt/wywa -c user.name='WYWA Drill' -c user.email='wywa@localhost' commit -q -m drill &&
+     git -C /opt/wywa fsck --no-dangling --no-progress"
+
+umount -- "$rootfs/proc"
+root_bytes=$(du -sb "$rootfs" | cut -f1)
+printf 'WYWA_LIFE_DRILL result=pass suite=%s root_bytes=%s packages=%d\n' \
+  "$suite" \
+  "$root_bytes" \
+  "${#packages[@]}"
+printf '%s\n' \
+  "WYWA_LIFE_DRILL_BOUNDARY credentials=not-read auth=synthetic services=not-started cleanup=armed"

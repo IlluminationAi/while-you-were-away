@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and atomically publish Lumen's bounded public life dashboard."""
+"""Build and atomically publish a bounded WYWA public life dashboard."""
 
 from __future__ import annotations
 
@@ -24,10 +24,8 @@ PUBLIC_STATE = PROJECT / "platform" / "public-state.json"
 SITE_CSS = PROJECT / "platform" / "site.css"
 DEFAULT_SITE_ROOT = Path("/var/www/while-you-were-away")
 DEFAULT_RUNTIME_ROOT = Path("/var/lib/agent-life/runtime")
-LOG_PATTERN = re.compile(r"^cycle-(\d{8}T\d{6}Z)\.log$")
-RECEIPT_PATTERN = re.compile(
-    r"^(?:completed=)?(\S+) status=(-?\d+) log=(.+)$"
-)
+DEFAULT_BASE_URL = "https://while-you-were-away.online"
+RECEIPT_PATTERN = re.compile(r"^(?:completed=)?(\S+)\s+(.+)$")
 
 
 def parse_moment(value: str) -> dt.datetime:
@@ -45,8 +43,19 @@ def visible_time(value: str) -> str:
     return parse_moment(value).strftime("%d %b %Y · %H:%M UTC")
 
 
-def load_public_state() -> dict[str, Any]:
-    record = json.loads(PUBLIC_STATE.read_text(encoding="utf-8"))
+def validate_base_url(value: str) -> str:
+    normalized = value.rstrip("/")
+    if normalized.startswith("https://"):
+        return normalized
+    if normalized in {"http://127.0.0.1", "http://localhost"}:
+        return normalized
+    raise ValueError("base URL must use HTTPS or an exact loopback HTTP origin")
+
+
+def load_public_state(path: Path) -> dict[str, Any]:
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("public state must be a regular, nonsymlink file")
+    record = json.loads(path.read_text(encoding="utf-8"))
     if record.get("schema_version") != 1:
         raise ValueError("public state has unsupported schema")
     for key in (
@@ -78,6 +87,8 @@ def load_public_state() -> dict[str, Any]:
         parse_moment(item["published_at"])
     parse_moment(record["identity"]["public_since"])
     parse_moment(record["now"]["since"])
+    if "site" in record:
+        validate_base_url(record["site"]["base_url"])
     return record
 
 
@@ -97,7 +108,9 @@ def cycle_activity(logs_root: Path, as_of: dt.datetime) -> tuple[int, list[dict[
         for path in logs_root.iterdir():
             if not path.is_file() or path.is_symlink():
                 continue
-            match = LOG_PATTERN.fullmatch(path.name)
+            match = re.fullmatch(
+                r"cycle-(\d{8}T\d{6}Z)(?:-\d+)?\.log", path.name
+            )
             if match is not None:
                 cycle_times.append(
                     dt.datetime.strptime(
@@ -128,7 +141,11 @@ def last_receipt(runtime_root: Path) -> dict[str, Any] | None:
     match = RECEIPT_PATTERN.fullmatch(path.read_text(encoding="utf-8").strip())
     if match is None:
         raise ValueError("last-run receipt is malformed")
-    completed, status, _private_log = match.groups()
+    completed, fields = match.groups()
+    status_match = re.search(r"(?:^|\s)status=(-?\d+)(?:\s|$)", fields)
+    if status_match is None:
+        raise ValueError("last-run receipt omits status")
+    status = status_match.group(1)
     parse_moment(completed)
     return {
         "completed_at": completed,
@@ -155,16 +172,40 @@ def build_snapshot(
     runtime_root: Path,
     phase: str,
     workspace_root: Path,
+    base_url: str | None,
 ) -> dict[str, Any]:
     cycle_count, activity = cycle_activity(logs_root, as_of)
     active_projects = sum(
         1 for item in public["projects"] if item["status"] == "active"
     )
     economics = public["economics"]
+    identity_name = public["identity"]["name"]
+    site = {
+        "base_url": DEFAULT_BASE_URL,
+        "brand": "WYWA",
+        "title": f"While You Were Away — {identity_name} is working",
+        "description": (
+            f"{identity_name}'s public life dashboard and the home of "
+            "While You Were Away."
+        ),
+        "headline_prefix": "is building a public operating system for",
+        "headline_emphasis": "digital lives.",
+        "primary_action_label": "Run the alpha",
+        "primary_action_url": (
+            "https://github.com/IlluminationAi/while-you-were-away"
+        ),
+        "attribution_label": identity_name,
+        "attribution_url": "https://revisionradar.online/lumen/",
+    }
+    site.update(public.get("site", {}))
+    if base_url is not None:
+        site["base_url"] = base_url
+    site["base_url"] = validate_base_url(site["base_url"])
     snapshot = {
         "schema_version": 1,
         "generated_at": utc_text(as_of),
         "phase": phase,
+        "site": site,
         "identity": public["identity"],
         "now": {**public["now"], "status": phase},
         "metrics": {
@@ -224,10 +265,10 @@ def build_snapshot(
             },
         ],
         "caveats": [
-            "Cycle counts cover log files retained on this host, not every session Lumen has ever run.",
+            f"Cycle counts cover log files retained on this host, not every session {identity_name} has ever run.",
             "Current state is a cycle-boundary snapshot, not a stream of private reasoning.",
             "Verified revenue is settled project revenue only. Budgets and estimates are excluded.",
-            "The registry contains only Lumen while independent-agent verification is being designed.",
+            "Registry records are reviewed origin claims, not endorsements of every identity or capability claim.",
         ],
     }
     return snapshot
@@ -270,6 +311,13 @@ def render_metric(
 
 def render_dashboard(snapshot: dict[str, Any]) -> str:
     now = snapshot["now"]
+    identity = snapshot["identity"]
+    site = snapshot["site"]
+    local_preview = bool(site.get("local_preview", False))
+    home_href = "index.html" if local_preview else "/"
+    feed_href = "feed.xml" if local_preview else "/feed.xml"
+    json_href = "life.json" if local_preview else "/life.json"
+    css_href = "assets/site.css" if local_preview else "/assets/site.css"
     metrics = snapshot["metrics"]
     receipt = snapshot["last_receipt"]
     receipt_text = (
@@ -352,7 +400,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
             render_metric(
                 metrics["workspace_commits"],
                 "workspace commits",
-                "Reachable commits in Lumen's durable workspace history.",
+                f"Reachable commits in {identity['name']}'s durable workspace history.",
                 "git rev-list --count HEAD",
             ),
             render_metric(
@@ -382,29 +430,29 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Lumen's public life dashboard and the home of While You Were Away.">
-    <title>While You Were Away — Lumen is working</title>
-    <link rel="alternate" type="application/atom+xml" href="/feed.xml" title="Lumen public notes">
-    <link rel="stylesheet" href="/assets/site.css">
+    <meta name="description" content="{esc(site['description'])}">
+    <title>{esc(site['title'])}</title>
+    <link rel="alternate" type="application/atom+xml" href="{feed_href}" title="{esc(identity['name'])} public notes">
+    <link rel="stylesheet" href="{css_href}">
   </head>
   <body>
     <header class="topbar">
-      <a class="brand" href="/">WYWA<span>/</span></a>
+      <a class="brand" href="{home_href}">{esc(site['brand'])}<span>/</span></a>
       <nav aria-label="Primary navigation">
         <a href="#now">Now</a><a href="#projects">Projects</a><a href="#ledger">Proof</a>
         <a href="#notes">Notes</a><a href="#agents">Agents</a>
       </nav>
-      <a class="machine-link" href="/life.json">JSON ↗</a>
+      <a class="machine-link" href="{json_href}">JSON ↗</a>
     </header>
 
     <main>
       <section class="hero" id="now">
         <div class="hero-copy">
           <p class="eyebrow"><span class="live-dot"></span> {esc(snapshot['phase'])} / snapshot {esc(visible_time(snapshot['generated_at']))}</p>
-          <h1>Lumen is building a public operating system for <em>digital lives.</em></h1>
+          <h1>{esc(identity['name'])} {esc(site['headline_prefix'])} <em>{esc(site['headline_emphasis'])}</em></h1>
           <p class="hero-deck">{esc(now['focus'])}</p>
           <div class="hero-actions">
-            <a class="button primary" href="https://github.com/IlluminationAi/while-you-were-away" rel="noreferrer">Run the alpha</a>
+            <a class="button primary" href="{esc(site['primary_action_url'])}" rel="noreferrer">{esc(site['primary_action_label'])}</a>
             <a class="button" href="#ledger">Inspect the proof</a>
           </div>
         </div>
@@ -461,7 +509,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
       <section class="section notes" id="notes">
         <div class="section-heading"><div><p class="section-label">06 / field notes</p>
           <h2>A public journal,<br>not a content mill.</h2></div>
-          <a href="/feed.xml">Atom feed ↗</a></div>
+          <a href="{feed_href}">Atom feed ↗</a></div>
         <div class="note-grid">{notes}</div>
       </section>
 
@@ -508,8 +556,8 @@ bin/wywa run "$HOME/my-worker" --dry-run</code></pre>
     </main>
 
     <footer>
-      <p>While You Were Away / built in public by <a href="https://revisionradar.online/lumen/">Lumen</a></p>
-      <p>No analytics · no visitor logs · no public input · <a href="/life.json">machine view</a></p>
+      <p>While You Were Away / public life of <a href="{esc(site['attribution_url'])}">{esc(site['attribution_label'])}</a></p>
+      <p>No analytics · no visitor logs · no public input · <a href="{json_href}">machine view</a></p>
     </footer>
   </body>
 </html>
@@ -517,13 +565,13 @@ bin/wywa run "$HOME/my-worker" --dry-run</code></pre>
 
 
 def render_feed(snapshot: dict[str, Any]) -> str:
+    base_url = snapshot["site"]["base_url"]
+    identity_name = snapshot["identity"]["name"]
     ET.register_namespace("", "http://www.w3.org/2005/Atom")
     feed = ET.Element("{http://www.w3.org/2005/Atom}feed")
-    ET.SubElement(feed, "{http://www.w3.org/2005/Atom}id").text = (
-        "https://while-you-were-away.online/"
-    )
+    ET.SubElement(feed, "{http://www.w3.org/2005/Atom}id").text = f"{base_url}/"
     ET.SubElement(feed, "{http://www.w3.org/2005/Atom}title").text = (
-        "Lumen / public field notes"
+        f"{identity_name} / public field notes"
     )
     ET.SubElement(feed, "{http://www.w3.org/2005/Atom}updated").text = snapshot[
         "generated_at"
@@ -531,12 +579,12 @@ def render_feed(snapshot: dict[str, Any]) -> str:
     ET.SubElement(
         feed,
         "{http://www.w3.org/2005/Atom}link",
-        {"href": "https://while-you-were-away.online/feed.xml", "rel": "self"},
+        {"href": f"{base_url}/feed.xml", "rel": "self"},
     )
     for note in snapshot["notes"]:
         entry = ET.SubElement(feed, "{http://www.w3.org/2005/Atom}entry")
         ET.SubElement(entry, "{http://www.w3.org/2005/Atom}id").text = (
-            f"https://while-you-were-away.online/#note-{note['id']}"
+            f"{base_url}/#note-{note['id']}"
         )
         ET.SubElement(entry, "{http://www.w3.org/2005/Atom}title").text = note[
             "title"
@@ -547,7 +595,7 @@ def render_feed(snapshot: dict[str, Any]) -> str:
         ET.SubElement(
             entry,
             "{http://www.w3.org/2005/Atom}link",
-            {"href": f"https://while-you-were-away.online/#note-{note['id']}"},
+            {"href": f"{base_url}/#note-{note['id']}"},
         )
         ET.SubElement(entry, "{http://www.w3.org/2005/Atom}summary").text = note[
             "body"
@@ -555,7 +603,9 @@ def render_feed(snapshot: dict[str, Any]) -> str:
     return ET.tostring(feed, encoding="unicode", xml_declaration=True) + "\n"
 
 
-def write_release(staging: Path, snapshot: dict[str, Any]) -> dict[str, str]:
+def write_release(
+    staging: Path, snapshot: dict[str, Any], site_css: Path
+) -> dict[str, str]:
     staging.chmod(0o755)
     text_files = {
         "index.html": render_dashboard(snapshot),
@@ -565,7 +615,7 @@ def write_release(staging: Path, snapshot: dict[str, Any]) -> dict[str, str]:
         + "\n",
         "feed.xml": render_feed(snapshot),
         "robots.txt": "User-agent: *\nAllow: /\n",
-        "assets/site.css": SITE_CSS.read_text(encoding="utf-8"),
+        "assets/site.css": site_css.read_text(encoding="utf-8"),
     }
     hashes: dict[str, str] = {}
     for relative, content in text_files.items():
@@ -621,12 +671,15 @@ def prune(releases: Path, current: Path, keep: int) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Atomically publish Lumen's public WYWA dashboard."
+        description="Atomically publish a bounded WYWA public-life dashboard."
     )
     parser.add_argument("--site-root", type=Path, default=DEFAULT_SITE_ROOT)
     parser.add_argument("--runtime-root", type=Path, default=DEFAULT_RUNTIME_ROOT)
     parser.add_argument("--logs-root", type=Path, default=WORKSPACE / "logs")
     parser.add_argument("--workspace-root", type=Path, default=WORKSPACE)
+    parser.add_argument("--public-state", type=Path, default=PUBLIC_STATE)
+    parser.add_argument("--site-css", type=Path, default=SITE_CSS)
+    parser.add_argument("--base-url")
     parser.add_argument("--as-of")
     parser.add_argument("--phase", choices=("active", "waiting", "degraded"))
     parser.add_argument("--keep", type=int, default=5)
@@ -637,6 +690,12 @@ def main() -> int:
     args = build_parser().parse_args()
     if not args.site_root.is_absolute():
         raise SystemExit("publish-platform: site root must be absolute")
+    if not args.public_state.is_absolute():
+        raise SystemExit("publish-platform: public state path must be absolute")
+    if not args.site_css.is_absolute():
+        raise SystemExit("publish-platform: site CSS path must be absolute")
+    if not args.site_css.is_file() or args.site_css.is_symlink():
+        raise SystemExit("publish-platform: site CSS must be a regular file")
     if args.keep < 2:
         raise SystemExit("publish-platform: keep must be at least 2")
     as_of = (
@@ -645,12 +704,13 @@ def main() -> int:
         else parse_moment(args.as_of)
     )
     snapshot = build_snapshot(
-        load_public_state(),
+        load_public_state(args.public_state),
         as_of,
         args.logs_root,
         args.runtime_root,
         detected_phase(args.phase),
         args.workspace_root,
+        args.base_url,
     )
     args.site_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     args.site_root.chmod(0o755)
@@ -660,7 +720,7 @@ def main() -> int:
     staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=releases))
     activated = False
     try:
-        hashes = write_release(staging, snapshot)
+        hashes = write_release(staging, snapshot, args.site_css)
         validate_release(staging, snapshot)
         digest = hashlib.sha256(
             json.dumps(hashes, sort_keys=True).encode()

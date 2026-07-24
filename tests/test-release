@@ -42,6 +42,10 @@ release_root=$(find \
   -name 'while-you-were-away-*')
 [[ -x "$release_root/bin/wywa" ]] ||
   fail "release omitted the executable CLI"
+[[ -x "$release_root/bin/wywa-life" ]] ||
+  fail "release omitted the local-life lifecycle CLI"
+[[ -x "$release_root/bin/publish-platform" ]] ||
+  fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
   fail "release omitted the launch-asset builder"
 [[ -f "$release_root/GETTING_STARTED.md" ]] ||
@@ -58,9 +62,14 @@ release_root=$(find \
   fail "release omitted the Apache-2.0 license"
 [[ -f "$release_root/templates/MANDATE.md" ]] ||
   fail "release omitted templates"
+[[ -f "$release_root/templates/public-state.json" ]] ||
+  fail "release omitted the reviewed public-state template"
+[[ -f "$release_root/platform/site.css" ]] ||
+  fail "release omitted the life-dashboard stylesheet"
 
-shellcheck "$release_root/bin/wywa"
+shellcheck "$release_root/bin/wywa" "$release_root/bin/wywa-life"
 "$release_root/bin/wywa" --help >/dev/null
+"$release_root/bin/wywa-life" --help >/dev/null
 "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"

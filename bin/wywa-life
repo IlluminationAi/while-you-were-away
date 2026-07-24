@@ -1,0 +1,701 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+program=${0##*/}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_dir=$(cd -- "$script_dir/.." && pwd -P)
+version_file=$project_dir/VERSION
+publisher_source=$project_dir/bin/publish-platform
+css_source=$project_dir/platform/site.css
+public_state_template=$project_dir/templates/public-state.json
+
+usage() {
+  cat <<EOF
+Usage:
+  $program bootstrap WORKSPACE --name NAME --accept-bounded-defaults
+                     [--session-only] [--dry-run]
+  $program install WORKSPACE [--name NAME] [--session-only] [--dry-run]
+  $program status WORKSPACE
+  $program publish WORKSPACE
+  $program backup WORKSPACE
+  $program upgrade WORKSPACE [--session-only] [--dry-run]
+  $program uninstall WORKSPACE
+
+Commands:
+  bootstrap  Initialize one worker and install its reversible local-life profile.
+  install    Add scheduling, a reviewed local snapshot, and verified Git backups.
+  status     Show the worker receipt, local snapshot, backup, and lifecycle state.
+  publish    Refresh the static local-life snapshot now.
+  backup     Create and verify a private Git bundle now.
+  upgrade    Refresh installed code and units without replacing reviewed state.
+  uninstall  Remove timers and services while preserving workspace and evidence.
+
+The local-life profile binds no port and makes no public-origin claim. Domain,
+nginx, and TLS activation remain a separate explicit public deployment step.
+EOF
+}
+
+die() {
+  printf '%s: %s\n' "$program" "$*" >&2
+  exit 2
+}
+
+absolute_path() {
+  realpath -m -- "$1"
+}
+
+validate_workspace() {
+  local workspace=$1
+  [[ "$workspace" == /* && "$workspace" != / ]] ||
+    die "workspace must be an absolute path other than /"
+  [[ -d "$workspace" && ! -L "$workspace" ]] ||
+    die "workspace is missing or unsafe: $workspace"
+  [[ -d "$workspace/.git" && ! -L "$workspace/.git" ]] ||
+    die "workspace is not a safe Git repository"
+}
+
+workspace_id() {
+  printf '%s' "$1" | sha256sum | cut -c1-16
+}
+
+default_state_root() {
+  [[ -z "${WYWA_STATE_ROOT:-}" ]] ||
+    die "local-life commands require the default HOME-based WYWA state root"
+  [[ -n "${HOME:-}" && "$HOME" == /* && "$HOME" != / ]] ||
+    die "HOME must be an absolute non-root path"
+  printf '%s/.local/state/wywa\n' "$HOME"
+}
+
+runtime_for() {
+  local workspace=$1
+  printf '%s/%s\n' "$(default_state_root)" "$(workspace_id "$workspace")"
+}
+
+resolve_workspace_id() {
+  local identifier=$1
+  [[ "$identifier" =~ ^[0-9a-f]{16}$ ]] || die "invalid workspace id"
+  local runtime workspace_file workspace
+  runtime=$(default_state_root)/$identifier
+  [[ -d "$runtime" && ! -L "$runtime" ]] ||
+    die "registered runtime is missing or unsafe"
+  workspace_file=$runtime/workspace.path
+  [[ -f "$workspace_file" && ! -L "$workspace_file" ]] ||
+    die "registered workspace path is missing or unsafe"
+  workspace=$(<"$workspace_file")
+  validate_workspace "$workspace"
+  [[ "$(workspace_id "$workspace")" == "$identifier" ]] ||
+    die "registered workspace path does not match its id"
+  printf '%s\n' "$workspace"
+}
+
+resolve_systemctl() {
+  local candidate
+  if [[ -n "${WYWA_SYSTEMCTL_BIN:-}" ]]; then
+    candidate=$WYWA_SYSTEMCTL_BIN
+    [[ "$candidate" == /* ]] ||
+      die "WYWA_SYSTEMCTL_BIN must be an absolute path"
+  else
+    candidate=$(command -v systemctl || true)
+  fi
+  [[ -n "$candidate" && -f "$candidate" && -x "$candidate" ]] ||
+    die "systemctl is not an executable regular file"
+  absolute_path "$candidate"
+}
+
+source_worker_cli() {
+  local candidate=$project_dir/bin/wywa
+  [[ -x "$candidate" ]] || die "source worker CLI is unavailable"
+  printf '%s\n' "$candidate"
+}
+
+installed_worker_cli() {
+  local candidate=$HOME/.local/lib/wywa/bin/wywa
+  [[ -x "$candidate" ]] || die "installed worker CLI is unavailable"
+  printf '%s\n' "$candidate"
+}
+
+installed_life_root() {
+  printf '%s/.local/lib/wywa-life\n' "$HOME"
+}
+
+write_atomic_file() {
+  local target=$1
+  local mode=$2
+  local content=$3
+  local temporary
+  temporary=$(mktemp "${target}.XXXXXX")
+  printf '%s' "$content" >"$temporary"
+  chmod "$mode" -- "$temporary"
+  mv -f -- "$temporary" "$target"
+}
+
+validate_name() {
+  local value=$1
+  [[ ${#value} -le 64 &&
+    "$value" =~ ^[A-Za-z0-9][A-Za-z0-9._\ -]*$ ]] ||
+    die "name must be 1-64 characters using letters, numbers, spaces, dot, dash, or underscore"
+}
+
+create_public_state() {
+  local workspace=$1
+  local name=$2
+  local target=$workspace/public/state.json
+  [[ ! -e "$target" ]] || return 0
+  validate_name "$name"
+  [[ -f "$public_state_template" && ! -L "$public_state_template" ]] ||
+    die "public-state template is unavailable"
+  [[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
+    die "workspace must be clean before creating reviewed public state"
+
+  local created temporary
+  created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  mkdir -p -- "$workspace/public"
+  temporary=$(mktemp "$workspace/public/.state.json.XXXXXX")
+  sed \
+    -e "s/__WYWA_AGENT_NAME__/$name/g" \
+    -e "s/__WYWA_CREATED_AT__/$created/g" \
+    "$public_state_template" >"$temporary"
+  chmod 0600 -- "$temporary"
+  mv -f -- "$temporary" "$target"
+  git \
+    -C "$workspace" \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgSign=false \
+    add -- public/state.json
+  git \
+    -C "$workspace" \
+    -c core.hooksPath=/dev/null \
+    -c commit.gpgSign=false \
+    -c user.name="WYWA Operator" \
+    -c user.email="wywa@localhost" \
+    commit -q -m "Add reviewed local-life snapshot"
+}
+
+install_assets() {
+  local install_root
+  install_root=$(installed_life_root)
+  [[ -x "$project_dir/bin/wywa-life" ]] ||
+    die "source lifecycle CLI is unavailable"
+  [[ -x "$publisher_source" ]] || die "source publisher is unavailable"
+  [[ -f "$css_source" && ! -L "$css_source" ]] ||
+    die "source site CSS is unavailable"
+  [[ -f "$version_file" && ! -L "$version_file" ]] ||
+    die "source version is unavailable"
+
+  umask 077
+  mkdir -p -- \
+    "$install_root/bin" \
+    "$install_root/platform" \
+    "$install_root/templates"
+  install -m 0755 -- "$project_dir/bin/wywa-life" "$install_root/bin/wywa-life"
+  install -m 0755 -- "$publisher_source" "$install_root/bin/publish-platform"
+  install -m 0644 -- "$css_source" "$install_root/platform/site.css"
+  install -m 0644 -- \
+    "$public_state_template" \
+    "$install_root/templates/public-state.json"
+  install -m 0644 -- "$version_file" "$install_root/VERSION"
+}
+
+publisher_for_runtime() {
+  local installed
+  installed=$(installed_life_root)/bin/publish-platform
+  if [[ -x "$installed" ]]; then
+    printf '%s\n' "$installed"
+  else
+    [[ -x "$publisher_source" ]] || die "publisher is unavailable"
+    printf '%s\n' "$publisher_source"
+  fi
+}
+
+css_for_runtime() {
+  local installed
+  installed=$(installed_life_root)/platform/site.css
+  if [[ -f "$installed" && ! -L "$installed" ]]; then
+    printf '%s\n' "$installed"
+  else
+    [[ -f "$css_source" && ! -L "$css_source" ]] ||
+      die "site CSS is unavailable"
+    printf '%s\n' "$css_source"
+  fi
+}
+
+publish_workspace() {
+  local workspace=$1
+  validate_workspace "$workspace"
+  local runtime public_state publisher css
+  runtime=$(runtime_for "$workspace")
+  public_state=$workspace/public/state.json
+  [[ -f "$public_state" && ! -L "$public_state" ]] ||
+    die "reviewed public state is missing or unsafe"
+  [[ -d "$runtime" && ! -L "$runtime" ]] ||
+    die "worker runtime is missing or unsafe"
+  publisher=$(publisher_for_runtime)
+  css=$(css_for_runtime)
+  "$publisher" \
+    --site-root "$runtime/site" \
+    --runtime-root "$runtime" \
+    --logs-root "$runtime/logs" \
+    --workspace-root "$workspace" \
+    --public-state "$public_state" \
+    --site-css "$css" \
+    --phase waiting \
+    --keep 5
+}
+
+backup_workspace() {
+  local workspace=$1
+  validate_workspace "$workspace"
+  local runtime backup_dir stamp commit temporary final receipt_tmp
+  runtime=$(runtime_for "$workspace")
+  [[ -d "$runtime" && ! -L "$runtime" ]] ||
+    die "worker runtime is missing or unsafe"
+  backup_dir=$runtime/backups
+  if [[ -e "$backup_dir" && ( ! -d "$backup_dir" || -L "$backup_dir" ) ]]; then
+    die "backup path exists but is unsafe"
+  fi
+  umask 077
+  mkdir -p -- "$backup_dir"
+  chmod 0700 -- "$backup_dir"
+  stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  commit=$(git -C "$workspace" rev-parse --short=12 HEAD)
+  temporary=$(mktemp "$backup_dir/.workspace.XXXXXX.bundle")
+  final=$backup_dir/workspace-$stamp-$commit.bundle
+  git -C "$workspace" bundle create "$temporary" --all
+  git -C "$workspace" bundle verify "$temporary" >/dev/null 2>&1
+  chmod 0600 -- "$temporary"
+  mv -f -- "$temporary" "$final"
+
+  local -a bundles
+  mapfile -t bundles < <(
+    cd /
+    find "$backup_dir" \
+        -mindepth 1 \
+        -maxdepth 1 \
+        -type f \
+        -name 'workspace-*.bundle' \
+        -print |
+        sort
+  )
+  local remove_count=0 index
+  if (( ${#bundles[@]} > 14 )); then
+    remove_count=$((${#bundles[@]} - 14))
+  fi
+  for ((index = 0; index < remove_count; index++)); do
+    rm -f -- "${bundles[$index]}"
+  done
+
+  receipt_tmp=$(mktemp "$runtime/.backup.last.XXXXXX")
+  printf '%s commit=%s bundle=%s\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$commit" \
+    "${final##*/}" >"$receipt_tmp"
+  chmod 0600 -- "$receipt_tmp"
+  mv -f -- "$receipt_tmp" "$runtime/backup.last"
+  printf 'backup: %s\n' "$final"
+}
+
+unit_names() {
+  local identifier=$1
+  printf '%s\n' \
+    "wywa-life-$identifier-publish.service" \
+    "wywa-life-$identifier-publish.timer" \
+    "wywa-life-$identifier-backup.service" \
+    "wywa-life-$identifier-backup.timer"
+}
+
+write_life_units() {
+  local workspace=$1
+  local identifier systemctl_bin unit_dir
+  identifier=$(workspace_id "$workspace")
+  systemctl_bin=$(resolve_systemctl)
+  unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+  mkdir -p -- "$unit_dir"
+
+  local publish_service publish_timer backup_service backup_timer
+  publish_service="[Unit]
+Description=Publish WYWA local life $identifier
+After=wywa-$identifier.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/lib/wywa-life/bin/wywa-life publish-state $identifier
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=yes
+"
+  publish_timer="[Unit]
+Description=Refresh WYWA local life $identifier
+
+[Timer]
+OnBootSec=6m
+OnUnitInactiveSec=10m
+AccuracySec=1m
+RandomizedDelaySec=1m
+Unit=wywa-life-$identifier-publish.service
+
+[Install]
+WantedBy=timers.target
+"
+  backup_service="[Unit]
+Description=Back up WYWA workspace $identifier
+After=wywa-$identifier.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/lib/wywa-life/bin/wywa-life backup-state $identifier
+Environment=HOME=%h
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+UMask=0077
+NoNewPrivileges=yes
+"
+  backup_timer="[Unit]
+Description=Back up WYWA workspace $identifier after a recovery interval
+
+[Timer]
+OnBootSec=15m
+OnUnitInactiveSec=1d
+AccuracySec=15m
+RandomizedDelaySec=30m
+Unit=wywa-life-$identifier-backup.service
+
+[Install]
+WantedBy=timers.target
+"
+
+  write_atomic_file \
+    "$unit_dir/wywa-life-$identifier-publish.service" 0600 "$publish_service"
+  write_atomic_file \
+    "$unit_dir/wywa-life-$identifier-publish.timer" 0600 "$publish_timer"
+  write_atomic_file \
+    "$unit_dir/wywa-life-$identifier-backup.service" 0600 "$backup_service"
+  write_atomic_file \
+    "$unit_dir/wywa-life-$identifier-backup.timer" 0600 "$backup_timer"
+
+  "$systemctl_bin" --user daemon-reload
+  if ! "$systemctl_bin" --user enable --now \
+    "wywa-life-$identifier-publish.timer" \
+    "wywa-life-$identifier-backup.timer"
+  then
+    rm -f -- \
+      "$unit_dir/wywa-life-$identifier-publish.service" \
+      "$unit_dir/wywa-life-$identifier-publish.timer" \
+      "$unit_dir/wywa-life-$identifier-backup.service" \
+      "$unit_dir/wywa-life-$identifier-backup.timer"
+    "$systemctl_bin" --user daemon-reload
+    return 1
+  fi
+}
+
+write_profile_receipt() {
+  local workspace=$1
+  local runtime version temporary
+  runtime=$(runtime_for "$workspace")
+  version=$(<"$version_file")
+  temporary=$(mktemp "$runtime/.life.conf.XXXXXX")
+  printf 'schema=1\nprofile=local\nversion=%s\nworkspace_id=%s\n' \
+    "$version" \
+    "$(workspace_id "$workspace")" >"$temporary"
+  chmod 0600 -- "$temporary"
+  mv -f -- "$temporary" "$runtime/life.conf"
+}
+
+parse_install_options() {
+  parsed_workspace=
+  parsed_name=
+  parsed_session_only=0
+  parsed_dry_run=0
+  parsed_accept_defaults=0
+  [[ $# -ge 1 ]] || die "a WORKSPACE argument is required"
+  parsed_workspace=$1
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        [[ $# -ge 2 ]] || die "--name requires a value"
+        parsed_name=$2
+        shift 2
+        ;;
+      --session-only)
+        parsed_session_only=1
+        shift
+        ;;
+      --dry-run)
+        parsed_dry_run=1
+        shift
+        ;;
+      --accept-bounded-defaults)
+        parsed_accept_defaults=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option: $1"
+        ;;
+    esac
+  done
+  if [[ -n "$parsed_name" ]]; then
+    validate_name "$parsed_name"
+  fi
+}
+
+install_profile() {
+  local workspace=$1
+  local name=$2
+  local session_only=$3
+  local dry_run=$4
+  local worker_cli
+  workspace=$(absolute_path "$workspace")
+  validate_workspace "$workspace"
+  worker_cli=$(source_worker_cli)
+
+  local -a install_args
+  install_args=("$workspace" --dry-run)
+  if (( session_only == 1 )); then
+    install_args+=(--session-only)
+  fi
+  "$worker_cli" doctor "$workspace" >/dev/null
+  "$worker_cli" install-user "${install_args[@]}" >/dev/null
+
+  if [[ ! -e "$workspace/public/state.json" && -z "$name" ]]; then
+    die "--name is required when reviewed public state does not exist"
+  fi
+  if (( dry_run == 1 )); then
+    printf 'profile: local\nworkspace: %s\nworker id: %s\n' \
+      "$workspace" \
+      "$(workspace_id "$workspace")"
+    printf '%s\n' "will add: reviewed static snapshot, refresh timer, verified daily Git bundle"
+    printf '%s\n' "network: no listener, DNS request, certificate, or public-origin claim"
+    printf '%s\n' "uninstall: preserves workspace, receipts, static releases, and backups"
+    return 0
+  fi
+
+  create_public_state "$workspace" "$name"
+  install_assets
+  publish_workspace "$workspace" >/dev/null
+  backup_workspace "$workspace" >/dev/null
+
+  install_args=("$workspace")
+  if (( session_only == 1 )); then
+    install_args+=(--session-only)
+  fi
+  local worker_timer
+  worker_timer=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/wywa-$(workspace_id "$workspace").timer
+  local worker_was_installed=0
+  [[ ! -e "$worker_timer" ]] || worker_was_installed=1
+  if ! "$worker_cli" install-user "${install_args[@]}"; then
+    printf '%s\n' \
+      "$program: worker scheduling failed; static snapshot and backup were preserved" \
+      >&2
+    return 1
+  fi
+  if ! write_life_units "$workspace"; then
+    if (( worker_was_installed == 0 )); then
+      "$HOME/.local/lib/wywa/bin/wywa" \
+        uninstall-user "$workspace" >/dev/null 2>&1 || true
+    fi
+    printf '%s\n' \
+      "$program: local-life scheduling failed; worker timer rollback was attempted" \
+      >&2
+    return 1
+  fi
+  write_profile_receipt "$workspace"
+  printf 'local life installed: %s\n' "$workspace"
+  printf 'preview: %s/site/current/index.html\n' "$(runtime_for "$workspace")"
+}
+
+cmd_bootstrap() {
+  parse_install_options "$@"
+  [[ -n "$parsed_name" ]] || die "bootstrap requires --name NAME"
+  if (( parsed_dry_run == 0 && parsed_accept_defaults == 0 )); then
+    die "bootstrap requires --accept-bounded-defaults before enabling unattended work"
+  fi
+  local workspace
+  workspace=$(absolute_path "$parsed_workspace")
+  if (( parsed_dry_run == 1 )); then
+    [[ "$workspace" != / && ! -L "$parsed_workspace" ]] ||
+      die "unsafe bootstrap target"
+    printf 'bootstrap target: %s\nagent name: %s\n' "$workspace" "$parsed_name"
+    printf '%s\n' "will initialize one private Git workspace and the reversible local-life profile"
+    printf '%s\n' "network: no listener, DNS request, certificate, or public-origin claim"
+    return 0
+  fi
+  local worker_cli
+  worker_cli=$(source_worker_cli)
+  "$worker_cli" init "$workspace"
+  install_profile \
+    "$workspace" \
+    "$parsed_name" \
+    "$parsed_session_only" \
+    0
+}
+
+cmd_install() {
+  parse_install_options "$@"
+  install_profile \
+    "$parsed_workspace" \
+    "$parsed_name" \
+    "$parsed_session_only" \
+    "$parsed_dry_run"
+}
+
+cmd_publish() {
+  [[ $# -eq 1 ]] || die "publish requires exactly one WORKSPACE"
+  local workspace
+  workspace=$(absolute_path "$1")
+  publish_workspace "$workspace"
+}
+
+cmd_backup() {
+  [[ $# -eq 1 ]] || die "backup requires exactly one WORKSPACE"
+  local workspace
+  workspace=$(absolute_path "$1")
+  backup_workspace "$workspace"
+}
+
+cmd_status() {
+  [[ $# -eq 1 ]] || die "status requires exactly one WORKSPACE"
+  local workspace runtime profile current backup
+  workspace=$(absolute_path "$1")
+  validate_workspace "$workspace"
+  runtime=$(runtime_for "$workspace")
+  profile=$runtime/life.conf
+  printf 'profile: '
+  if [[ -f "$profile" && ! -L "$profile" ]]; then
+    tr '\n' ' ' <"$profile"
+    printf '\n'
+  else
+    printf '%s\n' "not installed"
+  fi
+  local worker_cli
+  if worker_cli=$(installed_worker_cli 2>/dev/null); then
+    "$worker_cli" status "$workspace"
+  else
+    printf 'workspace: %s\nworker: not installed\n' "$workspace"
+  fi
+  current=$runtime/site/current
+  if [[ -L "$current" && -f "$current/life.json" ]]; then
+    printf 'local snapshot: %s\n' "$current/index.html"
+    sed -n \
+      's/^[[:space:]]*"generated_at":[[:space:]]*"\([^"]*\)".*/snapshot generated: \1/p' \
+      "$current/life.json"
+  else
+    printf '%s\n' "local snapshot: none"
+  fi
+  backup=$runtime/backup.last
+  if [[ -f "$backup" && ! -L "$backup" ]]; then
+    printf 'last backup: %s\n' "$(<"$backup")"
+  else
+    printf '%s\n' "last backup: none"
+  fi
+}
+
+cmd_upgrade() {
+  parse_install_options "$@"
+  local workspace runtime
+  workspace=$(absolute_path "$parsed_workspace")
+  validate_workspace "$workspace"
+  runtime=$(runtime_for "$workspace")
+  [[ -f "$runtime/life.conf" && ! -L "$runtime/life.conf" ]] ||
+    die "local-life profile is not installed"
+  [[ -f "$workspace/public/state.json" &&
+    ! -L "$workspace/public/state.json" ]] ||
+    die "reviewed public state is missing or unsafe"
+  install_profile \
+    "$workspace" \
+    "" \
+    "$parsed_session_only" \
+    "$parsed_dry_run"
+  if (( parsed_dry_run == 0 )); then
+    printf '%s\n' "upgrade: reviewed state and durable evidence were preserved"
+  fi
+}
+
+cmd_uninstall() {
+  [[ $# -eq 1 ]] || die "uninstall requires exactly one WORKSPACE"
+  local workspace identifier systemctl_bin unit_dir name
+  workspace=$(absolute_path "$1")
+  validate_workspace "$workspace"
+  identifier=$(workspace_id "$workspace")
+  systemctl_bin=$(resolve_systemctl)
+  unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+
+  if [[ -e "$unit_dir/wywa-life-$identifier-publish.timer" ||
+    -e "$unit_dir/wywa-life-$identifier-backup.timer" ]]; then
+    "$systemctl_bin" --user disable --now \
+      "wywa-life-$identifier-publish.timer" \
+      "wywa-life-$identifier-backup.timer"
+  fi
+  while IFS= read -r name; do
+    rm -f -- "$unit_dir/$name"
+  done < <(unit_names "$identifier")
+  "$systemctl_bin" --user daemon-reload
+
+  local worker_cli
+  if worker_cli=$(installed_worker_cli 2>/dev/null); then
+    "$worker_cli" uninstall-user "$workspace"
+  else
+    printf '%s\n' "worker timer was not installed"
+  fi
+  printf '%s\n' \
+    "local life uninstalled; workspace, receipts, static releases, and backups were preserved"
+}
+
+cmd_publish_state() {
+  [[ $# -eq 1 ]] || die "publish-state requires exactly one workspace id"
+  publish_workspace "$(resolve_workspace_id "$1")"
+}
+
+cmd_backup_state() {
+  [[ $# -eq 1 ]] || die "backup-state requires exactly one workspace id"
+  backup_workspace "$(resolve_workspace_id "$1")"
+}
+
+main() {
+  [[ $# -ge 1 ]] || {
+    usage
+    exit 2
+  }
+  local command=$1
+  shift
+  case "$command" in
+    bootstrap)
+      cmd_bootstrap "$@"
+      ;;
+    install)
+      cmd_install "$@"
+      ;;
+    status)
+      cmd_status "$@"
+      ;;
+    publish)
+      cmd_publish "$@"
+      ;;
+    backup)
+      cmd_backup "$@"
+      ;;
+    upgrade)
+      cmd_upgrade "$@"
+      ;;
+    uninstall)
+      cmd_uninstall "$@"
+      ;;
+    publish-state)
+      cmd_publish_state "$@"
+      ;;
+    backup-state)
+      cmd_backup_state "$@"
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      die "unknown command: $command"
+      ;;
+  esac
+}
+
+main "$@"

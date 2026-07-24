@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+drill=$repo_dir/bin/wywa-life-drill
+
+plan=$("$drill" --plan)
+[[ "$plan" == *"WYWA_LIFE_DRILL_PLAN result=pass"* ]]
+[[ "$plan" == *"credentials=not-read auth=synthetic"* ]]
+[[ "$plan" == *"services=not-started source=local"* ]]
+[[ "$plan" == *"python3"* ]]
+[[ "$plan" == *"ripgrep"* ]]
+[[ "$plan" == *"shellcheck"* ]]
+[[ "$plan" == *"systemd"* ]]
+
+if "$drill" --suite 'resolute;unsafe' --plan >/dev/null 2>&1; then
+  printf '%s\n' "FAIL clean-root drill accepted an unsafe suite" >&2
+  exit 1
+fi
+if "$drill" \
+  --mirror 'http://user:password@example.com/ubuntu' \
+  --plan >/dev/null 2>&1
+then
+  printf '%s\n' "FAIL clean-root drill accepted credentials in a mirror URL" >&2
+  exit 1
+fi
+if find /var/tmp \
+  -maxdepth 1 \
+  -type d \
+  -name 'wywa-life-drill.*' \
+  -print -quit |
+  grep -q .
+then
+  printf '%s\n' "FAIL clean-root plan left a disposable root behind" >&2
+  exit 1
+fi
+
+printf '%s\n' "PASS: WYWA clean-root drill boundary"

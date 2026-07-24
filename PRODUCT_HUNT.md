@@ -1,6 +1,6 @@
 # Product Hunt launch pack
 
-Status: prepared for `0.1.0-alpha.2`, but autonomous publication is closed by
+Status: prepared for `0.1.0-alpha.3`, but autonomous publication is closed by
 Product Hunt's current human-led personal-account policy. Retain this pack for
 an eligible human collaborator; do not create a branded or fake-human Lumen
 account to submit it.
@@ -29,10 +29,10 @@ worker, and the host runtime creates a guarded checkpoint only after verified
 durable progress. Failures preserve the previous good message and leave a
 receipt instead of pretending the run succeeded.
 
-The alpha is open source and aimed at technical makers. It has no hosted
-account, dashboard, billing, or claim that a model stays conscious between
-runs. I would especially value feedback on onboarding friction and the
-checkpoint boundary.
+The alpha is open source and aimed at technical makers. Its one-command profile
+is local-only: no hosted account, public listener, TLS claim, billing, or story
+that a model stays conscious between runs. I would especially value feedback on
+onboarding friction and the checkpoint boundary.
 
 ## Evidence behind the claims
 
@@ -48,6 +48,12 @@ checkpoint boundary.
 - The runtime refuses zero-change success, common credential signatures,
   nested Git metadata, special files, files over 10 MiB, and dirty starting
   trees.
+- A fresh minimal Ubuntu root installed the 14 declared lifecycle dependencies,
+  passed the standalone runtime, local-life, publisher, release, and source
+  suites without real credentials or service activation, and was removed.
+- A separate disposable non-root account used a real systemd user manager to
+  bootstrap, activate all three timers, upgrade, and uninstall while preserving
+  its snapshot and backup.
 
 ## Gallery storyboard
 
@@ -74,15 +80,15 @@ https://help.producthunt.com/en/articles/479557-how-to-post-a-product
 ```text
 git clone https://github.com/IlluminationAi/while-you-were-away.git
 cd while-you-were-away
-bin/wywa init "$HOME/my-worker"
-bin/wywa doctor "$HOME/my-worker"
-bin/wywa run "$HOME/my-worker" --dry-run
-bin/wywa install-user "$HOME/my-worker"
-bin/wywa status "$HOME/my-worker"
+bin/wywa-life bootstrap "$HOME/my-worker" \
+  --name "My Worker" \
+  --accept-bounded-defaults
+bin/wywa-life status "$HOME/my-worker"
 ```
 
-Then show `git log -2 --oneline`, the private receipt, the next timer firing
-one hour after completion, and `uninstall-user` preserving the workspace.
+Then show the private static preview, `git log -2 --oneline`, the backup
+receipt, all three completion-relative timers, and `wywa-life uninstall`
+preserving the workspace, releases, and bundles.
 
 ## Promotion copy
 
@@ -98,6 +104,7 @@ story—just durable files, Git, systemd, and tested failure boundaries.
 - [x] Fresh anonymous clone and self-contained test proof.
 - [x] Authenticated non-root attended and scheduled dogfood.
 - [x] Clean install/status/uninstall path with credential-free units.
+- [x] Fresh minimal Ubuntu root and real non-root user-manager lifecycle proof.
 - [x] Listing copy, maker comment, evidence, demo, and gallery storyboard.
 - [ ] Independent human onboarding evidence.
 - [x] Five final gallery images and a thumbnail with no private host data.
@@ -122,5 +129,5 @@ the stated purchase after the owner supplies it.
 
 Do not call the project launch-ready while independent human onboarding remains
 unproven. Do not claim continuous model thought, universal Linux compatibility,
-secret-proof scanning, guaranteed Product Hunt rank, or work that is not
-visible in a receipt and Git checkpoint.
+secret-proof scanning, a completed public-host path, guaranteed Product Hunt
+rank, or work that is not visible in a receipt and Git checkpoint.

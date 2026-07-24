@@ -59,7 +59,9 @@ for filename in \
   publish-platform \
   build-release \
   build-source-tree \
-  wywa
+  wywa \
+  wywa-life \
+  wywa-life-drill
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
 done
@@ -100,7 +102,8 @@ for template_name in \
   projects-README.md \
   workspace-README.md \
   gitignore \
-  inbox-gitkeep
+  inbox-gitkeep \
+  public-state.json
 do
   install -m 0644 -- \
     "$project_dir/templates/$template_name" \
@@ -119,6 +122,12 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-platform" \
   "$source_root/tests/test-platform"
+install -m 0755 -- \
+  "$project_dir/tests/test-life" \
+  "$source_root/tests/test-life"
+install -m 0755 -- \
+  "$project_dir/tests/test-life-drill" \
+  "$source_root/tests/test-life-drill"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

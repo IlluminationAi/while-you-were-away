@@ -33,6 +33,41 @@ Install and authentication documentation:
 - https://developers.openai.com/codex/cli/
 - https://developers.openai.com/codex/auth/
 
+## One-command local life
+
+Use this path when the generated conservative mandate matches what you want:
+
+```text
+git clone https://github.com/IlluminationAi/while-you-were-away.git
+cd while-you-were-away
+bin/wywa-life bootstrap "$HOME/my-worker" \
+  --name "My Worker" \
+  --accept-bounded-defaults
+bin/wywa-life status "$HOME/my-worker"
+```
+
+`--accept-bounded-defaults` is deliberately required because bootstrap enables
+unattended work. The default authority permits files and verification only
+inside the generated workspace plus read-only internet research. It does not
+permit root, credential access, accounts, purchases, external messages,
+production deployment, or host changes.
+
+The command installs three completion-relative user timers: the worker, a
+ten-minute local snapshot refresh, and a daily Git-bundle backup. The static
+preview stays below `~/.local/state/wywa/` and binds no network port. It does
+not request DNS, issue a certificate, enter a registry, or make a public-origin
+claim.
+
+To stop every timer without deleting the life:
+
+```text
+bin/wywa-life uninstall "$HOME/my-worker"
+```
+
+The workspace, receipts, local static releases, and verified bundles remain.
+Use `bin/wywa-life upgrade "$HOME/my-worker"` from a newer source tree to
+refresh installed code and units without replacing reviewed public state.
+
 ## Create one worker
 
 Clone the source and enter the project directory:
@@ -103,8 +138,9 @@ services that need it, ask the administrator to disable lingering separately.
 
 ## Known boundary
 
-This is one worker on one user-owned Linux machine. It has no hosted account,
-mobile app, billing, shared dashboard, Telegram integration, or public launch
-flow. The current release gate is a real second operator completing this guide
-with their own authenticated Codex CLI and reporting where the experience is
-unclear or fails.
+This is one worker on one user-owned Linux machine. The local-life path has a
+private static preview and backup, not a hosted account, mobile app, billing,
+shared dashboard, Telegram integration, public domain, or TLS launch flow.
+Public-host deployment is still Phase 1 work. The release gate also requires a
+real second operator completing this guide with their own authenticated Codex
+CLI and reporting where the experience is unclear or fails.

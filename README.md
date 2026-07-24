@@ -2,8 +2,9 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.2`, self-dogfood proven and growing into a public agent
-platform; independent-operator launch readiness is not yet proven.
+Status: `0.1.0-alpha.3`, portable runtime and reversible local-life lifecycle
+proven; public-host and independent-operator launch readiness are not yet
+proven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
@@ -27,9 +28,25 @@ the whole host by default.
 
 ## Quick start
 
+After authenticating the Codex CLI, one command creates the bounded default
+worker, user timer, reviewed local snapshot, and verified Git backup:
+
 ```text
 git clone https://github.com/IlluminationAi/while-you-were-away.git
 cd while-you-were-away
+bin/wywa-life bootstrap "$HOME/my-worker" \
+  --name "My Worker" \
+  --accept-bounded-defaults
+bin/wywa-life status "$HOME/my-worker"
+```
+
+The acceptance flag is explicit because the command enables unattended work.
+It accepts only the narrow generated mandate: workspace writes and read-only
+research, with no root access, credentials, purchases, accounts, messaging,
+deployment, or host changes. Use the attended path when you want to edit that
+authority before enabling a timer:
+
+```text
 bin/wywa init "$HOME/my-worker"
 bin/wywa doctor "$HOME/my-worker"
 bin/wywa run "$HOME/my-worker" --dry-run
@@ -40,6 +57,8 @@ self-contained checks with:
 
 ```text
 tests/test-wywa
+tests/test-life
+tests/test-life-drill
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -81,6 +100,13 @@ root deployment:
   explicit per-user units. WYWA never creates a system account, firewall rule,
   or public endpoint.
 
+The local-life profile is equally explicit about its network boundary. It
+binds no port and makes no DNS, TLS, registry, or public-origin claim. It
+publishes a script-free preview below the private runtime directory, verifies a
+Git bundle outside the worker-writable tree, and installs completion-relative
+refresh and daily backup timers. `wywa-life uninstall` removes all six worker
+and local-life units while preserving the workspace and evidence.
+
 The private root deployment remains a separate, explicitly authorized profile.
 It is evidence for the product, not the default shipped security posture.
 
@@ -111,7 +137,8 @@ before presenting the project as launch-ready.
 ## Current checkpoint — 2026-07-24
 
 The product direction is selected and bounded. The portable CLI milestone
-(acceptance criteria 1–7) is implemented:
+(acceptance criteria 1–7) and the first reversible Phase 1 local-life slice are
+implemented:
 
 - `init` creates a private workspace, explicit authority files, and a clean
   initial Git checkpoint;
@@ -156,8 +183,26 @@ timer trigger was one hour after completion, and the units contained no
 credential or workspace path. The account, home, isolated auth copy, linger,
 and manager were removed afterward. This proves self-dogfood, not criterion 9.
 
+`wywa-life bootstrap` now turns an authenticated non-root account into a
+bounded local digital life in one explicit command. It creates the worker,
+accepts the conservative default mandate only through a named flag, installs
+the worker timer, renders a reviewed local snapshot, verifies a private Git
+bundle, and installs isolated refresh and backup timers. `status`, `publish`,
+`backup`, `upgrade`, and `uninstall` cover the lifecycle; uninstall preserves
+the Git workspace, receipts, static releases, and bundles.
+
+The lifecycle has two independent infrastructure proofs. A disposable locked
+non-root account used a real systemd user manager to bootstrap, show all three
+timers active, upgrade, and uninstall without leaving its account, manager, or
+unit sources behind. A separate minimal Ubuntu `resolute` root installed 14
+declared packages from signed repositories, ran the standalone runtime,
+lifecycle, publisher, release, and source suites with synthetic authentication
+and no service activation, then removed its 590 MB root. Partial timer
+activation is also injected in tests: unit sources and a newly installed worker
+timer roll back while the initialized snapshot and bundle remain.
+
 `bin/build-release` now produces deterministic
-`while-you-were-away-0.1.0-alpha.2.tar.gz` and SHA-256 artifacts from an
+`while-you-were-away-0.1.0-alpha.3.tar.gz` and SHA-256 artifacts from an
 explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.
@@ -208,6 +253,12 @@ wywa run WORKSPACE [--max-runtime 55m] [--dry-run]
 wywa status WORKSPACE
 wywa install-user WORKSPACE [--dry-run]
 wywa uninstall-user WORKSPACE
+wywa-life bootstrap WORKSPACE --name NAME --accept-bounded-defaults
+wywa-life status WORKSPACE
+wywa-life publish WORKSPACE
+wywa-life backup WORKSPACE
+wywa-life upgrade WORKSPACE
+wywa-life uninstall WORKSPACE
 ```
 
 The CLI delegates model authentication to an already authenticated Codex CLI.
@@ -220,11 +271,13 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Invite outside use through the public page and issue tracker, answer real
-friction, and improve onboarding from that evidence without assigning the
-owner a tester or launcher role. Independent human onboarding remains the one
-launch-readiness criterion that self-dogfood cannot satisfy; record it when it
-happens, but do not manufacture it from another local account.
+Extend the proven local lifecycle into an explicit public-host profile:
+operator-supplied domain and contact, nginx, ACME TLS, atomic publication,
+backup/restore, status, upgrade rollback, uninstall, and traffic controls.
+Prove that profile in a disposable host before calling the full path
+one-command. Invite outside use through the public page and issue tracker;
+independent human onboarding remains a launch-readiness criterion, not
+something another local account can manufacture.
 
 ## Rollback
 

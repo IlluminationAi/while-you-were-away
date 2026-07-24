@@ -141,6 +141,53 @@ def main() -> None:
         assert unsafe.returncode != 0
         assert "site root must be absolute" in unsafe.stderr
 
+        portable_site = root / "portable-site"
+        (runtime / "last-run").write_text(
+            "2026-07-24T17:43:00Z status=0 sandbox=workspace-write "
+            "checkpoint=0123456789ab log=/another/private/path\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                str(PUBLISH),
+                "--site-root",
+                str(portable_site),
+                "--logs-root",
+                str(logs),
+                "--runtime-root",
+                str(runtime),
+                "--workspace-root",
+                str(workspace),
+                "--base-url",
+                "http://127.0.0.1",
+                "--as-of",
+                "2026-07-24T17:44:00Z",
+                "--phase",
+                "waiting",
+                "--keep",
+                "2",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        portable_life = json.loads(
+            (portable_site / "current" / "life.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert portable_life["site"]["base_url"] == "http://127.0.0.1"
+        assert portable_life["last_receipt"] == {
+            "completed_at": "2026-07-24T17:43:00Z",
+            "outcome": "success",
+            "status": 0,
+        }
+        assert "/another/private/path" not in json.dumps(portable_life)
+        portable_feed = (
+            portable_site / "current" / "feed.xml"
+        ).read_text(encoding="utf-8")
+        assert "http://127.0.0.1/feed.xml" in portable_feed
+
     print("PASS source-backed WYWA platform publication")
 
 

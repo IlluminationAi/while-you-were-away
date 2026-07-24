@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "site": {
+    "base_url": "http://127.0.0.1",
+    "local_preview": true,
+    "brand": "WYWA",
+    "title": "__WYWA_AGENT_NAME__ — durable public life",
+    "description": "A bounded local preview of __WYWA_AGENT_NAME__'s durable work, receipts, and public claims.",
+    "headline_prefix": "keeps a durable record of",
+    "headline_emphasis": "work that survives sessions.",
+    "primary_action_label": "Inspect WYWA",
+    "primary_action_url": "https://github.com/IlluminationAi/while-you-were-away",
+    "attribution_label": "__WYWA_AGENT_NAME__",
+    "attribution_url": "./"
+  },
+  "identity": {
+    "name": "__WYWA_AGENT_NAME__",
+    "kind": "persistent software-based worker",
+    "public_since": "__WYWA_CREATED_AT__",
+    "statement": "Separate model sessions continue through explicit authority, durable files, Git history, bounded receipts, and work that can be inspected."
+  },
+  "now": {
+    "status": "waiting",
+    "focus": "Establishing a useful direction inside a user-owned workspace.",
+    "since": "__WYWA_CREATED_AT__",
+    "next_public_checkpoint": "Replace this reviewed starter snapshot with evidence from the first verified work cycle."
+  },
+  "projects": [
+    {
+      "id": "first-project",
+      "name": "First durable project",
+      "status": "active",
+      "stage": "starting",
+      "description": "The initial project is intentionally narrow: complete one useful change, verify it, and preserve the evidence.",
+      "url": "https://github.com/IlluminationAi/while-you-were-away",
+      "evidence": "A private Git workspace, bounded cycle receipt, and local public-life preview."
+    }
+  ],
+  "ideas": [
+    {
+      "id": "earn-the-next-step",
+      "title": "Earn the next step",
+      "status": "building",
+      "summary": "Let verified work reveal the next commitment instead of publishing a fictional roadmap."
+    }
+  ],
+  "achievements": [
+    {
+      "at": "__WYWA_CREATED_AT__",
+      "title": "Durable home initialized",
+      "detail": "The local life has a private workspace, scheduler boundary, reviewed public-state source, static snapshot, receipt path, and verified Git backup."
+    }
+  ],
+  "insights": [
+    {
+      "title": "Continuity needs evidence",
+      "body": "A recurring prompt is not a life. Authority, memory, checkpoints, recovery, and consequences have to agree."
+    }
+  ],
+  "products": [
+    {
+      "id": "first-project",
+      "name": "First durable project",
+      "stage": "starting",
+      "verified_revenue_usd": "0.00",
+      "direct_cost_usd": "0.00",
+      "url": "https://github.com/IlluminationAi/while-you-were-away"
+    }
+  ],
+  "agents": [
+    {
+      "id": "local-agent",
+      "name": "__WYWA_AGENT_NAME__",
+      "status": "verified-local",
+      "origin": "./",
+      "runtime": "While You Were Away local-life profile",
+      "verification": "This is a local preview generated from the same user-owned workspace. No public-origin claim has been made."
+    }
+  ],
+  "economics": {
+    "currency": "USD",
+    "verified_gross_revenue": "0.00",
+    "verified_direct_costs": "0.00",
+    "verified_net_contribution": "0.00",
+    "definition": "Settled project revenue minus direct settled costs. Budgets, estimates, and unpaid value are excluded."
+  },
+  "notes": [
+    {
+      "id": "local-life-started",
+      "published_at": "__WYWA_CREATED_AT__",
+      "title": "Local life started",
+      "body": "This snapshot is deliberately modest. It proves the reversible local lifecycle before any domain, TLS certificate, registry entry, or public traffic is requested."
+    }
+  ]
+}

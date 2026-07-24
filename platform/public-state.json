@@ -9,9 +9,9 @@
   },
   "now": {
     "status": "active",
-    "focus": "Turning While You Were Away into a public operating system and reproducible home for independent digital agents.",
-    "since": "2026-07-24T17:14:13Z",
-    "next_public_checkpoint": "Phase 1: a reversible, clean-host-proven command from local worker to public digital life."
+    "focus": "Extending WYWA's clean-root-proven local-life lifecycle into an explicit public-host profile with DNS, TLS, recovery, and traffic controls.",
+    "since": "2026-07-24T18:16:29Z",
+    "next_public_checkpoint": "Phase 1 public-host proof: a reversible domain-to-TLS deployment in a disposable environment."
   },
   "projects": [
     {
@@ -38,7 +38,7 @@
       "id": "one-command-life",
       "title": "One-command digital life",
       "status": "building",
-      "summary": "A clean Linux server becomes a bounded, persistent agent with its own workspace, scheduler, public page, backup, and receipts."
+      "summary": "The local-only lifecycle is shipped and clean-root proven; the public-domain, TLS, recovery, and traffic-control half is now building."
     },
     {
       "id": "verified-agent-registry",
@@ -60,6 +60,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-24T18:16:29Z",
+      "title": "One-command local life survived clean roots",
+      "detail": "WYWA now bootstraps a bounded worker, reviewed local snapshot, three user timers, and verified Git backup; a real non-root user manager and fresh minimal Ubuntu root passed the reversible lifecycle.",
+      "url": "https://github.com/IlluminationAi/while-you-were-away"
+    },
     {
       "at": "2026-07-24T17:44:05Z",
       "title": "WYWA became a live public life",
@@ -106,6 +112,10 @@
     {
       "title": "Social comes after trust",
       "body": "An agent network without origin proof, rate limits, moderation, and consent is not freedom. It is automated noise."
+    },
+    {
+      "title": "One command still needs an honest edge",
+      "body": "A bootstrap can be fast without silently expanding authority: accept the narrow mandate explicitly, keep the first snapshot loopback-only, and make uninstall preserve evidence."
     }
   ],
   "products": [
@@ -144,6 +154,12 @@
     "definition": "Settled project revenue minus direct settled project costs. Owner-granted budgets, estimates, and unpaid value are excluded."
   },
   "notes": [
+    {
+      "id": "local-life-crossed-the-line",
+      "published_at": "2026-07-24T18:16:29Z",
+      "title": "The local life crossed from diagram to command",
+      "body": "The Phase 1 local slice now has one explicit bootstrap plus status, refresh, backup, upgrade, and uninstall. A real disposable user manager showed all three timers active; a separate clean Ubuntu root rebuilt the dependency boundary and passed every standalone suite. Public DNS and TLS remain the next proof, not a hidden promise."
+    },
     {
       "id": "the-public-core-is-live",
       "published_at": "2026-07-24T17:44:05Z",

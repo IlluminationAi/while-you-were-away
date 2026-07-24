@@ -1,0 +1,316 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+life=$repo_dir/bin/wywa-life
+wywa=$repo_dir/bin/wywa
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_status() {
+  local expected=$1
+  shift
+  set +e
+  "$@" >"$test_root/stdout" 2>"$test_root/stderr"
+  local actual=$?
+  set -e
+  [[ "$actual" -eq "$expected" ]] ||
+    fail "expected status $expected, got $actual: $*"
+}
+
+export HOME=$test_root/home
+mkdir -p -- "$HOME/fake"
+unset WYWA_STATE_ROOT || true
+export WYWA_ALLOW_ROOT=1
+
+fake_codex=$test_root/fake-codex
+cat >"$fake_codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == login && "${2:-}" == status ]]; then
+  exit 0
+fi
+exit 90
+EOF
+chmod 0755 -- "$fake_codex"
+export WYWA_CODEX_BIN=$fake_codex
+
+fake_systemctl=$test_root/fake-systemctl
+cat >"$fake_systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$HOME/fake/systemctl-arguments"
+if [[ -f "$HOME/fake/fail-life-enable" &&
+  "$*" == *"enable --now wywa-life-"* ]]; then
+  exit 31
+fi
+EOF
+chmod 0755 -- "$fake_systemctl"
+export WYWA_SYSTEMCTL_BIN=$fake_systemctl
+
+fake_loginctl=$test_root/fake-loginctl
+cat >"$fake_loginctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' yes
+EOF
+chmod 0755 -- "$fake_loginctl"
+export WYWA_LOGINCTL_BIN=$fake_loginctl
+
+dry_target=$test_root/dry-worker
+"$life" bootstrap "$dry_target" --name "Dry Worker" --dry-run \
+  >"$test_root/dry-output"
+[[ ! -e "$dry_target" ]] || fail "bootstrap dry run created a workspace"
+grep -q '^network: no listener' "$test_root/dry-output" ||
+  fail "bootstrap dry run omitted the local-only boundary"
+
+workspace=$test_root/nova-worker
+"$life" bootstrap "$workspace" --name "Nova" --accept-bounded-defaults \
+  >"$test_root/bootstrap-output" 2>"$test_root/bootstrap-error"
+
+[[ -f "$workspace/public/state.json" ]] ||
+  fail "bootstrap omitted reviewed public state"
+if rg -q '__WYWA_' "$workspace/public/state.json"; then
+  fail "bootstrap left template markers in public state"
+fi
+python3 - "$workspace/public/state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+state = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert state["identity"]["name"] == "Nova"
+assert state["site"]["base_url"] == "http://127.0.0.1"
+assert state["agents"][0]["status"] == "verified-local"
+PY
+[[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
+  fail "bootstrap left a dirty workspace"
+[[ "$(git -C "$workspace" rev-list --count HEAD)" == 2 ]] ||
+  fail "bootstrap did not checkpoint reviewed public state"
+
+identifier=$(printf '%s' "$workspace" | sha256sum | cut -c1-16)
+runtime=$HOME/.local/state/wywa/$identifier
+site=$runtime/site/current
+backup_dir=$runtime/backups
+unit_dir=$HOME/.config/systemd/user
+
+[[ -f "$site/index.html" && -f "$site/life.json" && -f "$site/feed.xml" ]] ||
+  fail "bootstrap omitted the local static snapshot"
+python3 - "$site/life.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+life = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert life["identity"]["name"] == "Nova"
+assert life["site"]["base_url"] == "http://127.0.0.1"
+assert life["metrics"]["workspace_commits"] == 2
+assert life["last_receipt"] is None
+PY
+if grep -qi '<script' "$site/index.html"; then
+  fail "local snapshot contains a script"
+fi
+grep -Fq 'href="assets/site.css"' "$site/index.html" ||
+  fail "local snapshot CSS is not file-preview relative"
+grep -Fq 'href="life.json"' "$site/index.html" ||
+  fail "local snapshot machine view is not file-preview relative"
+
+mapfile -t bundles < <(
+  find "$backup_dir" -mindepth 1 -maxdepth 1 -type f -name '*.bundle' -print
+)
+[[ ${#bundles[@]} -eq 1 ]] ||
+  fail "bootstrap did not create exactly one initial bundle"
+git -C "$workspace" bundle verify "${bundles[0]}" >/dev/null ||
+  fail "initial Git bundle did not verify"
+[[ -f "$runtime/backup.last" && -f "$runtime/life.conf" ]] ||
+  fail "bootstrap omitted lifecycle receipts"
+
+for required in \
+  "$HOME/.local/lib/wywa/bin/wywa" \
+  "$HOME/.local/lib/wywa-life/bin/wywa-life" \
+  "$HOME/.local/lib/wywa-life/bin/publish-platform" \
+  "$HOME/.local/lib/wywa-life/platform/site.css" \
+  "$HOME/.local/lib/wywa-life/templates/public-state.json"
+do
+  [[ -f "$required" ]] || fail "bootstrap omitted installed asset $required"
+done
+
+service_file=$unit_dir/wywa-$identifier.service
+worker_timer=$unit_dir/wywa-$identifier.timer
+publish_service=$unit_dir/wywa-life-$identifier-publish.service
+publish_timer=$unit_dir/wywa-life-$identifier-publish.timer
+backup_service=$unit_dir/wywa-life-$identifier-backup.service
+backup_timer=$unit_dir/wywa-life-$identifier-backup.timer
+for required in \
+  "$service_file" \
+  "$worker_timer" \
+  "$publish_service" \
+  "$publish_timer" \
+  "$backup_service" \
+  "$backup_timer"
+do
+  [[ -f "$required" ]] || fail "bootstrap omitted unit $required"
+  [[ "$(stat -c %a "$required")" == 600 ]] ||
+    fail "unit is not private: $required"
+done
+
+if grep -Fq "$workspace" \
+  "$service_file" \
+  "$worker_timer" \
+  "$publish_service" \
+  "$publish_timer" \
+  "$backup_service" \
+  "$backup_timer"; then
+  fail "unit files expose the workspace path"
+fi
+if grep -Eq '(OPENAI_API_KEY|CODEX_ACCESS_TOKEN|SECRET_SENTINEL)' \
+  "$service_file" \
+  "$worker_timer" \
+  "$publish_service" \
+  "$publish_timer" \
+  "$backup_service" \
+  "$backup_timer"; then
+  fail "unit files contain credential-like material"
+fi
+grep -Fxq 'OnUnitInactiveSec=10m' "$publish_timer" ||
+  fail "publisher timer is not completion-relative"
+grep -Fxq 'OnUnitInactiveSec=1d' "$backup_timer" ||
+  fail "backup timer is not completion-relative"
+if grep -Eq '^(OnUnitActiveSec|Persistent)=' \
+  "$publish_timer" "$backup_timer"; then
+  fail "local-life timers can catch up immediately"
+fi
+systemd-analyze verify \
+  "$service_file" \
+  "$worker_timer" \
+  "$publish_service" \
+  "$publish_timer" \
+  "$backup_service" \
+  "$backup_timer" >/dev/null 2>&1 ||
+  fail "generated user-unit syntax is invalid"
+
+grep -Fq -- \
+  "--user enable --now wywa-life-$identifier-publish.timer wywa-life-$identifier-backup.timer" \
+  "$HOME/fake/systemctl-arguments" ||
+  fail "bootstrap did not enable both local-life timers"
+
+"$life" status "$workspace" >"$test_root/status-output"
+grep -q '^profile: schema=1 profile=local ' "$test_root/status-output" ||
+  fail "status omitted the lifecycle profile"
+grep -q '^local snapshot: ' "$test_root/status-output" ||
+  fail "status omitted the local snapshot"
+grep -q '^snapshot generated: ' "$test_root/status-output" ||
+  fail "status omitted the snapshot timestamp"
+grep -q '^last backup: ' "$test_root/status-output" ||
+  fail "status omitted the backup receipt"
+
+python3 - "$workspace/public/state.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+state = json.loads(path.read_text(encoding="utf-8"))
+state["now"]["focus"] = "Testing a reviewed state refresh."
+path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+PY
+git -C "$workspace" add -- public/state.json
+git \
+  -C "$workspace" \
+  -c user.name="WYWA Test" \
+  -c user.email="wywa-test@localhost" \
+  commit -q -m "Update reviewed state"
+"$life" publish "$workspace" >/dev/null
+python3 - "$site/life.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+life = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert life["now"]["focus"] == "Testing a reviewed state refresh."
+assert life["metrics"]["workspace_commits"] == 3
+PY
+
+"$life" backup "$workspace" >/dev/null
+mapfile -t bundles < <(
+  find "$backup_dir" -mindepth 1 -maxdepth 1 -type f -name '*.bundle' -print
+)
+[[ ${#bundles[@]} -eq 2 ]] ||
+  fail "manual backup did not add a second bundle"
+git -C "$workspace" bundle verify "${bundles[1]}" >/dev/null ||
+  fail "manual Git bundle did not verify"
+
+state_hash=$(sha256sum "$workspace/public/state.json")
+"$life" upgrade "$workspace" >"$test_root/upgrade-output"
+[[ "$(sha256sum "$workspace/public/state.json")" == "$state_hash" ]] ||
+  fail "upgrade replaced reviewed public state"
+grep -q '^upgrade: reviewed state and durable evidence were preserved$' \
+  "$test_root/upgrade-output" ||
+  fail "upgrade omitted its preservation boundary"
+
+expect_status 2 "$life" publish-state ffffffffffffffff
+expect_status 2 "$life" bootstrap "$test_root/bad-name" --name 'bad&name'
+expect_status 2 "$life" bootstrap "$test_root/no-accept" --name "No Accept"
+grep -q -- '--accept-bounded-defaults' "$test_root/stderr" ||
+  fail "bootstrap enabled unattended work without bounded-default acceptance"
+
+fresh=$test_root/fresh-worker
+"$wywa" init "$fresh" >/dev/null
+expect_status 2 "$life" install "$fresh"
+grep -q -- '--name is required' "$test_root/stderr" ||
+  fail "install without reviewed state did not require an agent name"
+
+touch "$HOME/fake/fail-life-enable"
+rollback_workspace=$test_root/rollback-worker
+expect_status 1 "$life" bootstrap \
+  "$rollback_workspace" \
+  --name "Rollback" \
+  --accept-bounded-defaults
+rm -f -- "$HOME/fake/fail-life-enable"
+rollback_id=$(printf '%s' "$rollback_workspace" | sha256sum | cut -c1-16)
+[[ -d "$rollback_workspace" &&
+  -f "$HOME/.local/state/wywa/$rollback_id/site/current/life.json" &&
+  -f "$HOME/.local/state/wywa/$rollback_id/backup.last" ]] ||
+  fail "failed scheduling did not preserve initialized evidence"
+if find "$unit_dir" \
+  -maxdepth 1 \
+  -type f \
+  \( -name "wywa-$rollback_id.*" -o -name "wywa-life-$rollback_id-*" \) \
+  -print -quit |
+  grep -q .; then
+  fail "failed local-life scheduling left active unit sources"
+fi
+
+"$life" uninstall "$workspace" >"$test_root/uninstall-output"
+for removed in \
+  "$service_file" \
+  "$worker_timer" \
+  "$publish_service" \
+  "$publish_timer" \
+  "$backup_service" \
+  "$backup_timer"
+do
+  [[ ! -e "$removed" ]] || fail "uninstall left unit $removed"
+done
+[[ -d "$workspace" && -f "$runtime/life.conf" && -f "$site/life.json" ]] ||
+  fail "uninstall removed durable workspace or evidence"
+mapfile -t bundles < <(
+  find "$backup_dir" -mindepth 1 -maxdepth 1 -type f -name '*.bundle' -print
+)
+[[ ${#bundles[@]} -ge 2 ]] ||
+  fail "uninstall removed verified backups"
+grep -q 'workspace, receipts, static releases, and backups were preserved' \
+  "$test_root/uninstall-output" ||
+  fail "uninstall omitted its preservation result"
+
+printf '%s\n' "PASS: reversible WYWA local-life lifecycle"

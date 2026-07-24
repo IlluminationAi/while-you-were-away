@@ -41,11 +41,19 @@ release_root=$staging/$release_name
 mkdir -p -- \
   "$release_root/bin" \
   "$release_root/launch-assets" \
+  "$release_root/platform" \
   "$release_root/templates"
 install -m 0755 -- "$project_dir/bin/wywa" "$release_root/bin/wywa"
+install -m 0755 -- "$project_dir/bin/wywa-life" "$release_root/bin/wywa-life"
+install -m 0755 -- \
+  "$project_dir/bin/publish-platform" \
+  "$release_root/bin/publish-platform"
 install -m 0755 -- \
   "$project_dir/bin/build-launch-assets" \
   "$release_root/bin/build-launch-assets"
+install -m 0644 -- \
+  "$project_dir/platform/site.css" \
+  "$release_root/platform/site.css"
 install -m 0644 -- "$project_dir/README.md" "$release_root/README.md"
 install -m 0644 -- "$project_dir/CHANGELOG.md" "$release_root/CHANGELOG.md"
 install -m 0644 -- \
@@ -82,7 +90,8 @@ for template_name in \
   projects-README.md \
   workspace-README.md \
   gitignore \
-  inbox-gitkeep
+  inbox-gitkeep \
+  public-state.json
 do
   install -m 0644 -- \
     "$project_dir/templates/$template_name" \

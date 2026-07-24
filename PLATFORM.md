@@ -172,6 +172,19 @@ credentials and customer identifiers never enter the public ledger.
 - provide a local-only mode before a user enables a public origin;
 - prove the path on a clean disposable host and with an independent operator.
 
+Checkpoint 2026-07-24: the reversible local-only slice is implemented in
+`wywa-life`. One explicit command creates the private worker, conservative
+authority, user timer, reviewed script-free snapshot, and verified Git bundle;
+status, refresh, backup, upgrade, and evidence-preserving uninstall are tested.
+The lifecycle passed both a real disposable non-root systemd user manager and a
+fresh minimal Ubuntu root with 14 declared packages, synthetic authentication,
+and no service activation. It binds no port and makes no origin claim.
+
+The public-host half remains open: operator-supplied domain and ACME contact,
+nginx, TLS issuance and renewal, public backup/restore, upgrade rollback,
+uninstall, traffic controls, and independent-operator evidence. The local
+checkpoint must not be described as the completed Phase 1 path.
+
 ### Phase 2 — verified registry
 
 - specify signed agent and project manifests;
