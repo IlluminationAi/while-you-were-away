@@ -17,6 +17,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
 PROJECT = Path(__file__).resolve().parent.parent
@@ -88,6 +89,33 @@ def load_public_state(path: Path) -> dict[str, Any]:
         parse_moment(item["published_at"])
     parse_moment(record["identity"]["public_since"])
     parse_moment(record["now"]["since"])
+    nostr = record["identity"].get("nostr")
+    if nostr is not None:
+        if not isinstance(nostr, dict):
+            raise ValueError("Nostr identity must be an object")
+        if not re.fullmatch(r"[0-9a-f]{64}", nostr.get("pubkey", "")):
+            raise ValueError("Nostr public key must be 32-byte lowercase hex")
+        nip05 = nostr.get("nip05", "")
+        if (
+            not isinstance(nip05, str)
+            or not re.fullmatch(
+                r"[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}", nip05
+            )
+        ):
+            raise ValueError("Nostr NIP-05 identifier must be name@domain")
+        relays = nostr.get("relays")
+        if (
+            not isinstance(relays, list)
+            or not relays
+            or any(
+                not isinstance(relay, str) or not relay.startswith("wss://")
+                for relay in relays
+            )
+            or len(relays) != len(set(relays))
+        ):
+            raise ValueError(
+                "Nostr relays must be a unique nonempty list of wss URLs"
+            )
     if "site" in record:
         validate_base_url(record["site"]["base_url"])
     return record
@@ -204,6 +232,13 @@ def build_snapshot(
     site["base_url"] = validate_base_url(site["base_url"])
     if site["base_url"].startswith("https://"):
         site["local_preview"] = False
+        nostr = public["identity"].get("nostr")
+        if nostr is not None:
+            _name, nip05_domain = nostr["nip05"].split("@", 1)
+            if urlparse(site["base_url"]).hostname != nip05_domain:
+                raise ValueError(
+                    "Nostr NIP-05 domain differs from the public base URL"
+                )
     agents = copy.deepcopy(public["agents"])
     if base_url is not None and site["base_url"].startswith("https://"):
         for agent in agents:
@@ -618,6 +653,18 @@ def render_feed(snapshot: dict[str, Any]) -> str:
     return ET.tostring(feed, encoding="unicode", xml_declaration=True) + "\n"
 
 
+def render_nostr_discovery(snapshot: dict[str, Any]) -> str | None:
+    nostr = snapshot["identity"].get("nostr")
+    if nostr is None:
+        return None
+    local_name, _domain = nostr["nip05"].split("@", 1)
+    discovery = {
+        "names": {local_name: nostr["pubkey"]},
+        "relays": {nostr["pubkey"]: nostr["relays"]},
+    }
+    return json.dumps(discovery, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
 def write_release(
     staging: Path, snapshot: dict[str, Any], site_css: Path
 ) -> dict[str, str]:
@@ -632,6 +679,9 @@ def write_release(
         "robots.txt": "User-agent: *\nAllow: /\n",
         "assets/site.css": site_css.read_text(encoding="utf-8"),
     }
+    nostr_discovery = render_nostr_discovery(snapshot)
+    if nostr_discovery is not None:
+        text_files[".well-known/nostr.json"] = nostr_discovery
     hashes: dict[str, str] = {}
     for relative, content in text_files.items():
         target = staging / relative

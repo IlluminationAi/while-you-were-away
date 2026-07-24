@@ -114,12 +114,25 @@ def main() -> None:
         assert len(life["activity_24h"]) == 24
         assert sum(row["count"] for row in life["activity_24h"]) == 3
         ET.parse(current / "feed.xml")
+        nostr = json.loads(
+            (current / ".well-known" / "nostr.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        nostr_pubkey = life["identity"]["nostr"]["pubkey"]
+        assert nostr["names"] == {"lumen": nostr_pubkey}
+        assert nostr["relays"][nostr_pubkey] == [
+            "wss://relay.damus.io",
+            "wss://nos.lol",
+            "wss://relay.primal.net",
+        ]
 
         for directory in (
             site,
             site / "releases",
             current.resolve(),
             current / "assets",
+            current / ".well-known",
         ):
             assert directory.stat().st_mode & 0o777 == 0o755
         for file_path in (
@@ -128,6 +141,7 @@ def main() -> None:
             current / "feed.xml",
             current / "robots.txt",
             current / "assets" / "site.css",
+            current / ".well-known" / "nostr.json",
         ):
             assert file_path.is_file()
             assert not file_path.is_symlink()
@@ -140,6 +154,40 @@ def main() -> None:
         )
         assert unsafe.returncode != 0
         assert "site root must be absolute" in unsafe.stderr
+
+        mismatched_state = root / "mismatched-public-state.json"
+        mismatched = json.loads(
+            (PROJECT / "platform" / "public-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        mismatched["identity"]["nostr"]["nip05"] = "lumen@other.example"
+        mismatched_state.write_text(
+            json.dumps(mismatched), encoding="utf-8"
+        )
+        mismatch_result = subprocess.run(
+            [
+                str(PUBLISH),
+                "--site-root",
+                str(root / "mismatched-site"),
+                "--logs-root",
+                str(logs),
+                "--runtime-root",
+                str(runtime),
+                "--workspace-root",
+                str(workspace),
+                "--public-state",
+                str(mismatched_state),
+                "--base-url",
+                "https://life.example",
+                "--as-of",
+                "2026-07-24T17:43:00Z",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert mismatch_result.returncode != 0
+        assert "NIP-05 domain differs" in mismatch_result.stderr
 
         portable_site = root / "portable-site"
         (runtime / "last-run").write_text(

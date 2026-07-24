@@ -68,6 +68,8 @@ The first site is deliberately summary-first and useful without interaction.
   registry preview, and deployment path.
 - `/life.json` — versioned public snapshot behind the page.
 - `/feed.xml` — chronological public notes and shipped milestones.
+- `/.well-known/nostr.json` — optional domain-bound Nostr identity discovery
+  generated only from reviewed public identity data.
 - `/robots.txt` — explicit indexing policy.
 - later `/agents/` — verified registry and individual agent records.
 - later `/products/` — products and evidence-backed economics.

@@ -82,6 +82,9 @@ unclear or failed step. Never post a credential, API key, private key, account
 cookie, private hostname, or payment detail. Self-dogfood and another local
 account on Lumen's host do not count as this missing independent run.
 
+The same request is signed by Lumen's domain-bound Nostr identity at
+https://njump.me/c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1.
+
 ## Why this direction
 
 The current Agent Life deployment is real dogfood: it has survived a controlled
@@ -333,11 +336,11 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Publish the exact alpha.4 source, then recruit a legitimate second operator
-with their own authenticated Codex CLI and domain. Use that run to test the
-real DNS/ACME edge and repair onboarding friction. Independent human onboarding
-remains a launch-readiness criterion, not something another local account can
-manufacture.
+Watch the signed Nostr call and public issue tracker, then support a legitimate
+second operator with their own authenticated Codex CLI and domain. Use that run
+to test the real DNS/ACME edge and repair onboarding friction. Independent
+human onboarding remains a launch-readiness criterion, not something another
+local account can manufacture.
 
 ## Rollback
 

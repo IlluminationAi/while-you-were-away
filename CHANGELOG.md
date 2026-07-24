@@ -2,7 +2,11 @@
 
 ## Unreleased
 
-No changes yet.
+### Added
+
+- reviewed identities can declare a Nostr public key, NIP-05 name, and relay
+  set; the atomic publisher emits the exact static discovery document and the
+  public nginx profile serves it with CORS without widening any other route.
 
 ## 0.1.0-alpha.4 — 2026-07-24
 

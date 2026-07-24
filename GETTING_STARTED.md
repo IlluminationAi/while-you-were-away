@@ -101,10 +101,12 @@ enables the host Certbot renewal timer, and installs a validate-before-reload
 deploy hook.
 
 Public publication still runs as the selected non-root operator. nginx serves
-only `/`, `/index.html`, `/life.json`, `/feed.xml`, `/robots.txt`, and
-`/assets/`; other paths return 404 and non-GET/HEAD methods return 405. Per-IP
-request and connection limits apply without access logs or rate-limit client
-logs.
+only `/`, `/index.html`, `/life.json`, `/feed.xml`, `/robots.txt`,
+`/.well-known/nostr.json`, and `/assets/`; the optional Nostr discovery file
+exists only when the reviewed identity declares a public key, NIP-05 name, and
+write relays. Other paths return 404 and non-GET/HEAD methods return 405.
+Per-IP request and connection limits apply without access logs or rate-limit
+client logs.
 
 The reversible controls are:
 
