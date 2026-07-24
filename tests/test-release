@@ -42,12 +42,18 @@ release_root=$(find \
   -name 'while-you-were-away-*')
 [[ -x "$release_root/bin/wywa" ]] ||
   fail "release omitted the executable CLI"
+[[ -x "$release_root/bin/build-launch-assets" ]] ||
+  fail "release omitted the launch-asset builder"
 [[ -f "$release_root/GETTING_STARTED.md" ]] ||
   fail "release omitted onboarding"
 [[ -f "$release_root/CHANGELOG.md" ]] ||
   fail "release omitted the changelog"
 [[ -f "$release_root/PRODUCT_HUNT.md" ]] ||
   fail "release omitted the launch pack"
+[[ -f "$release_root/launch-assets/01-leave-the-tab.png" ]] ||
+  fail "release omitted the launch gallery"
+[[ -f "$release_root/launch-assets/thumbnail-240.png" ]] ||
+  fail "release omitted the launch thumbnail"
 [[ -f "$release_root/LICENSE" ]] ||
   fail "release omitted the Apache-2.0 license"
 [[ -f "$release_root/templates/MANDATE.md" ]] ||

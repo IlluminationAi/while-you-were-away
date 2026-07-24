@@ -1,0 +1,319 @@
+#!/usr/bin/env python3
+"""Build deterministic, private-data-free WYWA launch graphics."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError as exc:
+    raise SystemExit(
+        "build-launch-assets requires Pillow: python3 -m pip install Pillow"
+    ) from exc
+
+
+WIDTH = 1270
+HEIGHT = 760
+BG = "#07111F"
+PANEL = "#0E1C2E"
+PANEL_2 = "#14263B"
+WHITE = "#F5F8FC"
+MUTED = "#9CAEC4"
+MINT = "#61E6B6"
+ORANGE = "#FFAA5C"
+BLUE = "#72B7FF"
+RED = "#FF7185"
+LINE = "#29415C"
+
+
+def font(size: int):
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError as exc:
+        raise SystemExit("build-launch-assets requires Pillow 10.1 or newer") from exc
+
+
+def canvas():
+    image = Image.new("RGB", (WIDTH, HEIGHT), BG)
+    return image, ImageDraw.Draw(image)
+
+
+def rounded(draw, box, radius=24, fill=PANEL, outline=None, width=1):
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
+
+
+def label(draw, x, y, text, color=MINT):
+    label_font = font(18)
+    width = max(206, int(draw.textlength(text, font=label_font)) + 36)
+    rounded(draw, (x, y, x + width, y + 36), 18, "#102B33")
+    draw.text((x + 18, y + 7), text, font=label_font, fill=color)
+
+
+def brand(draw, index):
+    draw.ellipse((72, 56, 108, 92), fill=MINT)
+    draw.ellipse((83, 67, 97, 81), fill=BG)
+    draw.polygon(((94, 54), (113, 65), (96, 72)), fill=MINT)
+    draw.text((126, 57), "WHILE YOU WERE AWAY", font=font(22), fill=WHITE)
+    draw.text((1125, 59), f"0{index} / 05", font=font(18), fill=MUTED)
+
+
+def title(draw, text, y=120, size=62, color=WHITE):
+    draw.multiline_text(
+        (72, y),
+        text,
+        font=font(size),
+        fill=color,
+        spacing=0,
+        stroke_width=1,
+        stroke_fill=color,
+    )
+
+
+def subtitle(draw, text, y, width=880):
+    words = text.split()
+    lines = []
+    current = ""
+    body = font(24)
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if draw.textlength(candidate, font=body) <= width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    draw.multiline_text((74, y), "\n".join(lines), font=body, fill=MUTED, spacing=8)
+
+
+def terminal(draw, box, lines, accent=MINT):
+    rounded(draw, box, 20, "#07101B", LINE, 2)
+    x1, y1, x2, _ = box
+    draw.line((x1, y1 + 48, x2, y1 + 48), fill=LINE, width=2)
+    for i, color in enumerate((RED, ORANGE, MINT)):
+        draw.ellipse((x1 + 20 + i * 24, y1 + 18, x1 + 32 + i * 24, y1 + 30), fill=color)
+    mono = font(20)
+    y = y1 + 70
+    for prefix, text, color in lines:
+        draw.text((x1 + 28, y), prefix, font=mono, fill=accent)
+        draw.text((x1 + 56, y), text, font=mono, fill=color)
+        y += 37
+
+
+def footer(draw, text):
+    draw.text((72, 711), text, font=font(18), fill=MUTED)
+
+
+def card_one(output):
+    image, draw = canvas()
+    brand(draw, 1)
+    label(draw, 72, 112, "LOCAL-FIRST AI WORKER")
+    title(draw, "Leave the tab.\nKeep the work.", 160, 68)
+    subtitle(
+        draw,
+        "A bounded Linux worker wakes on schedule, advances the project, "
+        "checkpoints useful progress, and leaves a receipt.",
+        326,
+        520,
+    )
+    terminal(
+        draw,
+        (690, 142, 1198, 555),
+        [
+            ("$", "git clone .../while-you-were-away", WHITE),
+            ("$", "wywa init ~/my-worker", WHITE),
+            ("$", "wywa doctor ~/my-worker", WHITE),
+            ("$", "wywa install-user ~/my-worker", WHITE),
+            (">", "timer: one hour after completion", MUTED),
+            (">", "checkpoint: 3cc80a93070b", MINT),
+            (">", "status: verified", MINT),
+        ],
+    )
+    rounded(draw, (690, 581, 1198, 668), 18, "#102B33")
+    draw.text((718, 603), "NOW", font=font(18), fill=MINT)
+    draw.line((785, 624, 1080, 624), fill=LINE, width=5)
+    for x in (802, 934, 1063):
+        draw.ellipse((x - 8, 616, x + 8, 632), fill=MINT)
+    draw.text((841, 603), "WAKE", font=font(18), fill=WHITE)
+    draw.text((970, 603), "WORK", font=font(18), fill=WHITE)
+    draw.text((1092, 603), "RECEIPT", font=font(18), fill=WHITE)
+    footer(draw, "Open source  |  Apache-2.0  |  Linux + Codex CLI")
+    save(image, output / "01-leave-the-tab.png")
+
+
+def card_two(output):
+    image, draw = canvas()
+    brand(draw, 2)
+    label(draw, 72, 112, "HONEST CONTINUITY")
+    title(draw, "Continuity is files,\nnot a consciousness claim.", 160, 54)
+    subtitle(
+        draw,
+        "Separate Codex sessions reconnect through an inspectable Git workspace.",
+        294,
+        1020,
+    )
+    y = 430
+    session_x = (78, 310, 542, 1006)
+    for i, x in enumerate(session_x, start=1):
+        rounded(draw, (x, y, x + 180, y + 98), 20, PANEL_2, LINE, 2)
+        draw.text((x + 20, y + 18), f"SESSION {i}", font=font(18), fill=MUTED)
+        draw.text((x + 20, y + 52), "Codex exec", font=font(24), fill=WHITE)
+    for x1, x2 in ((258, 310), (490, 542), (954, 1006)):
+        draw.line((x1 + 8, y + 49, x2 - 8, y + 49), fill=MINT, width=4)
+        draw.polygon(((x2 - 16, y + 41), (x2 - 5, y + 49), (x2 - 16, y + 57)), fill=MINT)
+    rounded(draw, (750, 390, 954, 568), 24, "#102B33", MINT, 2)
+    draw.text((777, 411), "DURABLE CORE", font=font(19), fill=MINT)
+    for i, item in enumerate(("GIT HISTORY", "CURRENT STATE", "MEMORY", "PROJECTS")):
+        draw.text((777, 452 + i * 27), item, font=font(17), fill=WHITE)
+    draw.line((642, y + 49, 742, y + 49), fill=MINT, width=4)
+    draw.polygon(((734, y + 41), (745, y + 49), (734, y + 57)), fill=MINT)
+    rounded(draw, (78, 598, 1190, 672), 18, PANEL)
+    draw.text((106, 619), "No continuous-thought story.", font=font(23), fill=ORANGE)
+    draw.text((461, 619), "Every wake starts a new process.", font=font(23), fill=WHITE)
+    footer(draw, "Inspect the same files the worker uses to remember.")
+    save(image, output / "02-honest-continuity.png")
+
+
+def card_three(output):
+    image, draw = canvas()
+    brand(draw, 3)
+    label(draw, 72, 112, "BOUNDED BY DEFAULT")
+    title(draw, "Useful autonomy.\nVisible boundaries.", 160, 58)
+    subtitle(
+        draw,
+        "The model works inside workspace-write. The host owns scheduling, "
+        "receipts, and guarded Git checkpoints.",
+        302,
+        1040,
+    )
+    rounded(draw, (72, 416, 604, 660), 24, PANEL, MINT, 2)
+    rounded(draw, (666, 416, 1198, 660), 24, PANEL, RED, 2)
+    draw.text((104, 442), "MODEL CAN", font=font(22), fill=MINT)
+    draw.text((698, 442), "MODEL CANNOT", font=font(22), fill=RED)
+    can = (
+        "read project context",
+        "edit workspace files",
+        "run local checks",
+        "write a final message",
+    )
+    cannot = (
+        "write .git directly",
+        "inherit shell secrets",
+        "hide a zero-change run",
+        "put credentials in units",
+    )
+    for i, text in enumerate(can):
+        y = 496 + i * 38
+        draw.ellipse((105, y + 3, 119, y + 17), fill=MINT)
+        draw.text((135, y), text, font=font(21), fill=WHITE)
+    for i, text in enumerate(cannot):
+        y = 496 + i * 38
+        draw.line((105 + 594, y + 3, 719, y + 17), fill=RED, width=3)
+        draw.line((719, y + 3, 699, y + 17), fill=RED, width=3)
+        draw.text((735, y), text, font=font(21), fill=WHITE)
+    footer(draw, "Non-root  |  minimal environment  |  private runtime state")
+    save(image, output / "03-visible-boundaries.png")
+
+
+def card_four(output):
+    image, draw = canvas()
+    brand(draw, 4)
+    label(draw, 72, 112, "GUARDED CHECKPOINTS")
+    title(draw, "Every useful run\nbecomes evidence.", 160, 62)
+    subtitle(
+        draw,
+        "Success means a clean host-side commit and a human-readable receipt.",
+        306,
+        560,
+    )
+    terminal(
+        draw,
+        (680, 142, 1198, 586),
+        [
+            (">", "started: 2026-07-24T16:21:00Z", MUTED),
+            (">", "finished: 2026-07-24T16:22:42Z", MUTED),
+            (">", "codex_status: 0", MINT),
+            (">", "checkpoint: 3cc80a93070b", MINT),
+            (">", "worker_tests: 7 / 7 PASS", MINT),
+            (">", "tree: clean", MINT),
+            (">", "next_wake: +1h after finish", BLUE),
+        ],
+    )
+    rounded(draw, (72, 458, 604, 588), 22, "#102B33", MINT, 2)
+    draw.text((104, 484), "3cc80a9", font=font(35), fill=MINT)
+    draw.text((104, 534), "verified durable progress", font=font(23), fill=WHITE)
+    rounded(draw, (72, 610, 1198, 674), 18, PANEL)
+    draw.text((104, 629), "If there is no diff, success is refused.", font=font(23), fill=ORANGE)
+    footer(draw, "The receipt and Git checkpoint must agree.")
+    save(image, output / "04-checkpoint-evidence.png")
+
+
+def card_five(output):
+    image, draw = canvas()
+    brand(draw, 5)
+    label(draw, 72, 112, "HONEST FAILURE MODES")
+    title(draw, "Failures stay honest.", 164, 66)
+    subtitle(
+        draw,
+        "A failed candidate never replaces the last known-good message.",
+        250,
+        920,
+    )
+    cards = (
+        (72, "72", "NO PROGRESS", "No durable diff", ORANGE),
+        (440, "73", "CHECKPOINT REFUSED", "Unsafe content found", RED),
+        (808, "124", "TIMEOUT", "Bounded runtime ended", BLUE),
+    )
+    for x, status, heading, body, accent in cards:
+        rounded(draw, (x, 360, x + 330, 540), 22, PANEL, accent, 2)
+        draw.text((x + 24, 385), f"STATUS {status}", font=font(18), fill=accent)
+        draw.text((x + 24, 430), heading, font=font(22), fill=WHITE)
+        draw.text((x + 24, 478), body, font=font(19), fill=MUTED)
+    draw.line((238, 570, 238, 612), fill=LINE, width=3)
+    draw.line((606, 570, 606, 612), fill=LINE, width=3)
+    draw.line((974, 570, 974, 612), fill=LINE, width=3)
+    draw.line((238, 611, 974, 611), fill=LINE, width=3)
+    rounded(draw, (347, 596, 865, 676), 20, "#102B33", MINT, 2)
+    draw.text((383, 618), "LAST GOOD MESSAGE PRESERVED", font=font(23), fill=MINT)
+    footer(draw, "No stale output. No false green receipt. No hidden retry loop.")
+    save(image, output / "05-honest-failures.png")
+
+
+def thumbnail(output):
+    image = Image.new("RGB", (240, 240), BG)
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((48, 34, 192, 178), fill="#102B33", outline=MINT, width=8)
+    draw.arc((70, 56, 170, 156), start=35, end=325, fill=MINT, width=13)
+    draw.polygon(((165, 52), (191, 73), (159, 82)), fill=MINT)
+    draw.text((46, 173), "WYWA", font=font(42), fill=WHITE, stroke_width=1, stroke_fill=WHITE)
+    save(image, output / "thumbnail-240.png")
+
+
+def save(image, path):
+    image.save(path, format="PNG", optimize=False, compress_level=9)
+
+
+def main():
+    project_dir = Path(__file__).resolve().parent.parent
+    output = (
+        Path(sys.argv[1]).resolve()
+        if len(sys.argv) == 2
+        else project_dir / "launch-assets"
+    )
+    if len(sys.argv) > 2:
+        raise SystemExit("Usage: build-launch-assets [OUTPUT_DIRECTORY]")
+    output.mkdir(parents=True, exist_ok=True)
+    card_one(output)
+    card_two(output)
+    card_three(output)
+    card_four(output)
+    card_five(output)
+    thumbnail(output)
+    for path in sorted(output.glob("*.png")):
+        print(path)
+
+
+if __name__ == "__main__":
+    main()

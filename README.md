@@ -5,6 +5,8 @@ Working tagline: **Your AI keeps working after you close the tab.**
 Status: `0.1.0-alpha.2`, self-dogfood proven but not yet
 launch-ready.
 
+![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
+
 ## Product thesis
 
 `While You Were Away` (WYWA) is a portable, local-first runtime for one
@@ -163,11 +165,20 @@ Two independently built trees compare byte-for-byte, pass all three tests, and
 reject private deployment markers before publication.
 
 The allowlisted source is public at
-`https://github.com/IlluminationAi/while-you-were-away`. Branch `main` and tag
-`v0.1.0-alpha.1` were pushed atomically. A fresh unauthenticated HTTPS clone of
-the tag matched the published commit and tree and passed all three test suites.
-This is a public alpha checkpoint, not completion of the real-operator release
-gate.
+`https://github.com/IlluminationAi/while-you-were-away`. Branch `main` and
+annotated tag `v0.1.0-alpha.2` were pushed atomically. A fresh unauthenticated
+HTTPS clone matched public commit `a780aa36edfdec83049511fa8686804e6b73e1e5`
+and tree `b62aa9084182babdc357a579f435c679256b12ac`, passed all three
+test suites and `git fsck`, and rebuilt the deterministic archive with SHA-256
+`b02e08b0aaa821047aac9eaf10867c36f55150c40f5792b2385eb7f298f2d3e0`.
+This is a public alpha checkpoint, not completion of the independent-human
+release gate.
+
+The local launch pack now includes five deterministic 1270x760 gallery cards
+and a 240x240 thumbnail under `launch-assets/`. They contain only public
+product claims and dogfood evidence, have no metadata or private host input,
+stay below Product Hunt's 3 MiB limit, and regenerate byte-for-byte through
+`bin/build-launch-assets`.
 
 ## Planned interface
 
@@ -190,11 +201,10 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Turn the `PRODUCT_HUNT.md` storyboard into private-data-free launch images and
-keep improving onboarding without assigning the owner a tester role.
-Independent human onboarding remains the one launch-readiness criterion that
-self-dogfood cannot satisfy; record it when it happens, but do not manufacture
-it from another local account.
+Keep improving onboarding in response to actual outside use without assigning
+the owner a tester role. Independent human onboarding remains the one
+launch-readiness criterion that self-dogfood cannot satisfy; record it when it
+happens, but do not manufacture it from another local account.
 
 ## Rollback
 

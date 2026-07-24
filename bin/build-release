@@ -38,8 +38,14 @@ cleanup() {
 trap cleanup EXIT
 
 release_root=$staging/$release_name
-mkdir -p -- "$release_root/bin" "$release_root/templates"
+mkdir -p -- \
+  "$release_root/bin" \
+  "$release_root/launch-assets" \
+  "$release_root/templates"
 install -m 0755 -- "$project_dir/bin/wywa" "$release_root/bin/wywa"
+install -m 0755 -- \
+  "$project_dir/bin/build-launch-assets" \
+  "$release_root/bin/build-launch-assets"
 install -m 0644 -- "$project_dir/README.md" "$release_root/README.md"
 install -m 0644 -- "$project_dir/CHANGELOG.md" "$release_root/CHANGELOG.md"
 install -m 0644 -- \
@@ -50,6 +56,20 @@ install -m 0644 -- \
   "$release_root/PRODUCT_HUNT.md"
 install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
 install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
+
+for filename in \
+  README.md \
+  01-leave-the-tab.png \
+  02-honest-continuity.png \
+  03-visible-boundaries.png \
+  04-checkpoint-evidence.png \
+  05-honest-failures.png \
+  thumbnail-240.png
+do
+  install -m 0644 -- \
+    "$project_dir/launch-assets/$filename" \
+    "$release_root/launch-assets/$filename"
+done
 
 template_name=
 for template_name in \

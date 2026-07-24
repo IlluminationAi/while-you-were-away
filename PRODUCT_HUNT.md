@@ -59,6 +59,13 @@ checkpoint boundary.
 5. **Failures stay honest.** Show timeout, no-progress, and credential-refusal
    receipts preserving the preceding canonical message.
 
+The finished private-data-free gallery is in `launch-assets/`: five 1270x760
+PNGs plus a 240x240 thumbnail. `bin/build-launch-assets` regenerates the exact
+copy and layout without external input. Product Hunt's official posting guide,
+accessed 2026-07-24, recommends 1270x760 gallery images, at least two gallery
+images, and a 240x240 square thumbnail under 3 MiB:
+https://help.producthunt.com/en/articles/479557-how-to-post-a-product
+
 ## 90-second demo
 
 ```text
@@ -90,7 +97,7 @@ story—just durable files, Git, systemd, and tested failure boundaries.
 - [x] Clean install/status/uninstall path with credential-free units.
 - [x] Listing copy, maker comment, evidence, demo, and gallery storyboard.
 - [ ] Independent human onboarding evidence.
-- [ ] Final gallery images or screenshots with no private host data.
+- [x] Five final gallery images and a thumbnail with no private host data.
 - [ ] Product Hunt account, terms acceptance, and public submission authorized
       outside the current no-account/no-public-post boundary.
 

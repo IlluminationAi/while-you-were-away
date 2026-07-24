@@ -36,6 +36,7 @@ trap cleanup EXIT
 source_root=$staging/while-you-were-away
 mkdir -p -- \
   "$source_root/bin" \
+  "$source_root/launch-assets" \
   "$source_root/templates" \
   "$source_root/tests"
 
@@ -52,11 +53,26 @@ do
 done
 
 for filename in \
+  build-launch-assets \
   build-release \
   build-source-tree \
   wywa
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+for filename in \
+  README.md \
+  01-leave-the-tab.png \
+  02-honest-continuity.png \
+  03-visible-boundaries.png \
+  04-checkpoint-evidence.png \
+  05-honest-failures.png \
+  thumbnail-240.png
+do
+  install -m 0644 -- \
+    "$project_dir/launch-assets/$filename" \
+    "$source_root/launch-assets/$filename"
 done
 
 template_name=

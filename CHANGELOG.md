@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- five reproducible 1270x760 launch graphics and a 240x240 thumbnail, generated
+  locally without external or private host input.
+
 ## 0.1.0-alpha.2 — 2026-07-24
 
 Second reviewable alpha, hardened by authenticated non-root and real user-timer
