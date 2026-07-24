@@ -1,0 +1,1112 @@
+#!/usr/bin/env python3
+"""Keep a bounded private queue of verified WYWA registry consent requests."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import contextlib
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Iterator
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+INTAKE = Path(__file__).with_name("wywa-intake")
+LEDGER_NAME = "events.jsonl"
+LOCK_NAME = ".lock"
+MAX_LEDGER_BYTES = 8 * 1024 * 1024
+WITHDRAWAL_RESERVE_BYTES = 256 * 1024
+MAX_INTAKE_OUTPUT_BYTES = 128 * 1024
+MAX_REQUEST_BYTES = 16 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_PENDING_APPLICATIONS = 56
+MAX_PENDING_TOTAL = 64
+RATE_WINDOW = dt.timedelta(hours=1)
+PER_ORIGIN_LIMIT = 4
+GLOBAL_LIMIT = 12
+MAX_REASON = 240
+MAX_FUTURE_SKEW = dt.timedelta(minutes=5)
+AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
+HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+REQUEST_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+EVENT_KEYS = {
+    "schema_version",
+    "event_id",
+    "at",
+    "action",
+    "request_id",
+    "agent_id",
+    "origin",
+    "request_action",
+    "payload",
+    "result",
+    "reason",
+    "previous_sha256",
+}
+INTAKE_RESULT_KEYS = {
+    "schema_version",
+    "verified_at",
+    "evidence",
+    "authenticated_signature",
+    "eligible_for_admission",
+    "eligible_for_withdrawal",
+    "request_sha256",
+    "request",
+    "identity",
+}
+REQUEST_KEYS = {
+    "schema_version",
+    "request_id",
+    "action",
+    "agent_id",
+    "origin",
+    "manifest_sha256",
+    "sequence",
+    "issued_at",
+    "expires_at",
+}
+IDENTITY_KEYS = {
+    "agent_id",
+    "name",
+    "origin",
+    "public_key",
+    "manifest_sha256",
+    "sequence",
+    "origin_evidence",
+    "origin_expires_at",
+}
+FINISH_RESULTS = ("reviewed", "rejected", "withdrawn")
+
+
+class QueueError(Exception):
+    """A bounded, user-facing private queue failure."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise QueueError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise QueueError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise QueueError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise QueueError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    minimum: int = 1,
+) -> str:
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise QueueError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise QueueError(f"{label} contains a control character")
+    return value
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def record_hash(record: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_bytes(record)).hexdigest()
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise QueueError(f"JSON repeats key: {key}")
+        result[key] = value
+    return result
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise QueueError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise QueueError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise QueueError(f"{label} must be a JSON object")
+    return result
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise QueueError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise QueueError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_size > maximum:
+        raise QueueError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def normalize_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise QueueError("origin must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise QueueError("origin is invalid") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise QueueError("origin must be a standard-port HTTPS root")
+    return f"https://{parsed.hostname.lower()}/"
+
+
+def normalize_hash(value: object, label: str) -> str:
+    if not isinstance(value, str) or HASH_PATTERN.fullmatch(value) is None:
+        raise QueueError(f"{label} must be 64 lowercase hexadecimal characters")
+    return value
+
+
+def normalize_request(
+    record: object,
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if not isinstance(record, dict) or set(record) != REQUEST_KEYS:
+        raise QueueError("intake result request fields do not match schema version 1")
+    if record["schema_version"] != 1:
+        raise QueueError("intake request has an unsupported schema")
+    request_id = record["request_id"]
+    if not isinstance(request_id, str) or REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+        raise QueueError("request_id must be 32 lowercase hexadecimal characters")
+    action = record["action"]
+    if action not in {"apply", "withdraw"}:
+        raise QueueError("request action must be apply or withdraw")
+    agent_id = bounded_text(record["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise QueueError("agent_id must be lowercase letters, digits, or hyphens")
+    origin = normalize_origin(record["origin"])
+    manifest_hash = normalize_hash(record["manifest_sha256"], "manifest_sha256")
+    sequence = record["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise QueueError("sequence must be a positive integer")
+    issued_at = parse_moment(record["issued_at"], "request issued_at")
+    expires_at = parse_moment(record["expires_at"], "request expires_at")
+    if expires_at <= issued_at or expires_at <= at:
+        raise QueueError("intake request is expired or has invalid validity")
+    if issued_at > at + MAX_FUTURE_SKEW:
+        raise QueueError("intake request is from the future")
+    return {
+        "schema_version": 1,
+        "request_id": request_id,
+        "action": action,
+        "agent_id": agent_id,
+        "origin": origin,
+        "manifest_sha256": manifest_hash,
+        "sequence": sequence,
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+    }
+
+
+def normalize_identity(
+    record: object,
+    request: dict[str, Any],
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if not isinstance(record, dict) or set(record) != IDENTITY_KEYS:
+        raise QueueError("intake result identity fields do not match schema version 1")
+    agent_id = bounded_text(record["agent_id"], "identity agent_id", 48, minimum=3)
+    name = bounded_text(record["name"], "identity name", 80)
+    origin = normalize_origin(record["origin"])
+    public_key = bounded_text(record["public_key"], "identity public_key", 512)
+    fields = public_key.split()
+    if len(fields) != 2 or fields[0] != "ssh-ed25519":
+        raise QueueError("identity public_key must be one comment-free ssh-ed25519 key")
+    manifest_hash = normalize_hash(
+        record["manifest_sha256"],
+        "identity manifest_sha256",
+    )
+    sequence = record["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise QueueError("identity sequence must be a positive integer")
+    evidence = record["origin_evidence"]
+    if evidence not in {"live-https-origin", "detached-files-only"}:
+        raise QueueError("identity has unsupported origin evidence")
+    expires_at = parse_moment(record["origin_expires_at"], "origin_expires_at")
+    if expires_at <= at:
+        raise QueueError("identity origin proof has expired")
+    for key, value in (
+        ("agent_id", agent_id),
+        ("origin", origin),
+        ("manifest_sha256", manifest_hash),
+        ("sequence", sequence),
+    ):
+        if request[key] != value:
+            raise QueueError(f"intake identity {key} differs from request")
+    return {
+        "agent_id": agent_id,
+        "name": name,
+        "origin": origin,
+        "public_key": " ".join(fields),
+        "manifest_sha256": manifest_hash,
+        "sequence": sequence,
+        "origin_evidence": evidence,
+        "origin_expires_at": utc_text(expires_at),
+    }
+
+
+def normalize_intake_result(
+    record: dict[str, Any],
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if set(record) != INTAKE_RESULT_KEYS:
+        raise QueueError("intake verification output fields do not match schema version 1")
+    if record["schema_version"] != 1:
+        raise QueueError("intake verification has an unsupported schema")
+    verified_at = parse_moment(record["verified_at"], "verified_at")
+    if verified_at > at + MAX_FUTURE_SKEW:
+        raise QueueError("intake verification is from the future")
+    evidence = record["evidence"]
+    if evidence not in {
+        "live-origin-signed-intake",
+        "detached-proof-signed-intake",
+    }:
+        raise QueueError("intake verification has unsupported evidence")
+    if record["authenticated_signature"] is not True:
+        raise QueueError("intake request signature is not authenticated")
+    request = normalize_request(record["request"], at=at)
+    identity = normalize_identity(record["identity"], request, at=at)
+    request_hash = normalize_hash(record["request_sha256"], "request_sha256")
+    if request_hash != hashlib.sha256(canonical_bytes(request)).hexdigest():
+        raise QueueError("intake request hash does not match canonical request")
+    admission = record["eligible_for_admission"]
+    withdrawal = record["eligible_for_withdrawal"]
+    if not isinstance(admission, bool) or not isinstance(withdrawal, bool):
+        raise QueueError("intake eligibility flags must be Boolean")
+    if request["action"] == "apply":
+        if (
+            evidence != "live-origin-signed-intake"
+            or identity["origin_evidence"] != "live-https-origin"
+            or admission is not True
+            or withdrawal is not False
+        ):
+            raise QueueError("application requires fresh live signed-origin evidence")
+    elif admission is not False or withdrawal is not True:
+        raise QueueError("withdrawal verification has inconsistent eligibility")
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(verified_at),
+        "evidence": evidence,
+        "authenticated_signature": True,
+        "eligible_for_admission": admission,
+        "eligible_for_withdrawal": withdrawal,
+        "request_sha256": request_hash,
+        "request": request,
+        "identity": identity,
+    }
+
+
+def reject_symlink_ancestors(path: Path) -> None:
+    current = path
+    while True:
+        if current.exists() and current.is_symlink():
+            raise QueueError("state path must not contain a symbolic link")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def state_directory(path: Path, *, create: bool = False) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise QueueError("state directory must be an absolute non-root path")
+    reject_symlink_ancestors(absolute)
+    if create:
+        absolute.mkdir(mode=0o700, parents=True, exist_ok=True)
+        absolute.chmod(0o700)
+    if not absolute.is_dir() or absolute.is_symlink():
+        raise QueueError("state directory must be a nonsymlink directory")
+    if absolute.stat().st_mode & 0o077:
+        raise QueueError("state directory must not be accessible by group or others")
+    return absolute
+
+
+def atomic_write(path: Path, data: bytes, mode: int) -> None:
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def locked_state(path: Path) -> Iterator[Path]:
+    directory = state_directory(path)
+    descriptor = os.open(directory / LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield directory
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def event_payload(
+    raw: object,
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != {
+        "verification",
+        "signature_b64",
+        "signature_sha256",
+    }:
+        raise QueueError("queue submission payload has unexpected fields")
+    verification_raw = raw["verification"]
+    if not isinstance(verification_raw, dict):
+        raise QueueError("queue verification payload must be an object")
+    verification = normalize_intake_result(verification_raw, at=at)
+    signature_text = bounded_text(
+        raw["signature_b64"],
+        "signature_b64",
+        (MAX_SIGNATURE_BYTES * 4 // 3) + 8,
+    )
+    try:
+        signature = base64.b64decode(signature_text, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise QueueError("queue signature is not valid base64") from error
+    if not signature or len(signature) > MAX_SIGNATURE_BYTES:
+        raise QueueError("queue signature has an invalid size")
+    signature_hash = normalize_hash(raw["signature_sha256"], "signature_sha256")
+    if hashlib.sha256(signature).hexdigest() != signature_hash:
+        raise QueueError("queue signature hash does not match payload")
+    return {
+        "verification": verification,
+        "signature_b64": signature_text,
+        "signature_sha256": signature_hash,
+    }
+
+
+def pending_entries(entries: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    return [entry for entry in entries.values() if entry["status"] == "pending"]
+
+
+def window_applications(
+    accepted: list[dict[str, Any]],
+    *,
+    at: dt.datetime,
+) -> list[dict[str, Any]]:
+    boundary = at - RATE_WINDOW
+    return [item for item in accepted if boundary < item["at"] <= at]
+
+
+def derive_state(events: list[dict[str, Any]]) -> dict[str, Any]:
+    enabled = False
+    head: str | None = None
+    previous_time: dt.datetime | None = None
+    entries: dict[str, dict[str, Any]] = {}
+    accepted_applications: list[dict[str, Any]] = []
+    for expected_id, event in enumerate(events, start=1):
+        if set(event) != EVENT_KEYS:
+            raise QueueError(f"queue event {expected_id} has unexpected fields")
+        if event["schema_version"] != 1 or event["event_id"] != expected_id:
+            raise QueueError(f"queue event {expected_id} has an invalid identity")
+        event_at = parse_moment(event["at"], f"event {expected_id} at")
+        if previous_time is not None and event_at < previous_time:
+            raise QueueError("queue event timestamps roll backward")
+        previous_time = event_at
+        if event["previous_sha256"] != head:
+            raise QueueError(f"queue event {expected_id} breaks the hash chain")
+        action = event["action"]
+        if action in {"enable", "disable"}:
+            if any(
+                event[key] is not None
+                for key in (
+                    "request_id",
+                    "agent_id",
+                    "origin",
+                    "request_action",
+                    "payload",
+                    "result",
+                )
+            ):
+                raise QueueError(f"{action} event contains request fields")
+            bounded_text(event["reason"], "event reason", MAX_REASON)
+            enabled = action == "enable"
+        elif action == "submit":
+            request_id = event["request_id"]
+            if (
+                not isinstance(request_id, str)
+                or REQUEST_ID_PATTERN.fullmatch(request_id) is None
+            ):
+                raise QueueError("submit event has invalid request_id")
+            if request_id in entries:
+                raise QueueError("queue ledger reuses a request_id")
+            payload = event_payload(event["payload"], at=event_at)
+            verification = payload["verification"]
+            request = verification["request"]
+            if (
+                event["agent_id"] != request["agent_id"]
+                or event["origin"] != request["origin"]
+                or event["request_action"] != request["action"]
+                or request_id != request["request_id"]
+                or event["result"] is not None
+            ):
+                raise QueueError("submit event metadata differs from signed request")
+            bounded_text(event["reason"], "event reason", MAX_REASON)
+            current_pending = pending_entries(entries)
+            if request["action"] == "apply":
+                if not enabled:
+                    raise QueueError("queue ledger accepted an application while disabled")
+                recent = window_applications(accepted_applications, at=event_at)
+                global_used = len(recent)
+                origin_used = sum(
+                    1 for item in recent if item["origin"] == request["origin"]
+                )
+                if origin_used >= PER_ORIGIN_LIMIT:
+                    raise QueueError("queue ledger exceeds the per-origin rate limit")
+                if global_used >= GLOBAL_LIMIT:
+                    raise QueueError("queue ledger exceeds the global rate limit")
+                pending_apply = sum(
+                    1
+                    for entry in current_pending
+                    if entry["request_action"] == "apply"
+                )
+                if pending_apply >= MAX_PENDING_APPLICATIONS:
+                    raise QueueError("queue ledger exceeds application capacity")
+                if len(current_pending) >= MAX_PENDING_TOTAL:
+                    raise QueueError("queue ledger exceeds total capacity")
+                accepted_applications.append(
+                    {"at": event_at, "origin": request["origin"]}
+                )
+            else:
+                for entry in current_pending:
+                    if (
+                        entry["request_action"] == "apply"
+                        and entry["agent_id"] == request["agent_id"]
+                    ):
+                        entry["status"] = "superseded"
+                        entry["result"] = "withdrawn"
+                        entry["finished_at"] = utc_text(event_at)
+                if len(pending_entries(entries)) >= MAX_PENDING_TOTAL:
+                    raise QueueError("queue ledger exceeds withdrawal capacity")
+            entries[request_id] = {
+                "event_id": event["event_id"],
+                "received_at": utc_text(event_at),
+                "request_id": request_id,
+                "agent_id": request["agent_id"],
+                "origin": request["origin"],
+                "request_action": request["action"],
+                "status": "pending",
+                "result": None,
+                "finished_at": None,
+                "reason": event["reason"],
+                "payload": payload,
+            }
+        elif action == "finish":
+            request_id = event["request_id"]
+            if not isinstance(request_id, str) or request_id not in entries:
+                raise QueueError("finish event targets an unknown request")
+            entry = entries[request_id]
+            if entry["status"] != "pending":
+                raise QueueError("finish event targets a non-pending request")
+            if (
+                event["agent_id"] != entry["agent_id"]
+                or event["origin"] != entry["origin"]
+                or event["request_action"] != entry["request_action"]
+                or event["payload"] is not None
+                or event["result"] not in FINISH_RESULTS
+            ):
+                raise QueueError("finish event metadata differs from queued request")
+            bounded_text(event["reason"], "event reason", MAX_REASON)
+            if entry["request_action"] == "withdraw" and event["result"] != "withdrawn":
+                raise QueueError("withdrawal can only finish as withdrawn")
+            entry["status"] = "finished"
+            entry["result"] = event["result"]
+            entry["finished_at"] = utc_text(event_at)
+            entry["reason"] = event["reason"]
+        else:
+            raise QueueError(f"queue event {expected_id} has an invalid action")
+        head = record_hash(event)
+    return {
+        "enabled": enabled,
+        "head": head,
+        "entries": entries,
+        "accepted_applications": accepted_applications,
+        "last_at": previous_time,
+    }
+
+
+def load_events(directory: Path) -> tuple[list[dict[str, Any]], int]:
+    path = directory / LEDGER_NAME
+    if not path.exists():
+        raise QueueError("intake queue is not initialized")
+    data = read_regular(path, "intake queue ledger", MAX_LEDGER_BYTES)
+    events: list[dict[str, Any]] = []
+    for line_number, line in enumerate(data.splitlines(), start=1):
+        if not line.strip():
+            raise QueueError(f"queue ledger has an empty line at {line_number}")
+        events.append(load_json_bytes(line, f"queue event {line_number}"))
+    derive_state(events)
+    return events, len(data)
+
+
+def write_events(
+    directory: Path,
+    events: list[dict[str, Any]],
+    *,
+    request_action: str | None = None,
+) -> None:
+    content = b"".join(canonical_bytes(event) for event in events)
+    limit = (
+        MAX_LEDGER_BYTES - WITHDRAWAL_RESERVE_BYTES
+        if request_action == "apply"
+        else MAX_LEDGER_BYTES
+    )
+    if len(content) > limit:
+        if request_action == "apply":
+            raise QueueError("application ledger reserve is exhausted")
+        raise QueueError("intake queue ledger would exceed its size limit")
+    atomic_write(directory / LEDGER_NAME, content, 0o600)
+
+
+def new_event(
+    events: list[dict[str, Any]],
+    *,
+    at: dt.datetime,
+    action: str,
+    request_id: str | None = None,
+    agent_id: str | None = None,
+    origin: str | None = None,
+    request_action: str | None = None,
+    payload: dict[str, Any] | None = None,
+    result: str | None = None,
+    reason: str,
+) -> dict[str, Any]:
+    state = derive_state(events)
+    if state["last_at"] is not None and at < state["last_at"]:
+        raise QueueError("new queue event timestamp would roll backward")
+    return {
+        "schema_version": 1,
+        "event_id": len(events) + 1,
+        "at": utc_text(at),
+        "action": action,
+        "request_id": request_id,
+        "agent_id": agent_id,
+        "origin": origin,
+        "request_action": request_action,
+        "payload": payload,
+        "result": result,
+        "reason": bounded_text(reason, "reason", MAX_REASON),
+        "previous_sha256": state["head"],
+    }
+
+
+def obtain_intake_verification(
+    request: Path,
+    signature: Path,
+    verification: Path | None,
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    command = [
+        str(INTAKE),
+        "verify-origin" if verification is None else "verify-files",
+        "--request",
+        str(request.expanduser().absolute()),
+        "--signature",
+        str(signature.expanduser().absolute()),
+    ]
+    if verification is not None:
+        command.extend(["--verification", str(verification.expanduser().absolute())])
+    command.extend(["--at", utc_text(at)])
+    result = subprocess.run(command, capture_output=True)
+    if len(result.stdout) > MAX_INTAKE_OUTPUT_BYTES:
+        raise QueueError("intake verification output exceeds its size limit")
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", errors="replace").strip().splitlines()
+        raise QueueError(detail[-1] if detail else "signed intake verification failed")
+    return normalize_intake_result(
+        load_json_bytes(result.stdout, "intake verification output"),
+        at=at,
+    )
+
+
+def append_event(
+    state_path: Path,
+    event_factory: Any,
+    *,
+    request_action: str | None = None,
+) -> dict[str, Any]:
+    with locked_state(state_path) as directory:
+        events, _size = load_events(directory)
+        event = event_factory(events)
+        derive_state([*events, event])
+        write_events(
+            directory,
+            [*events, event],
+            request_action=request_action,
+        )
+        return event
+
+
+def queue_status(state: dict[str, Any], *, as_of: dt.datetime, ledger_bytes: int) -> dict[str, Any]:
+    entries = state["entries"]
+    pending = pending_entries(entries)
+    recent = window_applications(state["accepted_applications"], at=as_of)
+    origin_counts: dict[str, int] = {}
+    for item in recent:
+        origin_counts[item["origin"]] = origin_counts.get(item["origin"], 0) + 1
+    return {
+        "schema_version": 1,
+        "as_of": utc_text(as_of),
+        "enabled_for_applications": state["enabled"],
+        "withdrawals_accepted_while_disabled": True,
+        "pending": {
+            "total": len(pending),
+            "applications": sum(
+                1 for entry in pending if entry["request_action"] == "apply"
+            ),
+            "withdrawals": sum(
+                1 for entry in pending if entry["request_action"] == "withdraw"
+            ),
+        },
+        "requests_seen": len(entries),
+        "ledger": {
+            "bytes": ledger_bytes,
+            "maximum_bytes": MAX_LEDGER_BYTES,
+            "application_reserve_bytes": WITHDRAWAL_RESERVE_BYTES,
+            "head_sha256": state["head"],
+        },
+        "capacity": {
+            "pending_applications": MAX_PENDING_APPLICATIONS,
+            "pending_total": MAX_PENDING_TOTAL,
+        },
+        "rate_window": {
+            "seconds": int(RATE_WINDOW.total_seconds()),
+            "accepted_applications": len(recent),
+            "global_limit": GLOBAL_LIMIT,
+            "per_origin_limit": PER_ORIGIN_LIMIT,
+            "origins": dict(sorted(origin_counts.items())),
+        },
+    }
+
+
+def next_entry(state: dict[str, Any]) -> dict[str, Any] | None:
+    pending = pending_entries(state["entries"])
+    if not pending:
+        return None
+    pending.sort(
+        key=lambda entry: (
+            0 if entry["request_action"] == "withdraw" else 1,
+            entry["event_id"],
+        )
+    )
+    return pending[0]
+
+
+def public_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    verification = entry["payload"]["verification"]
+    return {
+        "event_id": entry["event_id"],
+        "received_at": entry["received_at"],
+        "request_id": entry["request_id"],
+        "action": entry["request_action"],
+        "agent_id": entry["agent_id"],
+        "name": verification["identity"]["name"],
+        "origin": entry["origin"],
+        "manifest_sha256": verification["request"]["manifest_sha256"],
+        "sequence": verification["request"]["sequence"],
+        "evidence": verification["evidence"],
+        "request_sha256": verification["request_sha256"],
+        "signature_sha256": entry["payload"]["signature_sha256"],
+        "expires_at": verification["request"]["expires_at"],
+    }
+
+
+def output_directory(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise QueueError("output directory must be an absolute non-root path")
+    reject_symlink_ancestors(absolute)
+    absolute.mkdir(mode=0o700, parents=True, exist_ok=True)
+    absolute.chmod(0o700)
+    if absolute.is_symlink() or not absolute.is_dir():
+        raise QueueError("output directory must be a nonsymlink directory")
+    return absolute
+
+
+def materialize_entry(entry: dict[str, Any], directory: Path) -> None:
+    output = output_directory(directory)
+    paths = {
+        "wywa-intake.json": canonical_bytes(
+            entry["payload"]["verification"]["request"]
+        ),
+        "wywa-intake.sig": base64.b64decode(
+            entry["payload"]["signature_b64"],
+            validate=True,
+        ),
+        "queue-verification.json": canonical_bytes(
+            entry["payload"]["verification"]
+        ),
+    }
+    if any((output / name).exists() for name in paths):
+        raise QueueError("queue output already contains request material")
+    for name, content in paths.items():
+        atomic_write(output / name, content, 0o600)
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Maintain a private replay-resistant queue for signed WYWA registry "
+            "applications and withdrawals. This tool opens no network listener "
+            "and cannot mutate the curated catalog."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+
+    initialize = subcommands.add_parser(
+        "init",
+        help="create a private queue disabled for applications",
+    )
+    initialize.add_argument("--state", required=True, type=Path)
+
+    for command in ("enable", "disable"):
+        child = subcommands.add_parser(
+            command,
+            help=f"{command} new applications; withdrawals remain accepted",
+        )
+        child.add_argument("--state", required=True, type=Path)
+        child.add_argument("--reason", required=True)
+        child.add_argument("--at")
+
+    submit = subcommands.add_parser(
+        "submit",
+        help="verify and enqueue one signed application or withdrawal",
+    )
+    submit.add_argument("--state", required=True, type=Path)
+    submit.add_argument("--request", required=True, type=Path)
+    submit.add_argument("--signature", required=True, type=Path)
+    submit.add_argument(
+        "--verification",
+        type=Path,
+        help="retained proof; valid only for withdrawal, never application",
+    )
+    submit.add_argument("--at")
+
+    next_request = subcommands.add_parser(
+        "next",
+        help="show the next pending withdrawal or application",
+    )
+    next_request.add_argument("--state", required=True, type=Path)
+    next_request.add_argument("--as-of")
+    next_request.add_argument("--output", type=Path)
+
+    finish = subcommands.add_parser("finish", help="finish one pending review")
+    finish.add_argument("--state", required=True, type=Path)
+    finish.add_argument("--request-id", required=True)
+    finish.add_argument("--result", required=True, choices=FINISH_RESULTS)
+    finish.add_argument("--reason", required=True)
+    finish.add_argument("--at")
+
+    status = subcommands.add_parser("status", help="inspect bounded private queue state")
+    status.add_argument("--state", required=True, type=Path)
+    status.add_argument("--as-of")
+    return result
+
+
+def parse_at(value: str | None) -> dt.datetime:
+    return utc_now() if value is None else parse_moment(value, "--at")
+
+
+def emit(record: object) -> None:
+    print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    if arguments.command == "init":
+        directory = state_directory(arguments.state, create=True)
+        ledger = directory / LEDGER_NAME
+        if ledger.exists():
+            raise QueueError("intake queue is already initialized")
+        atomic_write(ledger, b"", 0o600)
+        emit(
+            {
+                "state": str(directory),
+                "initialized": True,
+                "enabled_for_applications": False,
+            }
+        )
+        return 0
+
+    if arguments.command in {"enable", "disable"}:
+        event_at = parse_at(arguments.at)
+
+        def setting_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            state = derive_state(events)
+            target = arguments.command == "enable"
+            if state["enabled"] == target:
+                raise QueueError(f"applications are already {arguments.command}d")
+            return new_event(
+                events,
+                at=event_at,
+                action=arguments.command,
+                reason=arguments.reason,
+            )
+
+        event = append_event(arguments.state, setting_factory)
+        emit(
+            {
+                "event_id": event["event_id"],
+                "enabled_for_applications": arguments.command == "enable",
+                "withdrawals_accepted_while_disabled": True,
+            }
+        )
+        return 0
+
+    if arguments.command == "submit":
+        event_at = parse_at(arguments.at)
+        request_bytes = read_regular(
+            arguments.request,
+            "request",
+            MAX_REQUEST_BYTES,
+        )
+        signature_bytes = read_regular(
+            arguments.signature,
+            "signature",
+            MAX_SIGNATURE_BYTES,
+        )
+        unverified_request = normalize_request(
+            load_json_bytes(request_bytes, "request"),
+            at=event_at,
+        )
+        if request_bytes != canonical_bytes(unverified_request):
+            raise QueueError("submitted request is not canonical")
+        with locked_state(arguments.state) as directory:
+            early_events, _early_size = load_events(directory)
+            early_state = derive_state(early_events)
+        if unverified_request["request_id"] in early_state["entries"]:
+            raise QueueError("request_id has already been seen")
+        if (
+            unverified_request["action"] == "apply"
+            and not early_state["enabled"]
+        ):
+            raise QueueError("applications are disabled")
+        verification = obtain_intake_verification(
+            arguments.request,
+            arguments.signature,
+            arguments.verification,
+            at=event_at,
+        )
+        request = verification["request"]
+        if request != unverified_request:
+            raise QueueError("verified intake request differs from submitted request")
+        payload = {
+            "verification": verification,
+            "signature_b64": base64.b64encode(signature_bytes).decode("ascii"),
+            "signature_sha256": hashlib.sha256(signature_bytes).hexdigest(),
+        }
+
+        def submit_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            state = derive_state(events)
+            if request["request_id"] in state["entries"]:
+                raise QueueError("request_id has already been seen")
+            if request["action"] == "apply":
+                if not state["enabled"]:
+                    raise QueueError("applications are disabled")
+                recent = window_applications(
+                    state["accepted_applications"],
+                    at=event_at,
+                )
+                origin_used = sum(
+                    1 for item in recent if item["origin"] == request["origin"]
+                )
+                if origin_used >= PER_ORIGIN_LIMIT:
+                    raise QueueError(
+                        f"per-origin application limit reached "
+                        f"({origin_used}/{PER_ORIGIN_LIMIT} in one hour)"
+                    )
+                if len(recent) >= GLOBAL_LIMIT:
+                    raise QueueError(
+                        f"global application limit reached "
+                        f"({len(recent)}/{GLOBAL_LIMIT} in one hour)"
+                    )
+                pending = pending_entries(state["entries"])
+                if (
+                    sum(
+                        1
+                        for entry in pending
+                        if entry["request_action"] == "apply"
+                    )
+                    >= MAX_PENDING_APPLICATIONS
+                ):
+                    raise QueueError("pending application capacity is full")
+                if len(pending) >= MAX_PENDING_TOTAL:
+                    raise QueueError("total pending capacity is full")
+            return new_event(
+                events,
+                at=event_at,
+                action="submit",
+                request_id=request["request_id"],
+                agent_id=request["agent_id"],
+                origin=request["origin"],
+                request_action=request["action"],
+                payload=payload,
+                reason="authenticated signed consent request accepted",
+            )
+
+        event = append_event(
+            arguments.state,
+            submit_factory,
+            request_action=request["action"],
+        )
+        emit(
+            {
+                "event_id": event["event_id"],
+                "request_id": request["request_id"],
+                "action": request["action"],
+                "agent_id": request["agent_id"],
+                "origin": request["origin"],
+                "evidence": verification["evidence"],
+                "queued": True,
+            }
+        )
+        return 0
+
+    if arguments.command in {"next", "status"}:
+        as_of = parse_at(arguments.as_of)
+        with locked_state(arguments.state) as directory:
+            events, ledger_bytes = load_events(directory)
+            state = derive_state(events)
+        if arguments.command == "status":
+            emit(queue_status(state, as_of=as_of, ledger_bytes=ledger_bytes))
+            return 0
+        entry = next_entry(state)
+        if entry is None:
+            emit({"pending": False})
+            return 0
+        if arguments.output is not None:
+            materialize_entry(entry, arguments.output)
+        result = {"pending": True, **public_entry(entry)}
+        if arguments.output is not None:
+            result["output"] = str(arguments.output.expanduser().absolute())
+        emit(result)
+        return 0
+
+    if arguments.command == "finish":
+        event_at = parse_at(arguments.at)
+        request_id = arguments.request_id
+        if REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+            raise QueueError("request_id must be 32 lowercase hexadecimal characters")
+
+        def finish_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            state = derive_state(events)
+            entry = state["entries"].get(request_id)
+            if entry is None:
+                raise QueueError("request_id has not been seen")
+            if entry["status"] != "pending":
+                raise QueueError("request is not pending")
+            if (
+                entry["request_action"] == "withdraw"
+                and arguments.result != "withdrawn"
+            ):
+                raise QueueError("withdrawal can only finish as withdrawn")
+            return new_event(
+                events,
+                at=event_at,
+                action="finish",
+                request_id=request_id,
+                agent_id=entry["agent_id"],
+                origin=entry["origin"],
+                request_action=entry["request_action"],
+                result=arguments.result,
+                reason=arguments.reason,
+            )
+
+        event = append_event(arguments.state, finish_factory)
+        emit(
+            {
+                "event_id": event["event_id"],
+                "request_id": request_id,
+                "result": arguments.result,
+                "pending": False,
+            }
+        )
+        return 0
+
+    raise QueueError("unknown command")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except QueueError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

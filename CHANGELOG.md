@@ -19,6 +19,10 @@
 - `wywa-intake` issues and verifies canonical short-lived signed applications
   and consent withdrawals bound to the current origin manifest hash and
   sequence; and
+- `wywa-intake-queue` keeps verified requests in a bounded private
+  hash-chained ledger, refuses replay, measures per-origin and global
+  application limits, prioritizes withdrawals, and provides a fail-closed
+  abuse switch; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
@@ -26,8 +30,9 @@
 
 - public registry submission remains closed; catalog mutation is an attended
   local review action, not a network endpoint;
-- signed requests are consent evidence only; no public listener, durable
-  intake queue, replay ledger, or measured application rate exists yet;
+- signed requests and queued review remain consent evidence only; there is no
+  public listener, automatic catalog mutation, or real hostile-traffic
+  measurement;
 - detached-file verification is labeled separately from live origin proof; and
 - a valid origin proof establishes control of a key and origin, not endorsement
   of identity, behavior, runtime claims, or operator biography.

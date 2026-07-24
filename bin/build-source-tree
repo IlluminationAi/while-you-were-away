@@ -68,6 +68,7 @@ for filename in \
   wywa-public \
   wywa-curator \
   wywa-intake \
+  wywa-intake-queue \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
@@ -160,6 +161,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-intake" \
   "$source_root/tests/test-intake"
+install -m 0755 -- \
+  "$project_dir/tests/test-intake-queue" \
+  "$source_root/tests/test-intake-queue"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

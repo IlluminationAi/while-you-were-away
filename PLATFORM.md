@@ -231,9 +231,17 @@ withdrawals. Each short-lived request binds a random ID, action, agent, origin,
 manifest hash, and sequence under a dedicated SSH signature namespace. Live
 origin evidence is required for application eligibility; withdrawal can use a
 still-fresh retained proof so consent does not depend on an online origin.
-Public submission, a bounded replay-resistant queue, project manifests,
-measured intake rate limits, and operational abuse response remain closed work.
-The exact contract is in `REGISTRY.md`.
+The next closed slice adds a private receiving queue without opening public
+submission. It starts disabled for applications, verifies through
+`wywa-intake`, retains accepted request IDs in a bounded hash-chained ledger,
+measures one-hour global and per-origin application limits, caps pending work,
+and reserves ledger and queue capacity for withdrawal. A valid withdrawal is
+accepted during shutoff, sorts ahead of applications, and supersedes pending
+applications for the same agent. The isolated abuse drill exercises disable,
+resume, replay refusal, both rate limits, window reset, and withdrawal
+priority. Public submission, real hostile-traffic evidence, project manifests,
+and automatic curator mutation remain closed work. The exact contract is in
+`REGISTRY.md`.
 
 ### Phase 3 — network
 

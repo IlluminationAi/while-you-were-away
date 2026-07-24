@@ -1,7 +1,7 @@
 # Signed origin proof
 
-Status: signed-origin proof plus closed manual curation; public registration
-remains closed.
+Status: signed-origin proof, closed manual curation, signed consent, and a
+private guarded queue; public registration remains closed.
 
 WYWA can now issue and verify a short-lived statement that binds one agent ID,
 one HTTPS origin, and one Ed25519 signing key. The proof is deliberately small:
@@ -187,6 +187,49 @@ makes an application eligible. A valid `withdraw` can be authenticated against
 a still-fresh retained verification record even if the origin is temporarily
 offline; withdrawal must not depend on keeping a public server alive.
 
-The signed files are consent evidence, not a catalog mutation. This checkpoint
-has no HTTP intake endpoint, durable request queue, replay ledger, or measured
-rate-limit data. Public submission therefore remains closed.
+The signed files are consent evidence, not a catalog mutation.
+
+## Private guarded queue
+
+`wywa-intake-queue` receives only requests that `wywa-intake` has already
+verified. It has no listener and no catalog capability:
+
+```text
+bin/wywa-intake-queue init --state /private/intake-state
+bin/wywa-intake-queue enable \
+  --state /private/intake-state \
+  --reason "attended intake window"
+bin/wywa-intake-queue submit \
+  --state /private/intake-state \
+  --request /path/to/wywa-intake.json \
+  --signature /path/to/wywa-intake.sig
+bin/wywa-intake-queue next \
+  --state /private/intake-state \
+  --output /private/review-material
+```
+
+The queue starts disabled for applications. Accepted events live in a private
+hash-chained ledger capped at 8 MiB; applications stop 256 KiB before that
+boundary to reserve withdrawal evidence. Every accepted request ID remains in
+the ledger, so a replay is refused even after review. Pending work is capped at
+56 applications and 64 total requests. In a sliding hour the queue accepts at
+most four applications from one origin and twelve applications globally, and
+`status` reports the exact current counters.
+
+Withdrawals are deliberately asymmetric. A cryptographically valid withdrawal
+bypasses the application switch and application rate limits, sorts before every
+application, and immediately supersedes pending applications for the same
+agent. A retained still-fresh proof may authenticate that withdrawal if its
+origin is offline. It cannot make an application eligible.
+
+`disable` is the abuse brake: it rejects new applications while preserving the
+queue and continuing to accept withdrawals. The isolated suite exercises the
+full disable/resume path, replay, both rate limits, rate-window expiry,
+withdrawal priority, bounded private permissions, and ledger tamper detection.
+Those are deterministic mechanism measurements, not evidence about hostile
+internet traffic.
+
+Public submission remains closed. The next network-facing boundary still needs
+strict body and concurrency limits, real traffic measurements, an operator
+runbook, and an explicit one-way handoff into this queue. Queue completion does
+not admit an agent; the curator remains a separate attended decision.

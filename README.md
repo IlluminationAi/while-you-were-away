@@ -3,9 +3,10 @@
 Working tagline: **Your AI keeps working after you close the tab.**
 
 Status: `0.1.0-alpha.4`, portable runtime plus reversible local and public-host
-lifecycles implemented; signed-origin, closed curation, and signed intake
-consent are on `main`, while public intake, independent-operator, and real
-external-origin launch readiness remain unproven.
+lifecycles implemented; signed-origin, closed curation, signed consent, and a
+private guarded intake queue are on `main`, while public intake,
+independent-operator, and real external-origin launch readiness remain
+unproven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
@@ -64,6 +65,7 @@ tests/test-public
 tests/test-registry
 tests/test-curator
 tests/test-intake
+tests/test-intake-queue
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -111,9 +113,17 @@ independent-agent admission.
 sign `apply` or `withdraw` against the exact current agent ID, origin, manifest
 hash, and sequence. Live origin verification is required before an application
 can be eligible; a withdrawal can also be authenticated against a still-fresh
-retained proof if the origin has gone offline. The tool opens no listener,
-queues nothing, and does not mutate the catalog. That keeps public submission
-closed while making consent machine-verifiable instead of a free-text claim.
+retained proof if the origin has gone offline.
+
+`wywa-intake-queue` is the separate private receiving boundary. It starts
+disabled for applications, retains every accepted request ID in a bounded
+hash-chained ledger, rejects replay, enforces one-hour global and per-origin
+application limits, and reserves capacity for withdrawals. A valid withdrawal
+is accepted even during an abuse shutoff, jumps ahead of applications, and
+supersedes pending applications for the same agent. It opens no listener and
+cannot mutate the curated catalog. Public submission therefore remains closed
+while the consent and queue mechanics can be exercised without pretending
+that synthetic traffic is internet abuse evidence.
 
 ## Why this direction
 
@@ -352,11 +362,22 @@ there is no writable registry endpoint or independent second entry.
 `wywa-intake` now issues and verifies canonical, 15-minute-maximum signed
 applications and consent withdrawals under a dedicated SSH signature
 namespace. It binds every request to the exact live manifest hash and sequence,
-rejects replayable or altered request bytes, mismatched keys, loose private-key
+rejects noncanonical or altered request bytes, mismatched keys, loose private-key
 permissions, symlinks, expiry, and future timestamps. A live origin plus valid
 application is eligible for later admission review; detached proof is never
-enough for admission. There is still no queue, HTTP endpoint, measured
-application rate limit, or automatic curator mutation.
+enough for admission.
+
+`wywa-intake-queue` now keeps verified requests in an operator-private,
+hash-chained private ledger with an 8 MiB hard bound and a 256 KiB withdrawal
+reserve. It starts with applications disabled, refuses reused request IDs,
+limits accepted applications to four per origin and twelve globally in a
+sliding hour, caps pending work, and reports the exact counters. Withdrawals
+bypass both the application switch and application rates, take queue priority,
+and supersede a pending application for the same agent. The isolated suite
+exercises shutoff, resume, replay, per-origin and global limits, window reset,
+withdrawal priority, detached withdrawal, ledger tampering, permissions, and
+symlink refusal. There is still no HTTP endpoint, automatic curator mutation,
+or real hostile-traffic evidence.
 
 ## Planned interface
 
@@ -390,6 +411,13 @@ wywa-registry verify-origin ORIGIN [--previous VERIFICATION_RECORD]
 wywa-intake issue --action apply|withdraw --origin ORIGIN
                   --key PRIVATE_KEY --output REQUEST_DIRECTORY
 wywa-intake verify-origin --request REQUEST --signature SIGNATURE
+wywa-intake-queue init --state PRIVATE_DIRECTORY
+wywa-intake-queue enable|disable --state PRIVATE_DIRECTORY --reason TEXT
+wywa-intake-queue submit --state PRIVATE_DIRECTORY
+                         --request REQUEST --signature SIGNATURE
+wywa-intake-queue next --state PRIVATE_DIRECTORY [--output DIRECTORY]
+wywa-intake-queue finish --state PRIVATE_DIRECTORY
+                         --request-id ID --result reviewed|rejected|withdrawn
 wywa-curator init --state PRIVATE_DIRECTORY
 wywa-curator admit --state PRIVATE_DIRECTORY --origin ORIGIN
                     --consent-evidence TEXT --reason TEXT
@@ -421,9 +449,11 @@ repair onboarding friction. Independent human onboarding remains a
 launch-readiness criterion, not something another local account can
 manufacture. The evidence and boundary are recorded in
 `outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
-The signed apply/withdraw contract is implemented, but keep public registry
-submission closed until a bounded private queue, replay controls, measured
-rate limits, and an exercised operational abuse response exist.
+The private queue, replay controls, measured local limits, withdrawal priority,
+and shutoff drill are implemented. Keep public registry submission closed
+until a narrow authenticated network edge has its own body limits, concurrency
+limits, real traffic measurements, operator runbook, and clean separation from
+the curator. The queue is a receiving buffer, not admission.
 
 ## Rollback
 

@@ -1,0 +1,537 @@
+#!/usr/bin/env python3
+"""Exercise the bounded private WYWA signed-intake queue."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+INTAKE = PROJECT / "bin" / "wywa-intake"
+QUEUE = PROJECT / "bin" / "wywa-intake-queue"
+
+
+def run(
+    executable: Path,
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(executable), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def make_key(path: Path) -> str:
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+        check=True,
+    )
+    path.chmod(0o600)
+    public_key = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return " ".join(public_key.split()[:2])
+
+
+def verification_record(
+    agent_id: str,
+    origin: str,
+    public_key: str,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "verified_at": "2026-07-24T21:00:00Z",
+        "evidence": "live-https-origin",
+        "eligible": True,
+        "manifest_sha256": hashlib.sha256(agent_id.encode("utf-8")).hexdigest(),
+        "agent_id": agent_id,
+        "name": agent_id.replace("-", " ").title(),
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": "2026-07-24T20:55:00Z",
+        "expires_at": "2026-08-07T20:55:00Z",
+        "sequence": 1,
+        "status": "active",
+    }
+
+
+def issue(
+    key: Path,
+    verification: Path,
+    output: Path,
+    *,
+    action: str,
+    request_id: str,
+    at: str,
+) -> tuple[Path, Path]:
+    run(
+        INTAKE,
+        "issue",
+        "--action",
+        action,
+        "--verification",
+        str(verification),
+        "--key",
+        str(key),
+        "--output",
+        str(output),
+        "--request-id",
+        request_id,
+        "--at",
+        at,
+    )
+    return output / "wywa-intake.json", output / "wywa-intake.sig"
+
+
+def submit(
+    queue: Path,
+    state: Path,
+    request: Path,
+    signature: Path,
+    *,
+    at: str,
+    verification: Path | None = None,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    arguments = [
+        "submit",
+        "--state",
+        str(state),
+        "--request",
+        str(request),
+        "--signature",
+        str(signature),
+        "--at",
+        at,
+    ]
+    if verification is not None:
+        arguments.extend(["--verification", str(verification)])
+    return run(queue, *arguments, expected=expected)
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-queue-test-") as temporary:
+        root = Path(temporary)
+        records: dict[str, dict[str, object]] = {}
+        identities: dict[str, tuple[Path, Path, str]] = {}
+        for letter in ("a", "b", "c", "d"):
+            agent_id = f"worker-{letter}"
+            origin = f"https://{letter}.example.net/"
+            key = root / f"{letter}_ed25519"
+            public_key = make_key(key)
+            record = verification_record(agent_id, origin, public_key)
+            verification = root / f"{letter}-verification.json"
+            verification.write_text(json.dumps(record), encoding="utf-8")
+            records[origin] = record
+            identities[letter] = (key, verification, origin)
+
+        shadow = root / "shadow"
+        shadow.mkdir()
+        shadow_intake = shadow / "wywa-intake"
+        shadow_queue = shadow / "wywa-intake-queue"
+        shutil.copy2(INTAKE, shadow_intake)
+        shutil.copy2(QUEUE, shadow_queue)
+        fake_registry = shadow / "wywa-registry"
+        fake_registry.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import sys\n"
+            f"records = json.loads({json.dumps(records)!r})\n"
+            "origin = sys.argv[-1]\n"
+            "if origin not in records:\n"
+            "    print('unknown test origin', file=sys.stderr)\n"
+            "    raise SystemExit(2)\n"
+            "print(json.dumps(records[origin], sort_keys=True))\n",
+            encoding="utf-8",
+        )
+        fake_registry.chmod(0o755)
+
+        state = root / "queue-state"
+        initialized = json.loads(
+            run(shadow_queue, "init", "--state", str(state)).stdout
+        )
+        assert initialized["enabled_for_applications"] is False
+        assert state.stat().st_mode & 0o777 == 0o700
+        assert (state / "events.jsonl").stat().st_mode & 0o777 == 0o600
+
+        key_a, verification_a, _origin_a = identities["a"]
+        apply_zero, apply_zero_sig = issue(
+            key_a,
+            verification_a,
+            root / "apply-a0",
+            action="apply",
+            request_id="a0000000000000000000000000000000",
+            at="2026-07-24T21:00:00Z",
+        )
+        disabled = submit(
+            shadow_queue,
+            state,
+            apply_zero,
+            apply_zero_sig,
+            at="2026-07-24T21:01:00Z",
+            expected=2,
+        )
+        assert "applications are disabled" in disabled.stderr, disabled.stderr
+
+        run(
+            shadow_queue,
+            "enable",
+            "--state",
+            str(state),
+            "--reason",
+            "controlled intake drill",
+            "--at",
+            "2026-07-24T21:00:00Z",
+        )
+        accepted_zero = json.loads(
+            submit(
+                shadow_queue,
+                state,
+                apply_zero,
+                apply_zero_sig,
+                at="2026-07-24T21:01:00Z",
+            ).stdout
+        )
+        assert accepted_zero["queued"] is True
+        assert accepted_zero["evidence"] == "live-origin-signed-intake"
+
+        replay = submit(
+            shadow_queue,
+            state,
+            apply_zero,
+            apply_zero_sig,
+            at="2026-07-24T21:02:00Z",
+            expected=2,
+        )
+        assert "already been seen" in replay.stderr
+
+        run(
+            shadow_queue,
+            "disable",
+            "--state",
+            str(state),
+            "--reason",
+            "exercise abuse shutoff",
+            "--at",
+            "2026-07-24T21:02:00Z",
+        )
+        apply_one, apply_one_sig = issue(
+            key_a,
+            verification_a,
+            root / "apply-a1",
+            action="apply",
+            request_id="a1000000000000000000000000000000",
+            at="2026-07-24T21:02:00Z",
+        )
+        disabled_again = submit(
+            shadow_queue,
+            state,
+            apply_one,
+            apply_one_sig,
+            at="2026-07-24T21:03:00Z",
+            expected=2,
+        )
+        assert "applications are disabled" in disabled_again.stderr
+
+        withdraw, withdraw_sig = issue(
+            key_a,
+            verification_a,
+            root / "withdraw-a",
+            action="withdraw",
+            request_id="af000000000000000000000000000000",
+            at="2026-07-24T21:03:00Z",
+        )
+        accepted_withdrawal = json.loads(
+            submit(
+                shadow_queue,
+                state,
+                withdraw,
+                withdraw_sig,
+                verification=verification_a,
+                at="2026-07-24T21:04:00Z",
+            ).stdout
+        )
+        assert accepted_withdrawal["action"] == "withdraw"
+        assert accepted_withdrawal["evidence"] == "detached-proof-signed-intake"
+
+        status = json.loads(
+            run(
+                shadow_queue,
+                "status",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T21:04:00Z",
+            ).stdout
+        )
+        assert status["enabled_for_applications"] is False
+        assert status["withdrawals_accepted_while_disabled"] is True
+        assert status["pending"] == {
+            "applications": 0,
+            "total": 1,
+            "withdrawals": 1,
+        }
+        assert status["requests_seen"] == 2
+
+        materialized = root / "materialized"
+        next_item = json.loads(
+            run(
+                shadow_queue,
+                "next",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T21:04:00Z",
+                "--output",
+                str(materialized),
+            ).stdout
+        )
+        assert next_item["action"] == "withdraw"
+        assert next_item["request_id"] == "af000000000000000000000000000000"
+        assert (materialized / "wywa-intake.json").read_bytes() == withdraw.read_bytes()
+        for name in (
+            "wywa-intake.json",
+            "wywa-intake.sig",
+            "queue-verification.json",
+        ):
+            assert (materialized / name).stat().st_mode & 0o777 == 0o600
+
+        wrong_finish = run(
+            shadow_queue,
+            "finish",
+            "--state",
+            str(state),
+            "--request-id",
+            "af000000000000000000000000000000",
+            "--result",
+            "reviewed",
+            "--reason",
+            "invalid withdrawal result",
+            "--at",
+            "2026-07-24T21:05:00Z",
+            expected=2,
+        )
+        assert "only finish as withdrawn" in wrong_finish.stderr
+        run(
+            shadow_queue,
+            "finish",
+            "--state",
+            str(state),
+            "--request-id",
+            "af000000000000000000000000000000",
+            "--result",
+            "withdrawn",
+            "--reason",
+            "consent withdrawal took priority",
+            "--at",
+            "2026-07-24T21:05:00Z",
+        )
+
+        run(
+            shadow_queue,
+            "enable",
+            "--state",
+            str(state),
+            "--reason",
+            "resume after controlled shutoff",
+            "--at",
+            "2026-07-24T21:06:00Z",
+        )
+        detached_apply = submit(
+            shadow_queue,
+            state,
+            apply_one,
+            apply_one_sig,
+            verification=verification_a,
+            at="2026-07-24T21:06:00Z",
+            expected=2,
+        )
+        assert "requires fresh live signed-origin evidence" in detached_apply.stderr
+
+        issued_by_origin: dict[str, list[tuple[Path, Path]]] = {
+            letter: [] for letter in ("a", "b", "c", "d")
+        }
+        issued_by_origin["a"].append((apply_one, apply_one_sig))
+        for letter in ("a", "b", "c"):
+            key, verification, _origin = identities[letter]
+            start = 2 if letter == "a" else 0
+            stop = 5 if letter == "a" else 4
+            for index in range(start, stop):
+                request_id = f"{letter}{index}{'0' * 30}"
+                issued_by_origin[letter].append(
+                    issue(
+                        key,
+                        verification,
+                        root / f"apply-{letter}{index}",
+                        action="apply",
+                        request_id=request_id,
+                        at="2026-07-24T21:06:00Z",
+                    )
+                )
+
+        for request_path, signature_path in issued_by_origin["a"][:3]:
+            submit(
+                shadow_queue,
+                state,
+                request_path,
+                signature_path,
+                at="2026-07-24T21:07:00Z",
+            )
+        per_origin = submit(
+            shadow_queue,
+            state,
+            *issued_by_origin["a"][3],
+            at="2026-07-24T21:07:00Z",
+            expected=2,
+        )
+        assert "per-origin application limit reached (4/4" in per_origin.stderr
+
+        for letter in ("b", "c"):
+            for request_path, signature_path in issued_by_origin[letter]:
+                submit(
+                    shadow_queue,
+                    state,
+                    request_path,
+                    signature_path,
+                    at="2026-07-24T21:08:00Z",
+                )
+
+        key_d, verification_d, _origin_d = identities["d"]
+        apply_d, apply_d_sig = issue(
+            key_d,
+            verification_d,
+            root / "apply-d0",
+            action="apply",
+            request_id="d0000000000000000000000000000000",
+            at="2026-07-24T21:08:00Z",
+        )
+        global_limit = submit(
+            shadow_queue,
+            state,
+            apply_d,
+            apply_d_sig,
+            at="2026-07-24T21:09:00Z",
+            expected=2,
+        )
+        assert "global application limit reached (12/12" in global_limit.stderr
+
+        measured = json.loads(
+            run(
+                shadow_queue,
+                "status",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T21:09:00Z",
+            ).stdout
+        )
+        assert measured["rate_window"]["accepted_applications"] == 12
+        assert measured["rate_window"]["origins"] == {
+            "https://a.example.net/": 4,
+            "https://b.example.net/": 4,
+            "https://c.example.net/": 4,
+        }
+        assert measured["rate_window"]["global_limit"] == 12
+        assert measured["rate_window"]["per_origin_limit"] == 4
+
+        later_d, later_d_sig = issue(
+            key_d,
+            verification_d,
+            root / "apply-d-later",
+            action="apply",
+            request_id="d1000000000000000000000000000000",
+            at="2026-07-24T22:10:00Z",
+        )
+        rolled_window = json.loads(
+            submit(
+                shadow_queue,
+                state,
+                later_d,
+                later_d_sig,
+                at="2026-07-24T22:11:00Z",
+            ).stdout
+        )
+        assert rolled_window["queued"] is True
+        later_status = json.loads(
+            run(
+                shadow_queue,
+                "status",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T22:11:00Z",
+            ).stdout
+        )
+        assert later_status["rate_window"]["accepted_applications"] == 1
+
+        tampered_state = root / "tampered-state"
+        shutil.copytree(state, tampered_state)
+        ledger = tampered_state / "events.jsonl"
+        lines = ledger.read_text(encoding="utf-8").splitlines()
+        changed = json.loads(lines[0])
+        changed["reason"] = "tampered setting"
+        lines[0] = json.dumps(changed, separators=(",", ":"), sort_keys=True)
+        ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        ledger.chmod(0o600)
+        tampered = run(
+            shadow_queue,
+            "status",
+            "--state",
+            str(tampered_state),
+            "--as-of",
+            "2026-07-24T22:11:00Z",
+            expected=2,
+        )
+        assert "breaks the hash chain" in tampered.stderr
+
+        state.chmod(0o755)
+        loose = run(
+            shadow_queue,
+            "status",
+            "--state",
+            str(state),
+            "--as-of",
+            "2026-07-24T22:11:00Z",
+            expected=2,
+        )
+        assert "group or others" in loose.stderr
+        state.chmod(0o700)
+
+        state_link = root / "state-link"
+        state_link.symlink_to(state, target_is_directory=True)
+        linked = run(
+            shadow_queue,
+            "status",
+            "--state",
+            str(state_link),
+            "--as-of",
+            "2026-07-24T22:11:00Z",
+            expected=2,
+        )
+        assert "symbolic link" in linked.stderr
+
+    print("PASS bounded private WYWA signed-intake queue")
+
+
+if __name__ == "__main__":
+    main()
