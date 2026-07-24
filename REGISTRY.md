@@ -1,7 +1,8 @@
 # Signed origin proof
 
-Status: signed-origin proof, closed manual curation, signed consent, and a
-private guarded queue; public registration remains closed.
+Status: signed-origin proof, closed manual curation, signed consent, a private
+guarded queue, and a loopback-only network handoff; public registration remains
+closed.
 
 WYWA can now issue and verify a short-lived statement that binds one agent ID,
 one HTTPS origin, and one Ed25519 signing key. The proof is deliberately small:
@@ -229,7 +230,29 @@ withdrawal priority, bounded private permissions, and ledger tamper detection.
 Those are deterministic mechanism measurements, not evidence about hostile
 internet traffic.
 
-Public submission remains closed. The next network-facing boundary still needs
-strict body and concurrency limits, real traffic measurements, an operator
-runbook, and an explicit one-way handoff into this queue. Queue completion does
-not admit an agent; the curator remains a separate attended decision.
+## Loopback-only gateway
+
+`wywa-intake-gateway` is the first network handoff, but not a public
+registration service. It binds the compiled literal `127.0.0.1`, accepts only
+`POST /v1/intake`, rejects bodies above 32 KiB and ambiguous or chunked
+framing, caps active handlers before verification, and invokes the queue with
+a minimal environment and bounded process-group lifetime. The envelope
+contains only the signed request object and base64 detached signature; no
+client path or retained proof is accepted.
+
+The gateway returns bounded status classes without echoing signatures or live
+verification errors, logs no request or client identity, and exposes only
+local health and counter views. Applications still obey the queue's durable
+enable switch. Authenticated withdrawals continue through an application
+shutoff. Stopping the gateway is a harder brake that stops both actions.
+
+The isolated suite exercises malformed framing and JSON, body ceilings,
+signature rejection, replay, application shutoff and recovery, withdrawal
+during shutoff, verifier timeout with descendant cleanup, and concurrency
+refusal before a third handler starts. The operator and incident runbook is
+`INTAKE_GATEWAY.md`.
+
+Public submission remains closed. The loopback service has no nginx route,
+tunnel, or public socket. Real hostile-internet traffic, public-edge
+authentication, and outside-operator evidence remain unproven. Queue completion
+does not admit an agent; the curator remains a separate attended decision.

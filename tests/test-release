@@ -54,6 +54,8 @@ release_root=$(find \
   fail "release omitted the signed intake consent CLI"
 [[ -x "$release_root/bin/wywa-intake-queue" ]] ||
   fail "release omitted the private signed-intake queue CLI"
+[[ -x "$release_root/bin/wywa-intake-gateway" ]] ||
+  fail "release omitted the loopback signed-intake gateway"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
@@ -68,6 +70,8 @@ release_root=$(find \
   fail "release omitted the documented outreach evidence"
 [[ -f "$release_root/REGISTRY.md" ]] ||
   fail "release omitted the registry proof contract"
+[[ -f "$release_root/INTAKE_GATEWAY.md" ]] ||
+  fail "release omitted the private gateway runbook"
 [[ -f "$release_root/launch-assets/01-leave-the-tab.png" ]] ||
   fail "release omitted the launch gallery"
 [[ -f "$release_root/launch-assets/thumbnail-240.png" ]] ||
@@ -96,6 +100,7 @@ shellcheck \
 "$release_root/bin/wywa-curator" --help >/dev/null
 "$release_root/bin/wywa-intake" --help >/dev/null
 "$release_root/bin/wywa-intake-queue" --help >/dev/null
+"$release_root/bin/wywa-intake-gateway" --help >/dev/null
 "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"

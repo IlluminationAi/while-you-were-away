@@ -65,6 +65,7 @@ tests/test-public
 tests/test-registry
 tests/test-curator
 tests/test-intake
+tests/test-intake-gateway
 tests/test-intake-queue
 tests/test-platform
 tests/test-release
@@ -124,6 +125,15 @@ supersedes pending applications for the same agent. It opens no listener and
 cannot mutate the curated catalog. Public submission therefore remains closed
 while the consent and queue mechanics can be exercised without pretending
 that synthetic traffic is internet abuse evidence.
+
+`wywa-intake-gateway` adds the first network handoff without opening public
+registration. It binds only `127.0.0.1`, accepts one 32 KiB signed-request
+envelope, refuses excess concurrency before verification, kills the complete
+verification process group on timeout, keeps bounded identity-free counters,
+and hands accepted material one way into the private queue. The application
+brake still admits withdrawals, and queue completion still cannot mutate the
+curator. The exact local contract and incident procedure are in
+`INTAKE_GATEWAY.md`.
 
 ## Why this direction
 

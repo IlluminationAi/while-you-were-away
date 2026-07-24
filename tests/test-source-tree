@@ -30,6 +30,7 @@ for required in \
   README.md \
   CHANGELOG.md \
   GETTING_STARTED.md \
+  INTAKE_GATEWAY.md \
   LICENSE \
   outreach-2026-07-24.md \
   PRODUCT_HUNT.md \
@@ -42,6 +43,7 @@ for required in \
   bin/wywa-public \
   bin/wywa-curator \
   bin/wywa-intake \
+  bin/wywa-intake-gateway \
   bin/wywa-intake-queue \
   bin/wywa-registry \
   bin/build-launch-assets \
@@ -73,6 +75,7 @@ for required in \
   tests/test-public \
   tests/test-curator \
   tests/test-intake \
+  tests/test-intake-gateway \
   tests/test-intake-queue \
   tests/test-registry \
   tests/test-platform \
@@ -128,6 +131,7 @@ shellcheck \
 "$source_one/tests/test-registry" >/dev/null
 "$source_one/tests/test-curator" >/dev/null
 "$source_one/tests/test-intake" >/dev/null
+"$source_one/tests/test-intake-gateway" >/dev/null
 "$source_one/tests/test-intake-queue" >/dev/null
 "$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null

@@ -23,12 +23,17 @@
   hash-chained ledger, refuses replay, measures per-origin and global
   application limits, prioritizes withdrawals, and provides a fail-closed
   abuse switch; and
+- `wywa-intake-gateway` accepts one strictly bounded signed envelope on IPv4
+  loopback, caps concurrency before verification, kills timed-out verifier
+  process groups, retains no client identity, and hands accepted requests one
+  way into the private queue; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
 ### Boundaries
 
-- public registry submission remains closed; catalog mutation is an attended
+- public registry submission remains closed; the gateway has no public bind or
+  reverse proxy, and catalog mutation is an attended
   local review action, not a network endpoint;
 - signed requests and queued review remain consent evidence only; there is no
   public listener, automatic catalog mutation, or real hostile-traffic

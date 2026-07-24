@@ -1,0 +1,676 @@
+#!/usr/bin/env python3
+"""Receive one bounded signed WYWA intake envelope on loopback only."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import datetime as dt
+import json
+import os
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+
+PROGRAM = Path(__file__).name
+QUEUE = Path(__file__).with_name("wywa-intake-queue")
+LISTEN_ADDRESS = "127.0.0.1"
+MAX_BODY_BYTES = 32 * 1024
+MAX_REQUEST_BYTES = 16 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_QUEUE_OUTPUT_BYTES = 16 * 1024
+MAX_ERROR_BYTES = 4096
+DEFAULT_CONCURRENCY = 4
+DEFAULT_READ_TIMEOUT = 5.0
+DEFAULT_HANDOFF_TIMEOUT = 50.0
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENVELOPE_KEYS = {"schema_version", "request", "signature_b64"}
+
+
+class GatewayError(Exception):
+    """A bounded gateway startup or envelope error."""
+
+
+class DuplicateKeyError(ValueError):
+    """A JSON object repeated a key."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise DuplicateKeyError(f"JSON repeats key: {key}")
+        result[key] = value
+    return result
+
+
+def decode_envelope(data: bytes) -> tuple[bytes, bytes, str]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise GatewayError("body is not UTF-8") from error
+    try:
+        envelope = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except DuplicateKeyError as error:
+        raise GatewayError(str(error)) from error
+    except json.JSONDecodeError as error:
+        raise GatewayError("body is not valid JSON") from error
+    if not isinstance(envelope, dict) or set(envelope) != ENVELOPE_KEYS:
+        raise GatewayError("envelope fields do not match schema version 1")
+    if envelope["schema_version"] != 1:
+        raise GatewayError("envelope has an unsupported schema")
+    request = envelope["request"]
+    if not isinstance(request, dict):
+        raise GatewayError("request must be a JSON object")
+    action = request.get("action")
+    if action not in {"apply", "withdraw"}:
+        raise GatewayError("request action must be apply or withdraw")
+    request_bytes = canonical_bytes(request)
+    if len(request_bytes) > MAX_REQUEST_BYTES:
+        raise GatewayError("request exceeds its size limit")
+    signature_text = envelope["signature_b64"]
+    if not isinstance(signature_text, str):
+        raise GatewayError("signature_b64 must be text")
+    try:
+        signature = base64.b64decode(signature_text, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise GatewayError("signature_b64 is not valid base64") from error
+    if not signature or len(signature) > MAX_SIGNATURE_BYTES:
+        raise GatewayError("signature has an invalid size")
+    return request_bytes, signature, action
+
+
+def reject_symlink_ancestors(path: Path) -> None:
+    current = path
+    while True:
+        if current.exists() and current.is_symlink():
+            raise GatewayError("status path must not contain a symbolic link")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise GatewayError("status file must not be the filesystem root")
+    reject_symlink_ancestors(absolute)
+    parent = absolute.parent
+    if not parent.is_dir() or parent.is_symlink():
+        raise GatewayError("status parent must be a nonsymlink directory")
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{absolute.name}.",
+        dir=parent,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, absolute)
+        directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+class Metrics:
+    """Keep bounded process counters without retaining client identity or bodies."""
+
+    def __init__(
+        self,
+        *,
+        port: int,
+        concurrency: int,
+        read_timeout: float,
+        status_file: Path | None,
+    ) -> None:
+        self.lock = threading.Lock()
+        self.started_at = utc_now()
+        self.port = port
+        self.concurrency = concurrency
+        self.read_timeout = read_timeout
+        self.status_file = status_file
+        self.active = 0
+        self.peak_active = 0
+        self.received = 0
+        self.accepted = 0
+        self.invalid = 0
+        self.refused = 0
+        self.rate_limited = 0
+        self.conflicts = 0
+        self.overloaded = 0
+        self.timeouts = 0
+        self.body_bytes = 0
+        self.last_completed_at: str | None = None
+
+    def record_connection(self) -> None:
+        with self.lock:
+            self.active += 1
+            self.peak_active = max(self.peak_active, self.active)
+            self._write_locked()
+
+    def finish_connection(self) -> None:
+        with self.lock:
+            self.active -= 1
+            self._write_locked()
+
+    def record_overload(self) -> None:
+        with self.lock:
+            self.overloaded += 1
+            self.last_completed_at = utc_text(utc_now())
+            self._write_locked()
+
+    def record_request(self, body_bytes: int) -> None:
+        with self.lock:
+            self.received += 1
+            self.body_bytes += body_bytes
+            self._write_locked()
+
+    def record_result(self, outcome: str) -> None:
+        with self.lock:
+            if not hasattr(self, outcome):
+                raise RuntimeError(f"unknown gateway metric: {outcome}")
+            setattr(self, outcome, getattr(self, outcome) + 1)
+            self.last_completed_at = utc_text(utc_now())
+            self._write_locked()
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return self._snapshot_locked()
+
+    def publish(self) -> None:
+        with self.lock:
+            self._write_locked()
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "started_at": utc_text(self.started_at),
+            "listener": {
+                "address": LISTEN_ADDRESS,
+                "port": self.port,
+                "loopback_only": True,
+            },
+            "limits": {
+                "body_bytes": MAX_BODY_BYTES,
+                "concurrency": self.concurrency,
+                "read_timeout_seconds": self.read_timeout,
+            },
+            "active": self.active,
+            "peak_active": self.peak_active,
+            "requests": {
+                "received": self.received,
+                "accepted": self.accepted,
+                "invalid": self.invalid,
+                "refused": self.refused,
+                "rate_limited": self.rate_limited,
+                "conflicts": self.conflicts,
+                "overloaded": self.overloaded,
+                "timeouts": self.timeouts,
+                "body_bytes": self.body_bytes,
+            },
+            "last_completed_at": self.last_completed_at,
+            "retains_client_identity": False,
+            "curator_capability": False,
+        }
+
+    def _write_locked(self) -> None:
+        if self.status_file is not None:
+            atomic_write(self.status_file, canonical_bytes(self._snapshot_locked()))
+
+
+def bounded_error(stderr: bytes) -> str:
+    if len(stderr) > MAX_ERROR_BYTES:
+        stderr = stderr[-MAX_ERROR_BYTES:]
+    lines = stderr.decode("utf-8", errors="replace").strip().splitlines()
+    return lines[-1] if lines else "signed intake handoff failed"
+
+
+def classify_queue_error(detail: str) -> tuple[int, str, str]:
+    lowered = detail.lower()
+    if "already been seen" in lowered:
+        return 409, "conflicts", "request-id-already-seen"
+    if (
+        "rate limit reached" in lowered
+        or "capacity is full" in lowered
+        or "reserve is exhausted" in lowered
+    ):
+        return 429, "rate_limited", "intake-capacity-or-rate-limit"
+    if "applications are disabled" in lowered:
+        return 503, "refused", "applications-disabled"
+    return 422, "invalid", "signed-request-rejected"
+
+
+def run_handoff(
+    command: list[str],
+    *,
+    timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    process = subprocess.Popen(
+        command,
+        cwd="/",
+        env={
+            "PATH": SAFE_PATH,
+            "LC_ALL": "C.UTF-8",
+            "TZ": "UTC",
+            "HOME": "/nonexistent",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(
+        command,
+        process.returncode,
+        stdout,
+        stderr,
+    )
+
+
+class LimitedHTTPServer(ThreadingHTTPServer):
+    """Refuse excess sockets before allocating another handler thread."""
+
+    daemon_threads = True
+    block_on_close = True
+    allow_reuse_address = True
+
+    def __init__(
+        self,
+        server_address: tuple[str, int],
+        handler: type[BaseHTTPRequestHandler],
+        *,
+        state: Path,
+        concurrency: int,
+        read_timeout: float,
+        handoff_timeout: float,
+        status_file: Path | None,
+    ) -> None:
+        self.state = state
+        self.read_timeout = read_timeout
+        self.handoff_timeout = handoff_timeout
+        self.slots = threading.BoundedSemaphore(concurrency)
+        self.metrics = Metrics(
+            port=server_address[1],
+            concurrency=concurrency,
+            read_timeout=read_timeout,
+            status_file=status_file,
+        )
+        super().__init__(server_address, handler, bind_and_activate=True)
+        self.metrics.port = self.server_address[1]
+        self.metrics.publish()
+
+    def process_request(
+        self,
+        request: socket.socket,
+        client_address: tuple[str, int],
+    ) -> None:
+        if not self.slots.acquire(blocking=False):
+            self.metrics.record_overload()
+            body = canonical_bytes(
+                {
+                    "accepted": False,
+                    "error": "gateway-concurrency-limit",
+                }
+            )
+            response = (
+                b"HTTP/1.1 503 Service Unavailable\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(body)}\r\n".encode("ascii")
+                + b"Connection: close\r\nRetry-After: 5\r\n\r\n"
+                + body
+            )
+            try:
+                request.sendall(response)
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        self.metrics.record_connection()
+        super().process_request(request, client_address)
+
+    def process_request_thread(
+        self,
+        request: socket.socket,
+        client_address: tuple[str, int],
+    ) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.metrics.finish_connection()
+            self.slots.release()
+
+    def handle_error(
+        self,
+        request: socket.socket,
+        client_address: tuple[str, int],
+    ) -> None:
+        del request, client_address
+        error = sys.exc_info()[1]
+        if isinstance(
+            error,
+            (BrokenPipeError, ConnectionResetError, TimeoutError),
+        ):
+            return
+        traceback.print_exc()
+
+
+class IntakeHandler(BaseHTTPRequestHandler):
+    """Serve an exact local intake route without retaining request logs."""
+
+    protocol_version = "HTTP/1.1"
+    server_version = "WYWA"
+    sys_version = ""
+
+    @property
+    def gateway(self) -> LimitedHTTPServer:
+        server = self.server
+        assert isinstance(server, LimitedHTTPServer)
+        return server
+
+    def setup(self) -> None:
+        super().setup()
+        self.connection.settimeout(self.gateway.read_timeout)
+
+    def log_message(self, _format: str, *args: object) -> None:
+        del args
+
+    def version_string(self) -> str:
+        return "WYWA"
+
+    def send_json(
+        self,
+        status: int,
+        record: dict[str, Any],
+        *,
+        retry_after: int | None = None,
+    ) -> None:
+        body = canonical_bytes(record)
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")
+        if retry_after is not None:
+            self.send_header("Retry-After", str(retry_after))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        self.close_connection = True
+
+    def reject(
+        self,
+        status: int,
+        code: str,
+        outcome: str = "invalid",
+        *,
+        retry_after: int | None = None,
+    ) -> None:
+        self.gateway.metrics.record_result(outcome)
+        self.send_json(
+            status,
+            {"accepted": False, "error": code},
+            retry_after=retry_after,
+        )
+
+    def do_GET(self) -> None:
+        if self.path == "/healthz":
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "loopback_only": True,
+                    "curator_capability": False,
+                },
+            )
+            return
+        if self.path == "/status":
+            self.send_json(200, self.gateway.metrics.snapshot())
+            return
+        self.send_json(404, {"accepted": False, "error": "route-not-found"})
+
+    def do_HEAD(self) -> None:
+        self.do_GET()
+
+    def do_POST(self) -> None:
+        if self.path != "/v1/intake":
+            self.reject(404, "route-not-found")
+            return
+        transfer_encoding = self.headers.get_all("Transfer-Encoding", [])
+        content_encoding = self.headers.get_all("Content-Encoding", [])
+        content_lengths = self.headers.get_all("Content-Length", [])
+        content_types = self.headers.get_all("Content-Type", [])
+        expects = self.headers.get_all("Expect", [])
+        if transfer_encoding or content_encoding or expects:
+            self.reject(400, "unsupported-request-framing")
+            return
+        if len(content_lengths) != 1 or len(content_types) != 1:
+            self.reject(400, "ambiguous-request-headers")
+            return
+        if content_types[0] != "application/json":
+            self.reject(415, "content-type-must-be-application-json")
+            return
+        length_text = content_lengths[0]
+        if not length_text.isascii() or not length_text.isdecimal():
+            self.reject(400, "invalid-content-length")
+            return
+        length = int(length_text)
+        if length < 2:
+            self.reject(400, "body-too-small")
+            return
+        if length > MAX_BODY_BYTES:
+            self.reject(413, "body-too-large")
+            return
+        try:
+            body = self.rfile.read(length)
+        except (TimeoutError, OSError):
+            self.reject(408, "body-read-timeout", "timeouts")
+            return
+        if len(body) != length:
+            self.reject(400, "incomplete-body")
+            return
+        self.gateway.metrics.record_request(len(body))
+        try:
+            request_bytes, signature, _action = decode_envelope(body)
+        except GatewayError:
+            self.reject(400, "invalid-envelope")
+            return
+        state = self.gateway.state
+        try:
+            with tempfile.TemporaryDirectory(prefix="wywa-intake-gateway-") as temporary:
+                root = Path(temporary)
+                request_path = root / "wywa-intake.json"
+                signature_path = root / "wywa-intake.sig"
+                request_path.write_bytes(request_bytes)
+                signature_path.write_bytes(signature)
+                request_path.chmod(0o600)
+                signature_path.chmod(0o600)
+                result = run_handoff(
+                    [
+                        str(QUEUE),
+                        "submit",
+                        "--state",
+                        str(state),
+                        "--request",
+                        str(request_path),
+                        "--signature",
+                        str(signature_path),
+                    ],
+                    timeout=self.gateway.handoff_timeout,
+                )
+        except subprocess.TimeoutExpired:
+            self.reject(504, "verification-timeout", "timeouts", retry_after=30)
+            return
+        if len(result.stdout) > MAX_QUEUE_OUTPUT_BYTES:
+            self.reject(502, "invalid-queue-response")
+            return
+        if result.returncode != 0:
+            status, outcome, code = classify_queue_error(bounded_error(result.stderr))
+            self.reject(
+                status,
+                code,
+                outcome,
+                retry_after=30 if status in {429, 503} else None,
+            )
+            return
+        try:
+            queue_result = json.loads(result.stdout)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            self.reject(502, "invalid-queue-response")
+            return
+        if not isinstance(queue_result, dict) or queue_result.get("queued") is not True:
+            self.reject(502, "invalid-queue-response")
+            return
+        self.gateway.metrics.record_result("accepted")
+        self.send_json(
+            202,
+            {
+                "accepted": True,
+                "request_id": queue_result.get("request_id"),
+                "action": queue_result.get("action"),
+                "agent_id": queue_result.get("agent_id"),
+                "origin": queue_result.get("origin"),
+            },
+        )
+
+    def do_PUT(self) -> None:
+        self.reject(405, "method-not-allowed")
+
+    def do_PATCH(self) -> None:
+        self.reject(405, "method-not-allowed")
+
+    def do_DELETE(self) -> None:
+        self.reject(405, "method-not-allowed")
+
+
+def private_state(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise GatewayError("queue state must be an absolute non-root directory")
+    reject_symlink_ancestors(absolute)
+    if not absolute.is_dir() or absolute.is_symlink():
+        raise GatewayError("queue state must be a nonsymlink directory")
+    if absolute.stat().st_mode & 0o077:
+        raise GatewayError("queue state must not be accessible by group or others")
+    return absolute
+
+
+def positive_float(value: str) -> float:
+    try:
+        result = float(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a number") from error
+    if result <= 0:
+        raise argparse.ArgumentTypeError("must be positive")
+    return result
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Receive a bounded signed-intake envelope on 127.0.0.1 and hand it "
+            "one way into the private review queue. This process has no curator "
+            "capability and retains no client identity."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+    serve = subcommands.add_parser("serve", help="run the loopback-only gateway")
+    serve.add_argument("--state", required=True, type=Path)
+    serve.add_argument("--port", type=int, default=8742)
+    serve.add_argument("--max-concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    serve.add_argument(
+        "--read-timeout",
+        type=positive_float,
+        default=DEFAULT_READ_TIMEOUT,
+    )
+    serve.add_argument(
+        "--handoff-timeout",
+        type=positive_float,
+        default=DEFAULT_HANDOFF_TIMEOUT,
+    )
+    serve.add_argument("--status-file", type=Path)
+    return result
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    if arguments.command != "serve":
+        raise GatewayError("unknown command")
+    if not 0 <= arguments.port <= 65535:
+        raise GatewayError("port must be between 0 and 65535")
+    if not 1 <= arguments.max_concurrency <= 32:
+        raise GatewayError("max-concurrency must be between 1 and 32")
+    state = private_state(arguments.state)
+    if (
+        not QUEUE.is_file()
+        or QUEUE.is_symlink()
+        or not os.access(QUEUE, os.X_OK)
+    ):
+        raise GatewayError("wywa-intake-queue must be a sibling regular file")
+    server = LimitedHTTPServer(
+        (LISTEN_ADDRESS, arguments.port),
+        IntakeHandler,
+        state=state,
+        concurrency=arguments.max_concurrency,
+        read_timeout=arguments.read_timeout,
+        handoff_timeout=arguments.handoff_timeout,
+        status_file=arguments.status_file,
+    )
+    try:
+        server.serve_forever(poll_interval=0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.shutdown()
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except GatewayError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

@@ -240,8 +240,13 @@ accepted during shutoff, sorts ahead of applications, and supersedes pending
 applications for the same agent. The isolated abuse drill exercises disable,
 resume, replay refusal, both rate limits, window reset, and withdrawal
 priority. Public submission, real hostile-traffic evidence, project manifests,
-and automatic curator mutation remain closed work. The exact contract is in
-`REGISTRY.md`.
+and automatic curator mutation remain closed work. A loopback-only gateway now
+supplies the first measured network handoff: one exact 32 KiB signed envelope,
+fixed pre-verification concurrency, bounded descendant cleanup, identity-free
+counters, and no client paths or curator capability. Its malformed-body,
+overload, application shutoff/recovery, and withdrawal paths are exercised
+locally. There is still no public route or hostile-internet evidence. The exact
+contract is in `REGISTRY.md`.
 
 ### Phase 3 — network
 

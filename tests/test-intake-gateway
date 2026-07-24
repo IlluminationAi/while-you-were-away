@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""Exercise the loopback-only WYWA signed-intake HTTP gateway."""
+
+from __future__ import annotations
+
+import base64
+import datetime as dt
+import hashlib
+import http.client
+import json
+import shutil
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+GATEWAY = PROJECT / "bin" / "wywa-intake-gateway"
+INTAKE = PROJECT / "bin" / "wywa-intake"
+QUEUE = PROJECT / "bin" / "wywa-intake-queue"
+
+
+def run(
+    executable: Path,
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(executable), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def make_key(path: Path) -> str:
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+        check=True,
+    )
+    path.chmod(0o600)
+    public_key = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return " ".join(public_key.split()[:2])
+
+
+def verification_record(
+    agent_id: str,
+    origin: str,
+    public_key: str,
+    *,
+    at: dt.datetime,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(at),
+        "evidence": "live-https-origin",
+        "eligible": True,
+        "manifest_sha256": hashlib.sha256(agent_id.encode("utf-8")).hexdigest(),
+        "agent_id": agent_id,
+        "name": agent_id.replace("-", " ").title(),
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": utc_text(at - dt.timedelta(minutes=1)),
+        "expires_at": utc_text(at + dt.timedelta(days=14)),
+        "sequence": 1,
+        "status": "active",
+    }
+
+
+def issue(
+    intake: Path,
+    key: Path,
+    verification: Path,
+    output: Path,
+    *,
+    action: str,
+    request_id: str,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    run(
+        intake,
+        "issue",
+        "--action",
+        action,
+        "--verification",
+        str(verification),
+        "--key",
+        str(key),
+        "--output",
+        str(output),
+        "--request-id",
+        request_id,
+        "--at",
+        utc_text(at),
+    )
+    request = json.loads((output / "wywa-intake.json").read_text(encoding="utf-8"))
+    signature = (output / "wywa-intake.sig").read_bytes()
+    return {
+        "schema_version": 1,
+        "request": request,
+        "signature_b64": base64.b64encode(signature).decode("ascii"),
+    }
+
+
+def http_request(
+    port: int,
+    method: str,
+    path: str,
+    record: dict[str, Any] | None = None,
+    *,
+    body: bytes | None = None,
+    content_type: str = "application/json",
+    timeout: float = 8.0,
+) -> tuple[int, dict[str, Any]]:
+    if record is not None:
+        body = json.dumps(record, separators=(",", ":")).encode("utf-8")
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    headers: dict[str, str] = {}
+    if body is not None:
+        headers["Content-Type"] = content_type
+    connection.request(method, path, body=body, headers=headers)
+    response = connection.getresponse()
+    data = response.read()
+    connection.close()
+    decoded = json.loads(data) if data else {}
+    return response.status, decoded
+
+
+def raw_request(port: int, data: bytes) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as connection:
+        try:
+            connection.sendall(data)
+        except BrokenPipeError:
+            pass
+        try:
+            connection.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        chunks: list[bytes] = []
+        while True:
+            chunk = connection.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def status_code(response: bytes) -> int:
+    first_line = response.split(b"\r\n", 1)[0]
+    return int(first_line.split()[1])
+
+
+def wait_for_file(path: Path, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {path}")
+
+
+def wait_for_glob(root: Path, pattern: str, count: int, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(list(root.glob(pattern))) >= count:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {count} matches of {pattern}")
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-gateway-test-") as temporary:
+        root = Path(temporary)
+        shadow = root / "shadow"
+        shadow.mkdir()
+        shadow_gateway = shadow / "wywa-intake-gateway"
+        shadow_intake = shadow / "wywa-intake"
+        shadow_queue = shadow / "wywa-intake-queue"
+        shutil.copy2(GATEWAY, shadow_gateway)
+        shutil.copy2(INTAKE, shadow_intake)
+        shutil.copy2(QUEUE, shadow_queue)
+
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        key = root / "agent_ed25519"
+        public_key = make_key(key)
+        origin = "https://gateway-test.example.net/"
+        record = verification_record("gateway-worker", origin, public_key, at=now)
+        verification = root / "verification.json"
+        verification.write_text(json.dumps(record), encoding="utf-8")
+
+        records_path = shadow / "registry-records.json"
+        records_path.write_text(json.dumps({origin: record}), encoding="utf-8")
+        fake_registry = shadow / "wywa-registry"
+        fake_registry.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import os\n"
+            "import sys\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            "root = Path(__file__).resolve().parent\n"
+            "records = json.loads((root / 'registry-records.json').read_text())\n"
+            "if (root / 'long-sleep').exists():\n"
+            "    (root / 'long-sleep-pid').write_text(str(os.getpid()))\n"
+            "    time.sleep(10)\n"
+            "elif (root / 'sleep').exists():\n"
+            "    (root / f'entered-{os.getpid()}').write_text('entered\\n')\n"
+            "    time.sleep(1.2)\n"
+            "origin = sys.argv[-1]\n"
+            "if origin not in records:\n"
+            "    print('unknown test origin', file=sys.stderr)\n"
+            "    raise SystemExit(2)\n"
+            "print(json.dumps(records[origin], sort_keys=True))\n",
+            encoding="utf-8",
+        )
+        fake_registry.chmod(0o755)
+
+        state = root / "queue"
+        run(shadow_queue, "init", "--state", str(state))
+        status_file = root / "gateway-status.json"
+        gateway = subprocess.Popen(
+            [
+                str(shadow_gateway),
+                "serve",
+                "--state",
+                str(state),
+                "--port",
+                "0",
+                "--max-concurrency",
+                "2",
+                "--read-timeout",
+                "1",
+                "--handoff-timeout",
+                "2",
+                "--status-file",
+                str(status_file),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_file(status_file)
+            gateway_status = json.loads(status_file.read_text(encoding="utf-8"))
+            port = gateway_status["listener"]["port"]
+            assert gateway_status["listener"] == {
+                "address": "127.0.0.1",
+                "loopback_only": True,
+                "port": port,
+            }
+            assert gateway_status["limits"] == {
+                "body_bytes": 32768,
+                "concurrency": 2,
+                "read_timeout_seconds": 1.0,
+            }
+            assert gateway_status["curator_capability"] is False
+            assert gateway_status["retains_client_identity"] is False
+            assert status_file.stat().st_mode & 0o777 == 0o600
+
+            code, health = http_request(port, "GET", "/healthz")
+            assert code == 200 and health["ok"] is True
+            code, missing = http_request(port, "GET", "/")
+            assert code == 404 and missing["error"] == "route-not-found"
+            code, wrong_method = http_request(port, "PUT", "/v1/intake", {})
+            assert code == 405 and wrong_method["error"] == "method-not-allowed"
+
+            duplicate_length = raw_request(
+                port,
+                b"POST /v1/intake HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 2\r\n"
+                b"Content-Length: 2\r\n"
+                b"Connection: close\r\n\r\n{}",
+            )
+            assert status_code(duplicate_length) == 400, duplicate_length
+            chunked = raw_request(
+                port,
+                b"POST /v1/intake HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"Connection: close\r\n\r\n0\r\n\r\n",
+            )
+            assert status_code(chunked) == 400
+            oversized = raw_request(
+                port,
+                b"POST /v1/intake HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 32769\r\n"
+                b"Connection: close\r\n\r\n",
+            )
+            assert status_code(oversized) == 413
+            incomplete = raw_request(
+                port,
+                b"POST /v1/intake HTTP/1.1\r\n"
+                b"Host: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Content-Length: 20\r\n"
+                b"Connection: close\r\n\r\n{}",
+            )
+            assert status_code(incomplete) == 400
+            code, wrong_type = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                body=b"{}",
+                content_type="text/plain",
+            )
+            assert code == 415
+            code, malformed = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                body=b"{broken",
+            )
+            assert code == 400 and malformed["error"] == "invalid-envelope"
+            code, duplicate_json = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                body=(
+                    b'{"schema_version":1,"schema_version":1,'
+                    b'"request":{},"signature_b64":"YQ=="}'
+                ),
+            )
+            assert code == 400 and duplicate_json["error"] == "invalid-envelope"
+            code, extra_field = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                {
+                    "schema_version": 1,
+                    "request": {"action": "apply"},
+                    "signature_b64": "YQ==",
+                    "extra": True,
+                },
+            )
+            assert code == 400 and extra_field["error"] == "invalid-envelope"
+            code, bad_base64 = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                {
+                    "schema_version": 1,
+                    "request": {"action": "apply"},
+                    "signature_b64": "***",
+                },
+            )
+            assert code == 400 and bad_base64["error"] == "invalid-envelope"
+
+            disabled_apply = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "disabled-apply",
+                action="apply",
+                request_id="10000000000000000000000000000000",
+                at=now,
+            )
+            code, refused = http_request(port, "POST", "/v1/intake", disabled_apply)
+            assert code == 503 and refused["error"] == "applications-disabled"
+
+            withdrawal = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "withdrawal",
+                action="withdraw",
+                request_id="20000000000000000000000000000000",
+                at=now,
+            )
+            code, accepted_withdrawal = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                withdrawal,
+            )
+            assert code == 202
+            assert accepted_withdrawal["accepted"] is True
+            assert accepted_withdrawal["action"] == "withdraw"
+
+            run(
+                shadow_queue,
+                "enable",
+                "--state",
+                str(state),
+                "--reason",
+                "gateway recovery drill",
+            )
+            accepted_apply = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "accepted-apply",
+                action="apply",
+                request_id="30000000000000000000000000000000",
+                at=now,
+            )
+            code, accepted = http_request(port, "POST", "/v1/intake", accepted_apply)
+            assert code == 202 and accepted["accepted"] is True
+            assert accepted["request_id"] == "30000000000000000000000000000000"
+            code, replay = http_request(port, "POST", "/v1/intake", accepted_apply)
+            assert code == 409 and replay["error"] == "request-id-already-seen"
+
+            invalid_signature = dict(accepted_apply)
+            invalid_signature["request"] = dict(accepted_apply["request"])
+            invalid_signature["request"]["request_id"] = (
+                "40000000000000000000000000000000"
+            )
+            code, rejected = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                invalid_signature,
+            )
+            assert code == 422 and rejected["error"] == "signed-request-rejected"
+
+            slow_apply = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "slow-apply",
+                action="apply",
+                request_id="50000000000000000000000000000000",
+                at=now,
+            )
+            slow_apply_two = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "slow-apply-two",
+                action="apply",
+                request_id="60000000000000000000000000000000",
+                at=now,
+            )
+            overload_apply = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "overload-apply",
+                action="apply",
+                request_id="70000000000000000000000000000000",
+                at=now,
+            )
+            (shadow / "sleep").write_text("enabled\n", encoding="utf-8")
+            slow_result: list[tuple[int, dict[str, Any]]] = []
+            thread_one = threading.Thread(
+                target=lambda: slow_result.append(
+                    http_request(port, "POST", "/v1/intake", slow_apply)
+                )
+            )
+            thread_two = threading.Thread(
+                target=lambda: slow_result.append(
+                    http_request(port, "POST", "/v1/intake", slow_apply_two)
+                )
+            )
+            thread_one.start()
+            thread_two.start()
+            wait_for_glob(shadow, "entered-*", 2)
+            overload_body = json.dumps(
+                overload_apply,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            overload_response = raw_request(
+                port,
+                (
+                    b"POST /v1/intake HTTP/1.1\r\n"
+                    b"Host: 127.0.0.1\r\n"
+                    b"Content-Type: application/json\r\n"
+                    + f"Content-Length: {len(overload_body)}\r\n".encode("ascii")
+                    + b"Connection: close\r\n\r\n"
+                    + overload_body
+                ),
+            )
+            code = status_code(overload_response)
+            overloaded = json.loads(overload_response.split(b"\r\n\r\n", 1)[1])
+            assert code == 503
+            assert overloaded["error"] == "gateway-concurrency-limit"
+            thread_one.join(timeout=6)
+            thread_two.join(timeout=6)
+            assert not thread_one.is_alive()
+            assert not thread_two.is_alive()
+            assert sorted(item[0] for item in slow_result) == [202, 202]
+            (shadow / "sleep").unlink()
+
+            timeout_apply = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "timeout-apply",
+                action="apply",
+                request_id="80000000000000000000000000000000",
+                at=now,
+            )
+            (shadow / "long-sleep").write_text("enabled\n", encoding="utf-8")
+            code, timed_out = http_request(
+                port,
+                "POST",
+                "/v1/intake",
+                timeout_apply,
+            )
+            assert code == 504 and timed_out["error"] == "verification-timeout"
+            child_pid = int((shadow / "long-sleep-pid").read_text(encoding="utf-8"))
+            deadline = time.monotonic() + 2
+            while Path(f"/proc/{child_pid}").exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert not Path(f"/proc/{child_pid}").exists()
+            (shadow / "long-sleep").unlink()
+
+            code, measured = http_request(port, "GET", "/status")
+            assert code == 200
+            assert measured["peak_active"] == 2
+            assert measured["requests"]["accepted"] == 4
+            assert measured["requests"]["overloaded"] == 1
+            assert measured["requests"]["timeouts"] == 1
+            assert measured["requests"]["conflicts"] == 1
+            assert measured["requests"]["refused"] == 1
+            assert measured["requests"]["invalid"] >= 10
+            assert measured["retains_client_identity"] is False
+            assert set(measured) == {
+                "schema_version",
+                "started_at",
+                "listener",
+                "limits",
+                "active",
+                "peak_active",
+                "requests",
+                "last_completed_at",
+                "retains_client_identity",
+                "curator_capability",
+            }
+            queue_status = json.loads(
+                run(shadow_queue, "status", "--state", str(state)).stdout
+            )
+            assert queue_status["requests_seen"] == 4
+            assert queue_status["pending"] == {
+                "applications": 3,
+                "total": 4,
+                "withdrawals": 1,
+            }
+        finally:
+            gateway.terminate()
+            try:
+                gateway.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                gateway.kill()
+                gateway.wait(timeout=5)
+            stderr = gateway.stderr.read() if gateway.stderr is not None else ""
+            if gateway.returncode not in {-15, 0}:
+                raise AssertionError(
+                    f"gateway exited {gateway.returncode}: {stderr}"
+                )
+            if stderr:
+                raise AssertionError(f"gateway emitted an internal error: {stderr}")
+
+        restart_status = root / "gateway-restart-status.json"
+        restarted = subprocess.Popen(
+            [
+                str(shadow_gateway),
+                "serve",
+                "--state",
+                str(state),
+                "--port",
+                str(port),
+                "--max-concurrency",
+                "2",
+                "--status-file",
+                str(restart_status),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            wait_for_file(restart_status)
+            code, health = http_request(port, "GET", "/healthz")
+            assert code == 200 and health["ok"] is True
+        finally:
+            restarted.terminate()
+            restarted.wait(timeout=5)
+            restart_error = (
+                restarted.stderr.read() if restarted.stderr is not None else ""
+            )
+            assert restarted.returncode in {-15, 0}, restart_error
+            assert not restart_error
+
+    print("PASS loopback-only WYWA signed-intake gateway")
+
+
+if __name__ == "__main__":
+    main()

@@ -46,6 +46,7 @@ for filename in \
   .gitignore \
   CHANGELOG.md \
   GETTING_STARTED.md \
+  INTAKE_GATEWAY.md \
   LICENSE \
   outreach-2026-07-24.md \
   PRODUCT_HUNT.md \
@@ -68,6 +69,7 @@ for filename in \
   wywa-public \
   wywa-curator \
   wywa-intake \
+  wywa-intake-gateway \
   wywa-intake-queue \
   wywa-registry
 do
@@ -164,6 +166,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-intake-queue" \
   "$source_root/tests/test-intake-queue"
+install -m 0755 -- \
+  "$project_dir/tests/test-intake-gateway" \
+  "$source_root/tests/test-intake-gateway"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

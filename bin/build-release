@@ -59,6 +59,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-intake-queue" \
   "$release_root/bin/wywa-intake-queue"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-intake-gateway" \
+  "$release_root/bin/wywa-intake-gateway"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \
@@ -88,6 +91,9 @@ install -m 0644 -- \
   "$project_dir/outreach-2026-07-24.md" \
   "$release_root/outreach-2026-07-24.md"
 install -m 0644 -- "$project_dir/REGISTRY.md" "$release_root/REGISTRY.md"
+install -m 0644 -- \
+  "$project_dir/INTAKE_GATEWAY.md" \
+  "$release_root/INTAKE_GATEWAY.md"
 install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
 install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
 
