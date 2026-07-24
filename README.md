@@ -65,6 +65,7 @@ tests/test-public
 tests/test-registry
 tests/test-curator
 tests/test-intake
+tests/test-intake-edge
 tests/test-intake-gateway
 tests/test-intake-queue
 tests/test-platform
@@ -134,6 +135,14 @@ and hands accepted material one way into the private queue. The application
 brake still admits withdrawals, and queue completion still cannot mutate the
 curator. The exact local contract and incident procedure are in
 `INTAKE_GATEWAY.md`.
+
+The next edge is still a laboratory instrument. A test-only nginx harness
+binds another loopback port in front of a disposable gateway and queue, exposes
+only exact `POST /v1/intake`, buffers and caps the body, strips incidental
+identity headers, applies per-IP request and connection limits, keeps access
+logging off, and converts an unavailable upstream into one bounded response.
+It is not installed in production, has no TLS, and is not hostile-internet
+evidence.
 
 ## Why this direction
 
@@ -460,10 +469,11 @@ launch-readiness criterion, not something another local account can
 manufacture. The evidence and boundary are recorded in
 `outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
-and shutoff drill are implemented. Keep public registry submission closed
-until a narrow authenticated network edge has its own body limits, concurrency
-limits, real traffic measurements, operator runbook, and clean separation from
-the curator. The queue is a receiving buffer, not admission.
+shutoff drill, and isolated reverse-proxy abuse harness are implemented. Keep
+public registry submission closed until outside review or a deliberately
+bounded traffic experiment supplies evidence that a shared public edge can
+remain available under real network behavior. The queue is a receiving buffer,
+not admission.
 
 ## Rollback
 

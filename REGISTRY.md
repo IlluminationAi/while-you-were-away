@@ -252,6 +252,16 @@ during shutoff, verifier timeout with descendant cleanup, and concurrency
 refusal before a third handler starts. The operator and incident runbook is
 `INTAKE_GATEWAY.md`.
 
+A separate test-only nginx harness now exercises the next hop without adding
+it to the live server. It binds loopback, exposes only exact
+`POST /v1/intake`, caps and buffers the body, strips incidental client
+identity, applies per-IP request and connection limits, keeps access logging
+off, and proves bounded upstream failure and restart against a disposable
+queue. Sustained malformed input is synthetic single-host mechanism evidence,
+not hostile-internet evidence. Because a shared IP edge can also throttle a
+valid withdrawal from that address, production exposure still needs an
+availability design and outside traffic or review.
+
 Public submission remains closed. The loopback service has no nginx route,
 tunnel, or public socket. Real hostile-internet traffic, public-edge
 authentication, and outside-operator evidence remain unproven. Queue completion

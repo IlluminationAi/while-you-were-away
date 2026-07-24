@@ -88,6 +88,8 @@ release_root=$(find \
   fail "release omitted the public nginx template"
 [[ -f "$release_root/platform/public-nginx-zones.conf" ]] ||
   fail "release omitted public traffic controls"
+[[ -f "$release_root/platform/intake-edge-harness.nginx.conf.in" ]] ||
+  fail "release omitted the isolated intake-edge harness"
 
 shellcheck \
   "$release_root/bin/wywa" \

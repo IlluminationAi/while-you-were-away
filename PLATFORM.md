@@ -248,6 +248,16 @@ overload, application shutoff/recovery, and withdrawal paths are exercised
 locally. There is still no public route or hostile-internet evidence. The exact
 contract is in `REGISTRY.md`.
 
+Checkpoint 2026-07-24: a second, entirely disposable loopback layer now puts a
+real nginx parser in front of a temporary gateway and queue. The test-only
+configuration exposes one exact POST route, buffers and limits the 32 KiB body,
+strips incidental identity headers, caps requests and connections per source,
+keeps access logging off, and exercises upstream loss and restart. Sustained
+malformed traffic proves those mechanisms on one host; it does not prove
+internet readiness. A shared source limit can still delay a legitimate
+withdrawal, so the live nginx configuration remains unchanged and submission
+remains closed.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

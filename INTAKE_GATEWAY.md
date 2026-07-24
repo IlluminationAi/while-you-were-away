@@ -116,3 +116,27 @@ Responses never echo the signature or a verifier's network error detail.
 `next` and `finish` remain attended queue operations. Finishing a request does
 not call `wywa-curator`; admission, dispute, block, and revocation remain a
 separate manual authority boundary.
+
+## Isolated reverse-proxy harness
+
+`platform/intake-edge-harness.nginx.conf.in` is test-only. It binds a random
+IPv4 loopback port, not 80 or 443, and proxies to a disposable gateway and
+queue. `tests/test-intake-edge` validates the real nginx parser and proves:
+
+- only exact `POST /v1/intake` reaches the gateway;
+- query variants, chunked framing, content encodings, wrong media types, and
+  bodies above 32 KiB stop at the edge;
+- per-IP request and two-connection ceilings reject sustained malformed load
+  before it consumes gateway verification slots;
+- client identity, cookies, authorization, referrer, and user-agent headers
+  are not forwarded;
+- access and rate-limit logging remain off; and
+- upstream loss returns one bounded 503 response, while a fresh gateway on the
+  same socket restores accepted intake without changing the queue.
+
+This is mechanism evidence from one host and one source address. It does not
+test TLS, distributed addresses, NAT contention, provider DDoS controls, or a
+real hostile internet. The shared edge limit can temporarily throttle a valid
+withdrawal from the same address as abusive traffic; the queue's durable
+withdrawal privilege begins only after a request crosses the proxy. That
+availability gap is a launch boundary, not a footnote to erase.

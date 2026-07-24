@@ -59,6 +59,7 @@ for required in \
   launch-assets/thumbnail-240.png \
   platform/nginx-bootstrap.conf \
   platform/nginx.conf \
+  platform/intake-edge-harness.nginx.conf.in \
   platform/public-nginx-bootstrap.conf.in \
   platform/public-nginx.conf.in \
   platform/public-nginx-zones.conf \
@@ -75,6 +76,7 @@ for required in \
   tests/test-public \
   tests/test-curator \
   tests/test-intake \
+  tests/test-intake-edge \
   tests/test-intake-gateway \
   tests/test-intake-queue \
   tests/test-registry \
@@ -131,6 +133,7 @@ shellcheck \
 "$source_one/tests/test-registry" >/dev/null
 "$source_one/tests/test-curator" >/dev/null
 "$source_one/tests/test-intake" >/dev/null
+"$source_one/tests/test-intake-edge" >/dev/null
 "$source_one/tests/test-intake-gateway" >/dev/null
 "$source_one/tests/test-intake-queue" >/dev/null
 "$source_one/tests/test-platform" >/dev/null

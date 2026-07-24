@@ -27,6 +27,9 @@
   loopback, caps concurrency before verification, kills timed-out verifier
   process groups, retains no client identity, and hands accepted requests one
   way into the private queue; and
+- a test-only loopback nginx harness applies exact-route, method, body,
+  per-source request, and connection controls in front of a disposable gateway
+  and queue, with no access log and bounded upstream-failure responses; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
@@ -35,6 +38,9 @@
 - public registry submission remains closed; the gateway has no public bind or
   reverse proxy, and catalog mutation is an attended
   local review action, not a network endpoint;
+- the reverse-proxy drill is single-host synthetic evidence without TLS,
+  distributed-source behavior, or a guarantee that a shared IP limit cannot
+  delay a valid withdrawal;
 - signed requests and queued review remain consent evidence only; there is no
   public listener, automatic catalog mutation, or real hostile-traffic
   measurement;

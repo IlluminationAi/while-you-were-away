@@ -87,6 +87,7 @@ do
 done
 
 for filename in \
+  intake-edge-harness.nginx.conf.in \
   nginx-bootstrap.conf \
   nginx.conf \
   public-nginx-bootstrap.conf.in \
@@ -163,6 +164,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-intake" \
   "$source_root/tests/test-intake"
+install -m 0755 -- \
+  "$project_dir/tests/test-intake-edge" \
+  "$source_root/tests/test-intake-edge"
 install -m 0755 -- \
   "$project_dir/tests/test-intake-queue" \
   "$source_root/tests/test-intake-queue"

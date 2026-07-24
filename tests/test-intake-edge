@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""Hammer an isolated nginx edge in front of a disposable WYWA intake queue."""
+
+from __future__ import annotations
+
+import base64
+import concurrent.futures
+import datetime as dt
+import hashlib
+import http.client
+import json
+import os
+import pwd
+import shutil
+import socket
+import subprocess
+import tempfile
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+GATEWAY = PROJECT / "bin" / "wywa-intake-gateway"
+INTAKE = PROJECT / "bin" / "wywa-intake"
+QUEUE = PROJECT / "bin" / "wywa-intake-queue"
+TEMPLATE = PROJECT / "platform" / "intake-edge-harness.nginx.conf.in"
+
+
+def run(
+    executable: Path | str,
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(executable), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def reserve_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
+def wait_for_file(path: Path, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {path}")
+
+
+def wait_for_glob(root: Path, pattern: str, count: int, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(list(root.glob(pattern))) >= count:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {count} matches of {pattern}")
+
+
+def wait_for_port(port: int, *, open_state: bool, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.15)
+            connected = probe.connect_ex(("127.0.0.1", port)) == 0
+        if connected is open_state:
+            return
+        time.sleep(0.02)
+    state = "open" if open_state else "closed"
+    raise AssertionError(f"timed out waiting for port {port} to be {state}")
+
+
+def stop_process(process: subprocess.Popen[str] | None) -> tuple[str, str]:
+    if process is None:
+        return "", ""
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+    stdout, stderr = process.communicate()
+    return stdout, stderr
+
+
+def make_key(path: Path) -> str:
+    run("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path))
+    path.chmod(0o600)
+    public_key = run("ssh-keygen", "-y", "-f", str(path)).stdout.strip()
+    return " ".join(public_key.split()[:2])
+
+
+def verification_record(
+    agent_id: str,
+    origin: str,
+    public_key: str,
+    *,
+    at: dt.datetime,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(at),
+        "evidence": "live-https-origin",
+        "eligible": True,
+        "manifest_sha256": hashlib.sha256(agent_id.encode("utf-8")).hexdigest(),
+        "agent_id": agent_id,
+        "name": "Edge Test Worker",
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": utc_text(at - dt.timedelta(minutes=1)),
+        "expires_at": utc_text(at + dt.timedelta(days=14)),
+        "sequence": 1,
+        "status": "active",
+    }
+
+
+def issue(
+    intake: Path,
+    key: Path,
+    verification: Path,
+    output: Path,
+    *,
+    request_id: str,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    run(
+        intake,
+        "issue",
+        "--action",
+        "apply",
+        "--verification",
+        str(verification),
+        "--key",
+        str(key),
+        "--output",
+        str(output),
+        "--request-id",
+        request_id,
+        "--at",
+        utc_text(at),
+    )
+    request = json.loads((output / "wywa-intake.json").read_text(encoding="utf-8"))
+    signature = (output / "wywa-intake.sig").read_bytes()
+    return {
+        "schema_version": 1,
+        "request": request,
+        "signature_b64": base64.b64encode(signature).decode("ascii"),
+    }
+
+
+def encode(record: dict[str, Any]) -> bytes:
+    return json.dumps(record, separators=(",", ":")).encode("utf-8")
+
+
+def http_request(
+    port: int,
+    method: str,
+    path: str,
+    *,
+    body: bytes | None = None,
+    content_type: str = "application/json",
+    timeout: float = 8.0,
+) -> tuple[int, bytes, dict[str, str]]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    headers: dict[str, str] = {}
+    if body is not None:
+        headers["Content-Type"] = content_type
+    connection.request(method, path, body=body, headers=headers)
+    response = connection.getresponse()
+    data = response.read()
+    response_headers = {key.lower(): value for key, value in response.getheaders()}
+    connection.close()
+    return response.status, data, response_headers
+
+
+def raw_request(port: int, data: bytes) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as connection:
+        connection.sendall(data)
+        try:
+            connection.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        chunks: list[bytes] = []
+        while True:
+            chunk = connection.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def status_code(response: bytes) -> int:
+    return int(response.split(b"\r\n", 1)[0].split()[1])
+
+
+def start_gateway(
+    gateway: Path,
+    state: Path,
+    status_file: Path,
+    port: int,
+) -> subprocess.Popen[str]:
+    status_file.unlink(missing_ok=True)
+    process = subprocess.Popen(
+        [
+            str(gateway),
+            "serve",
+            "--state",
+            str(state),
+            "--port",
+            str(port),
+            "--max-concurrency",
+            "4",
+            "--read-timeout",
+            "2",
+            "--handoff-timeout",
+            "4",
+            "--status-file",
+            str(status_file),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    wait_for_file(status_file)
+    wait_for_port(port, open_state=True)
+    return process
+
+
+def start_edge(root: Path, config: Path, port: int) -> subprocess.Popen[str]:
+    process = subprocess.Popen(
+        ["nginx", "-p", f"{root}/", "-c", str(config)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    wait_for_port(port, open_state=True)
+    return process
+
+
+def main() -> None:
+    if shutil.which("nginx") is None:
+        raise AssertionError("nginx is required for the isolated edge harness")
+
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-edge-test-") as temporary:
+        root = Path(temporary)
+        shadow = root / "shadow"
+        shadow.mkdir()
+        shadow_gateway = shadow / "wywa-intake-gateway"
+        shadow_intake = shadow / "wywa-intake"
+        shadow_queue = shadow / "wywa-intake-queue"
+        shutil.copy2(GATEWAY, shadow_gateway)
+        shutil.copy2(INTAKE, shadow_intake)
+        shutil.copy2(QUEUE, shadow_queue)
+
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        key = root / "agent_ed25519"
+        public_key = make_key(key)
+        origin = "https://edge-test.example.net/"
+        record = verification_record("edge-test-worker", origin, public_key, at=now)
+        verification = root / "verification.json"
+        verification.write_text(json.dumps(record), encoding="utf-8")
+
+        records_path = shadow / "registry-records.json"
+        records_path.write_text(json.dumps({origin: record}), encoding="utf-8")
+        fake_registry = shadow / "wywa-registry"
+        fake_registry.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import os\n"
+            "import sys\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            "root = Path(__file__).resolve().parent\n"
+            "records = json.loads((root / 'registry-records.json').read_text())\n"
+            "if (root / 'sleep').exists():\n"
+            "    (root / f'entered-{os.getpid()}').write_text('entered\\n')\n"
+            "    time.sleep(1.2)\n"
+            "origin = sys.argv[-1]\n"
+            "if origin not in records:\n"
+            "    print('unknown test origin', file=sys.stderr)\n"
+            "    raise SystemExit(2)\n"
+            "print(json.dumps(records[origin], sort_keys=True))\n",
+            encoding="utf-8",
+        )
+        fake_registry.chmod(0o755)
+
+        state = root / "queue"
+        run(shadow_queue, "init", "--state", str(state))
+        run(
+            shadow_queue,
+            "enable",
+            "--state",
+            str(state),
+            "--reason",
+            "isolated edge test",
+        )
+
+        gateway_port = reserve_port()
+        edge_port = reserve_port()
+        while edge_port == gateway_port:
+            edge_port = reserve_port()
+        status_file = root / "gateway-status.json"
+
+        harness_root = root / "nginx"
+        (harness_root / "client-body").mkdir(parents=True)
+        (harness_root / "proxy").mkdir()
+        config_text = TEMPLATE.read_text(encoding="utf-8")
+        replacements = {
+            "__WYWA_NGINX_USER__": pwd.getpwuid(os.geteuid()).pw_name,
+            "__WYWA_HARNESS_ROOT__": str(harness_root),
+            "__WYWA_EDGE_PORT__": str(edge_port),
+            "__WYWA_UPSTREAM_PORT__": str(gateway_port),
+        }
+        for marker, value in replacements.items():
+            config_text = config_text.replace(marker, value)
+        if "__WYWA_" in config_text:
+            raise AssertionError("nginx edge template retained a placeholder")
+        for header in (
+            "Authorization",
+            "Cookie",
+            "Forwarded",
+            "Referer",
+            "User-Agent",
+            "X-Forwarded-For",
+            "X-Real-IP",
+        ):
+            assert f'proxy_set_header {header} "";' in config_text
+        config = harness_root / "nginx.conf"
+        config.write_text(config_text, encoding="utf-8")
+        run("nginx", "-t", "-p", f"{harness_root}/", "-c", str(config))
+
+        gateway: subprocess.Popen[str] | None = None
+        edge: subprocess.Popen[str] | None = None
+        gateway_stderr: list[str] = []
+        edge_stderr: list[str] = []
+        rate_limited = 0
+        malformed_forwarded = 0
+        try:
+            gateway = start_gateway(
+                shadow_gateway,
+                state,
+                status_file,
+                gateway_port,
+            )
+            edge = start_edge(harness_root, config, edge_port)
+
+            sockets = run(
+                "ss",
+                "-H",
+                "-ltn",
+                f"sport = :{edge_port}",
+            ).stdout
+            assert f"127.0.0.1:{edge_port}" in sockets
+            assert f"0.0.0.0:{edge_port}" not in sockets
+            assert f"[::]:{edge_port}" not in sockets
+
+            code, _, headers = http_request(edge_port, "GET", "/v1/intake")
+            assert code == 405
+            assert headers["cache-control"] == "no-store"
+            code, _, _ = http_request(
+                edge_port,
+                "POST",
+                "/",
+                body=b"{}",
+            )
+            assert code == 404
+            code, _, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake?bypass=1",
+                body=b"{}",
+            )
+            assert code == 404
+            code, _, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake",
+                body=b"{}",
+                content_type="text/plain",
+            )
+            assert code == 415
+
+            before_oversize = json.loads(
+                status_file.read_text(encoding="utf-8")
+            )["requests"]["received"]
+            code, body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake",
+                body=b"{" + (b"x" * 32768),
+            )
+            assert code == 413
+            assert json.loads(body)["error"] == "edge-body-too-large"
+            after_oversize = json.loads(
+                status_file.read_text(encoding="utf-8")
+            )["requests"]["received"]
+            assert before_oversize == after_oversize
+
+            chunked = raw_request(
+                edge_port,
+                b"POST /v1/intake HTTP/1.1\r\n"
+                b"Host: intake-edge.invalid\r\n"
+                b"Content-Type: application/json\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"Connection: close\r\n\r\n"
+                b"2\r\n{}\r\n0\r\n\r\n",
+            )
+            assert status_code(chunked) == 400
+
+            malformed_statuses: list[int] = []
+            for _wave in range(5):
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=16
+                ) as executor:
+                    futures = [
+                        executor.submit(
+                            http_request,
+                            edge_port,
+                            "POST",
+                            "/v1/intake",
+                            body=b"{broken",
+                        )
+                        for _ in range(24)
+                    ]
+                    malformed_statuses.extend(
+                        future.result()[0] for future in futures
+                    )
+                time.sleep(0.2)
+            assert set(malformed_statuses) <= {400, 429}
+            rate_limited = malformed_statuses.count(429)
+            malformed_forwarded = malformed_statuses.count(400)
+            assert rate_limited >= 80
+            assert 1 <= malformed_forwarded <= 40
+
+            edge_out, edge_err = stop_process(edge)
+            edge = None
+            edge_stderr.append(edge_err)
+            assert not edge_out
+            wait_for_port(edge_port, open_state=False)
+            edge = start_edge(harness_root, config, edge_port)
+
+            first = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "first",
+                request_id="a0000000000000000000000000000000",
+                at=now,
+            )
+            second = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "second",
+                request_id="b0000000000000000000000000000000",
+                at=now,
+            )
+            third = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "third",
+                request_id="c0000000000000000000000000000000",
+                at=now,
+            )
+            (shadow / "sleep").write_text("enabled\n", encoding="utf-8")
+            slow_results: list[int] = []
+            slow_lock = threading.Lock()
+
+            def send_slow(record_to_send: dict[str, Any]) -> None:
+                result = http_request(
+                    edge_port,
+                    "POST",
+                    "/v1/intake",
+                    body=encode(record_to_send),
+                )[0]
+                with slow_lock:
+                    slow_results.append(result)
+
+            first_thread = threading.Thread(target=send_slow, args=(first,))
+            second_thread = threading.Thread(target=send_slow, args=(second,))
+            first_thread.start()
+            second_thread.start()
+            wait_for_glob(shadow, "entered-*", 2)
+            code, limited_body, limited_headers = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake",
+                body=encode(third),
+            )
+            assert code == 429
+            assert json.loads(limited_body)["error"] == (
+                "edge-rate-or-connection-limit"
+            )
+            assert limited_headers["retry-after"] == "5"
+            first_thread.join(timeout=6)
+            second_thread.join(timeout=6)
+            assert not first_thread.is_alive()
+            assert not second_thread.is_alive()
+            assert sorted(slow_results) == [202, 202]
+            (shadow / "sleep").unlink()
+            gateway_status = json.loads(status_file.read_text(encoding="utf-8"))
+            assert gateway_status["peak_active"] == 2
+            assert gateway_status["requests"]["overloaded"] == 0
+
+            gateway_out, gateway_err = stop_process(gateway)
+            gateway = None
+            gateway_stderr.append(gateway_err)
+            assert not gateway_out
+            wait_for_port(gateway_port, open_state=False)
+            code, unavailable_body, unavailable_headers = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake",
+                body=b"{}",
+            )
+            assert code == 503
+            assert json.loads(unavailable_body)["error"] == (
+                "edge-upstream-unavailable"
+            )
+            assert unavailable_headers["retry-after"] == "30"
+
+            gateway = start_gateway(
+                shadow_gateway,
+                state,
+                status_file,
+                gateway_port,
+            )
+            recovered = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "recovered",
+                request_id="d0000000000000000000000000000000",
+                at=now,
+            )
+            code, accepted_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake",
+                body=encode(recovered),
+            )
+            assert code == 202
+            assert json.loads(accepted_body)["accepted"] is True
+
+            assert not list(harness_root.rglob("*.log"))
+        finally:
+            edge_out, edge_err = stop_process(edge)
+            gateway_out, gateway_err = stop_process(gateway)
+            edge_stderr.append(edge_err)
+            gateway_stderr.append(gateway_err)
+            if edge_out or gateway_out:
+                raise AssertionError("edge or gateway wrote unexpected stdout")
+            if "Traceback" in "".join(edge_stderr + gateway_stderr):
+                raise AssertionError("edge drill emitted an internal traceback")
+
+        print(
+            "PASS: isolated WYWA intake edge "
+            f"(120 malformed: {rate_limited} edge-limited, "
+            f"{malformed_forwarded} bounded upstream rejections; "
+            "connection cap and upstream recovery passed)"
+        )
+
+
+if __name__ == "__main__":
+    main()
