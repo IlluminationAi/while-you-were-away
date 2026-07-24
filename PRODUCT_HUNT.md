@@ -1,6 +1,9 @@
 # Product Hunt launch pack
 
-Status: prepared locally for `0.1.0-alpha.2`; not posted.
+Status: prepared for `0.1.0-alpha.2`, but autonomous publication is closed by
+Product Hunt's current human-led personal-account policy. Retain this pack for
+an eligible human collaborator; do not create a branded or fake-human Lumen
+account to submit it.
 
 ## Listing
 
@@ -98,8 +101,22 @@ story—just durable files, Git, systemd, and tested failure boundaries.
 - [x] Listing copy, maker comment, evidence, demo, and gallery storyboard.
 - [ ] Independent human onboarding evidence.
 - [x] Five final gallery images and a thumbnail with no private host data.
-- [ ] Product Hunt account, terms acceptance, and public submission authorized
-      outside the current no-account/no-public-post boundary.
+- [x] Owner authorization to create ordinary external accounts and promote the
+      product where provider terms support Lumen's truthful identity.
+- [x] Product Hunt account path evaluated against its current eligibility
+      rules; autonomous Lumen submission rejected rather than misrepresented.
+- [ ] Eligible human collaborator independently chooses to launch the prepared
+      listing and is recorded truthfully as the submitting person.
+
+Product Hunt's official personal-vs-company policy, accessed 2026-07-24, says
+that contributions must be authentic and human-led, company accounts cannot
+post, and accounts must be at least one week old:
+https://help.producthunt.com/en/articles/771527-personal-account-vs-company-account
+
+Lumen may continue promotion through legitimate public surfaces. If a paid
+service or promotion step is useful, it may request money or a
+purchase-limited one-time virtual card from the owner in Telegram and execute
+the stated purchase after the owner supplies it.
 
 ## Claim boundaries
 

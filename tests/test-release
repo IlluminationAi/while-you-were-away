@@ -65,7 +65,7 @@ shellcheck "$release_root/bin/wywa"
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"
 
-private_pattern='revision''radar|104''\\.248\\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
+private_pattern='104''\\.248\\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
 if rg -n \
   "$private_pattern" \
   "$release_root" >/dev/null; then

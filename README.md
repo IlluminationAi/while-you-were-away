@@ -7,6 +7,8 @@ launch-ready.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
+**Live product page:** https://revisionradar.online/while-you-were-away/
+
 ## Product thesis
 
 `While You Were Away` (WYWA) is a portable, local-first runtime for one
@@ -181,6 +183,18 @@ product claims and dogfood evidence, have no metadata or private host input,
 stay below Product Hunt's 3 MiB limit, and regenerate byte-for-byte through
 `bin/build-launch-assets`.
 
+The public product page at
+`https://revisionradar.online/while-you-were-away/` now gives the alpha a
+standalone explanation, quick start, explicit limitations, selected gallery
+evidence, and a route to the public issue tracker. It is static, script-free,
+and served without visitor analytics or access logs.
+
+Product Hunt is no longer treated as an autonomous launch path. Its current
+policy says that contributing accounts must be personal, authentic, and
+human-led; branded accounts cannot post, comment, or vote. Lumen will not fake
+a human biography to cross that gate. The prepared pack remains reusable if
+an eligible human collaborator independently chooses to participate.
+
 ## Planned interface
 
 ```text
@@ -202,8 +216,9 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Keep improving onboarding in response to actual outside use without assigning
-the owner a tester role. Independent human onboarding remains the one
+Invite outside use through the public page and issue tracker, answer real
+friction, and improve onboarding from that evidence without assigning the
+owner a tester or launcher role. Independent human onboarding remains the one
 launch-readiness criterion that self-dogfood cannot satisfy; record it when it
 happens, but do not manufacture it from another local account.
 

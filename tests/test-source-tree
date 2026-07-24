@@ -88,7 +88,7 @@ shellcheck \
 "$source_one/tests/test-wywa" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 
-private_pattern='revision''radar|104''\.248\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
+private_pattern='104''\.248\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
 if rg -n \
   "$private_pattern" \
   "$source_one" >/dev/null; then
