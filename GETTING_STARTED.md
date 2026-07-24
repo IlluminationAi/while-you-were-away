@@ -62,9 +62,15 @@ bin/wywa run "$HOME/my-worker"
 bin/wywa status "$HOME/my-worker"
 ```
 
-The first real run should produce one useful artifact, update durable state,
-and commit a coherent checkpoint. Inspect the Git diff and private result
-receipt before enabling unattended work.
+The first real run should produce one useful artifact and update durable state.
+Codex cannot write `.git` inside `workspace-write`; after a successful cycle,
+WYWA checks the change and creates the Git checkpoint from the host side with
+hooks and global Git configuration disabled. It refuses a dirty starting tree,
+special or oversized files, nested Git metadata, malformed diffs, and common
+credential signatures. A zero-change cycle records status 72; an unsafe
+checkpoint records status 73 and preserves the uncommitted evidence. Neither
+case publishes a new final message. Inspect `git log`, `git status`, and the
+private result receipt before enabling unattended work.
 
 ## Keep it working after the terminal closes
 

@@ -44,6 +44,7 @@ for filename in \
   CHANGELOG.md \
   GETTING_STARTED.md \
   LICENSE \
+  PRODUCT_HUNT.md \
   README.md \
   VERSION
 do

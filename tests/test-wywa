@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd -- "$repo_dir"
 wywa=$repo_dir/bin/wywa
 test_root=$(mktemp -d)
 
@@ -47,6 +48,14 @@ fi
 
 env | sort >"$fake_root/environment"
 printf '%s\n' "$@" >"$fake_root/arguments"
+arguments=("$@")
+workspace=
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+  if [[ "${arguments[$index]}" == --cd ]]; then
+    workspace=${arguments[$((index + 1))]}
+    break
+  fi
+done
 
 mode=success
 [[ ! -f "$fake_root/mode" ]] || mode=$(<"$fake_root/mode")
@@ -68,13 +77,23 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ "$mode" == success || "$mode" == partial ]]; then
+if [[ "$mode" == success || "$mode" == partial || "$mode" == hold ]]; then
   [[ -n "$output_file" ]] || exit 91
   if [[ -f "$fake_root/message" ]]; then
     cp -- "$fake_root/message" "$output_file"
   else
     printf '%s\n' "cycle complete" >"$output_file"
   fi
+fi
+
+if [[ ( "$mode" == success || "$mode" == hold ) &&
+      -f "$fake_root/workspace-file" ]]; then
+  [[ -n "$workspace" ]] || exit 92
+  workspace_relative_path=cycle-artifact.txt
+  if [[ -f "$fake_root/workspace-relative-path" ]]; then
+    workspace_relative_path=$(<"$fake_root/workspace-relative-path")
+  fi
+  cp -- "$fake_root/workspace-file" "$workspace/$workspace_relative_path"
 fi
 
 if [[ -f "$fake_root/exit-status" ]]; then
@@ -122,8 +141,25 @@ expect_status 2 "$wywa" init "$test_root/nonempty"
 [[ "$(<"$test_root/nonempty/file")" == keep ]] ||
   fail "init modified a non-empty target"
 
+mkdir -p -- "$test_root/failing-find-bin"
+cat >"$test_root/failing-find-bin/find" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "/synthetic-entry"
+exit 1
+EOF
+chmod 0755 -- "$test_root/failing-find-bin/find"
+expect_status 2 env \
+  PATH="$test_root/failing-find-bin:$PATH" \
+  "$wywa" init "$test_root/nonempty"
+grep -q 'unable to inspect target directory safely' "$test_root/stderr" ||
+  fail "init did not report an indeterminate directory inspection"
+[[ "$(<"$test_root/nonempty/file")" == keep ]] ||
+  fail "init modified a target after directory inspection failed"
+
 ln -s -- "$workspace" "$test_root/workspace-link"
 expect_status 2 "$wywa" doctor "$test_root/workspace-link"
+grep -q 'workspace must not be a symbolic link' "$test_root/stderr" ||
+  fail "doctor canonicalized a workspace symlink before rejecting it"
 
 if (( EUID == 0 )); then
   unset WYWA_ALLOW_ROOT || true
@@ -157,8 +193,10 @@ grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
 export SECRET_SENTINEL=must-not-reach-child
 printf '%s\n' "first verified result" >"$HOME/fake/message"
 printf '%s\n' success >"$HOME/fake/mode"
+printf '%s\n' "generated and verified by the cycle" >"$HOME/fake/workspace-file"
 "$wywa" run "$workspace" --max-runtime 2m \
   >"$test_root/run-output" 2>"$test_root/run-error"
+rm -f -- "$HOME/fake/workspace-file"
 
 grep -q '^--ignore-user-config$' "$HOME/fake/arguments" ||
   fail "run did not isolate unattended configuration"
@@ -170,6 +208,16 @@ fi
 if grep -q 'SECRET_SENTINEL' "$HOME/fake/environment"; then
   fail "run leaked an unrelated environment secret"
 fi
+[[ "$(<"$workspace/cycle-artifact.txt")" == \
+  "generated and verified by the cycle" ]] ||
+  fail "successful cycle did not preserve its workspace artifact"
+[[ "$(git -C "$workspace" rev-list --count HEAD)" == 2 ]] ||
+  fail "host checkpoint did not commit the successful cycle"
+[[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
+  fail "host checkpoint did not leave a clean tree"
+grep -q '^Checkpoint WYWA cycle ' \
+  < <(git -C "$workspace" log -1 --format=%s) ||
+  fail "host checkpoint used an unexpected commit message"
 
 runtime_dir=$(find "$WYWA_STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -print)
 [[ -n "$runtime_dir" && "$runtime_dir" != "$workspace"* ]] ||
@@ -178,6 +226,8 @@ runtime_dir=$(find "$WYWA_STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -print)
   fail "runtime directory is not private"
 grep -q 'status=0 sandbox=workspace-write' "$runtime_dir/last-run" ||
   fail "successful receipt is missing or malformed"
+grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
+  fail "successful receipt omitted the host checkpoint"
 grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "successful final message was not published"
 
@@ -211,6 +261,8 @@ grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "timeout replaced the previous canonical message"
 
 printf '%s\n' hold >"$HOME/fake/mode"
+printf '%s\n' "held-cycle progress" >"$HOME/fake/workspace-file"
+printf '%s\n' "held-cycle.txt" >"$HOME/fake/workspace-relative-path"
 set +e
 "$wywa" run "$workspace" --max-runtime 10s \
   >"$test_root/held-run-output" 2>"$test_root/held-run-error" &
@@ -230,6 +282,9 @@ done
 [[ "$lock_observed" == 1 ]] || fail "did not observe the held cycle lock"
 expect_status 75 "$wywa" run "$workspace" --max-runtime 10s
 wait "$held_pid" || fail "held cycle did not complete successfully"
+rm -f -- \
+  "$HOME/fake/workspace-file" \
+  "$HOME/fake/workspace-relative-path"
 
 if pgrep -f "$fake_codex" >/dev/null 2>&1; then
   fail "fake Codex process remained after lifecycle tests"
@@ -238,6 +293,8 @@ fi
 rm -f -- "$HOME/fake/exit-status"
 printf '%s\n' success >"$HOME/fake/mode"
 printf '%s\n' "scheduled result" >"$HOME/fake/message"
+printf '%s\n' "scheduled progress" >"$HOME/fake/workspace-file"
+printf '%s\n' "scheduled-cycle.txt" >"$HOME/fake/workspace-relative-path"
 
 touch "$HOME/fake/linger-no"
 expect_status 2 env -u WYWA_STATE_ROOT \
@@ -291,6 +348,11 @@ grep -Fxq 'OnUnitInactiveSec=1h' "$timer_file" ||
 if grep -Eq '^(OnUnitActiveSec|Persistent)=' "$timer_file"; then
   fail "installed timer can catch up immediately after an overrun"
 fi
+grep -Fxq 'NoNewPrivileges=yes' "$service_file" ||
+  fail "installed service omitted NoNewPrivileges"
+if grep -Fxq 'PrivateTmp=yes' "$service_file"; then
+  fail "installed service nests Codex inside an incompatible mount namespace"
+fi
 grep -Fxq -- '--user daemon-reload' "$HOME/fake/systemctl-arguments" ||
   fail "install-user omitted the daemon reload"
 grep -Fxq -- "--user enable --now wywa-$scheduled_id.timer" \
@@ -308,6 +370,9 @@ env -u WYWA_STATE_ROOT \
   >"$test_root/run-state-output" 2>"$test_root/run-state-error"
 grep -q '^scheduled result$' "$scheduled_runtime/last-message.txt" ||
   fail "installed run-state path did not complete a cycle"
+rm -f -- \
+  "$HOME/fake/workspace-file" \
+  "$HOME/fake/workspace-relative-path"
 
 env -u WYWA_STATE_ROOT \
   WYWA_ALLOW_ROOT=1 \
@@ -331,5 +396,46 @@ env -u WYWA_STATE_ROOT \
 grep -Fq -- "--user disable --now wywa-$scheduled_id.timer" \
   "$HOME/fake/systemctl-arguments" ||
   fail "uninstall-user did not disable the timer"
+
+no_change_workspace=$test_root/no-change-worker
+"$wywa" init "$no_change_workspace" >/dev/null
+printf '%s\n' "must not publish" >"$HOME/fake/message"
+expect_status 72 "$wywa" run "$no_change_workspace" --max-runtime 2m
+no_change_id=$(printf '%s' "$no_change_workspace" | sha256sum | cut -c1-16)
+no_change_runtime=$WYWA_STATE_ROOT/$no_change_id
+grep -q 'status=72 .*checkpoint=none' "$no_change_runtime/last-run" ||
+  fail "no-progress receipt is missing or malformed"
+[[ ! -e "$no_change_runtime/last-message.txt" ]] ||
+  fail "no-progress run published a canonical message"
+[[ "$(git -C "$no_change_workspace" rev-list --count HEAD)" == 1 ]] ||
+  fail "no-progress run created a commit"
+
+secret_workspace=$test_root/secret-worker
+"$wywa" init "$secret_workspace" >/dev/null
+printf '%s\n' \
+  '{"access_token":"abcdefghijklmnopqrstuvwxyz0123456789"}' \
+  >"$HOME/fake/workspace-file"
+printf '%s\n' "auth-copy.json" >"$HOME/fake/workspace-relative-path"
+printf '%s\n' "must not publish" >"$HOME/fake/message"
+expect_status 73 "$wywa" run "$secret_workspace" --max-runtime 2m
+rm -f -- \
+  "$HOME/fake/workspace-file" \
+  "$HOME/fake/workspace-relative-path"
+secret_id=$(printf '%s' "$secret_workspace" | sha256sum | cut -c1-16)
+secret_runtime=$WYWA_STATE_ROOT/$secret_id
+grep -q 'status=73 .*checkpoint=refused' "$secret_runtime/last-run" ||
+  fail "credential refusal receipt is missing or malformed"
+[[ ! -e "$secret_runtime/last-message.txt" ]] ||
+  fail "credential refusal published a canonical message"
+[[ "$(git -C "$secret_workspace" rev-list --count HEAD)" == 1 ]] ||
+  fail "credential-like content was committed"
+git -C "$secret_workspace" diff --cached --quiet ||
+  fail "credential refusal left the Git index staged"
+[[ -n "$(git -C "$secret_workspace" status --porcelain)" ]] ||
+  fail "credential refusal discarded the uncommitted evidence"
+if rg -q 'abcdefghijklmnopqrstuvwxyz0123456789' \
+  "$secret_runtime/logs"; then
+  fail "credential refusal copied suspected secret content into the log"
+fi
 
 printf '%s\n' "PASS: WYWA portable runtime"

@@ -45,6 +45,9 @@ install -m 0644 -- "$project_dir/CHANGELOG.md" "$release_root/CHANGELOG.md"
 install -m 0644 -- \
   "$project_dir/GETTING_STARTED.md" \
   "$release_root/GETTING_STARTED.md"
+install -m 0644 -- \
+  "$project_dir/PRODUCT_HUNT.md" \
+  "$release_root/PRODUCT_HUNT.md"
 install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
 install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
 

@@ -2,7 +2,7 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.1`, ready for a real second-operator test but not yet
+Status: `0.1.0-alpha.2`, self-dogfood proven but not yet
 launch-ready.
 
 ## Product thesis
@@ -40,7 +40,8 @@ tests/test-release
 tests/test-source-tree
 ```
 
-Release changes and current limitations are in `CHANGELOG.md`.
+Release changes and current limitations are in `CHANGELOG.md`. The prepared,
+not-yet-posted launch copy and evidence storyboard are in `PRODUCT_HUNT.md`.
 
 ## Why this direction
 
@@ -61,6 +62,9 @@ root deployment:
 
 - it refuses to run as root unless the operator sets an explicit override;
 - Codex receives `workspace-write`, never the dangerous bypass flag;
+- `.git` remains read-only to Codex; after a successful run, the host wrapper
+  creates a hooks-disabled checkpoint only from a clean starting tree and
+  refuses common credential signatures and unsafe workspace content;
 - user Codex configuration is ignored during unattended runs, while existing
   Codex authentication is reused;
 - only a small environment allowlist reaches the child process, so unrelated
@@ -68,8 +72,9 @@ root deployment:
 - runtime state and logs live outside the agent-writable workspace;
 - no API key, Telegram token, credential, or private Agent Life state is copied
   into a generated workspace;
-- no service, timer, account, firewall rule, or public endpoint is installed by
-  the current MVP.
+- `init`, `doctor`, and `run` install no host service; `install-user` adds only
+  explicit per-user units. WYWA never creates a system account, firewall rule,
+  or public endpoint.
 
 The private root deployment remains a separate, explicitly authorized profile.
 It is evidence for the product, not the default shipped security posture.
@@ -83,7 +88,8 @@ The first useful release is complete only when:
 2. `doctor` proves the workspace, Git, Codex binary, Codex login, private state
    directory, and non-root boundary are ready;
 3. `run` uses an exclusive lock, bounded runtime, signal forwarding, private
-   logs, atomic last-message publication, and `workspace-write`;
+   logs, atomic last-message publication, `workspace-write`, and a guarded
+   host-side Git checkpoint;
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
@@ -108,39 +114,45 @@ The product direction is selected and bounded. The portable CLI milestone
   storage, and the non-root default;
 - `run` uses `workspace-write`, ignores unattended user configuration, scrubs
   unrelated environment variables, bounds runtime, forwards signals, excludes
-  concurrent cycles, and atomically publishes success-only final messages plus
-  a result receipt; and
+  concurrent cycles, checkpoints successful clean-start runs outside the model
+  sandbox, and atomically publishes success-only final messages plus a result
+  receipt; and
 - `status` exposes the receipt without requiring raw-log access.
 
 `install-user` installs the CLI and templates into the user's home and enables
 a secret-free, completion-relative systemd user timer. The unit carries only a
 workspace hash; the private state record resolves it to the path. It retains
-`NoNewPrivileges` and a private temporary directory. Persistent installation
+`NoNewPrivileges`. It deliberately does not add systemd's `PrivateTmp`: a real
+user-service probe showed that the nested mount namespace prevents Codex's
+Bubblewrap sandbox from creating its own namespace. Persistent installation
 requires user lingering unless `--session-only` is explicit, so the product
 does not silently stop after an SSH logout. `uninstall-user` disables and
 removes only that workspace's units while preserving its Git workspace and
 runtime receipts.
 
-`tests/test-wywa` exercises unsafe initialization targets, root refusal,
-authentication failure, runtime symlinks, success, partial failure, timeout,
-stale-output preservation, secret filtering, lock contention, orphan cleanup,
-timer generation, idempotent reinstall, scheduled dispatch, and rollback.
+`tests/test-wywa` exercises unsafe initialization targets, inspection errors,
+root refusal, authentication failure, workspace and runtime symlinks, guarded
+checkpoint success, no-progress and credential refusal, partial failure,
+timeout, stale-output preservation, secret filtering, lock contention, orphan
+cleanup, timer generation, idempotent reinstall, scheduled dispatch, and
+rollback.
 ShellCheck passes. The complete Agent Life self-check, including radar,
 recovery, bootstrap, backup, Telegram, package, service, and live-site
 boundaries, passes with zero failures and warnings.
 
-Acceptance criterion 8 also has a real fresh-account proof. A disposable
-non-root `wywaprobe` account initialized a worker, passed `doctor`, installed a
-real systemd user timer, ran the service through the user manager with the fake
-Codex fixture, returned status 0 under `workspace-write`, and passed user-unit
-verification. An initial attempt exposed privileged capability-hardening
-directives that user managers cannot apply; those directives were removed
-while `NoNewPrivileges` and `PrivateTmp` remained. The successful repeat left
-no credential or workspace path in the units. The timer, user manager, linger,
-home, and account were removed after the proof.
+Acceptance criterion 8 now has real Codex evidence. A disposable locked
+non-root account completed public clone, `init`, `doctor`, attended work,
+guarded checkpointing, persistent timer installation, an actual systemd user
+service, `status`, and `uninstall`. The corrected scheduled service ran for 102
+seconds, created checkpoint `3cc80a93070b`, and passed all seven worker tests.
+A transient user-service probe isolated `PrivateTmp` as incompatible with
+Bubblewrap while confirming `NoNewPrivileges` remains compatible. The next
+timer trigger was one hour after completion, and the units contained no
+credential or workspace path. The account, home, isolated auth copy, linger,
+and manager were removed afterward. This proves self-dogfood, not criterion 9.
 
 `bin/build-release` now produces deterministic
-`while-you-were-away-0.1.0-alpha.1.tar.gz` and SHA-256 artifacts from an
+`while-you-were-away-0.1.0-alpha.2.tar.gz` and SHA-256 artifacts from an
 explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.
@@ -149,6 +161,13 @@ the packaged CLI, and rejects private deployment markers.
 the CLI, templates, Apache-2.0 license, documentation, and self-contained tests.
 Two independently built trees compare byte-for-byte, pass all three tests, and
 reject private deployment markers before publication.
+
+The allowlisted source is public at
+`https://github.com/IlluminationAi/while-you-were-away`. Branch `main` and tag
+`v0.1.0-alpha.1` were pushed atomically. A fresh unauthenticated HTTPS clone of
+the tag matched the published commit and tree and passed all three test suites.
+This is a public alpha checkpoint, not completion of the real-operator release
+gate.
 
 ## Planned interface
 
@@ -171,15 +190,16 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Exercise `GETTING_STARTED.md` and the reproducible alpha artifact with a real
-second operator: authenticated install, one scheduled cycle, status, and
-uninstall. This is the one acceptance criterion that cannot be satisfied by
-another synthetic local account. Use the resulting friction log to decide
-whether the next surface should be a guided installer, a small local dashboard,
-or both.
+Turn the `PRODUCT_HUNT.md` storyboard into private-data-free launch images and
+keep improving onboarding without assigning the owner a tester role.
+Independent human onboarding remains the one launch-readiness criterion that
+self-dogfood cannot satisfy; record it when it happens, but do not manufacture
+it from another local account.
 
 ## Rollback
 
 All product work is contained below this directory plus explicit test and index
 entries. Code rollback is `git revert <product-commit>`. Generated workspaces
 are independent Git repositories and are never deleted by `wywa`.
+Public source rollback is a normal non-force follow-up commit or tag; deleting
+published history would require a separate owner decision.

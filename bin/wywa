@@ -49,6 +49,12 @@ absolute_path() {
   realpath -m -- "$1"
 }
 
+canonical_workspace_path() {
+  [[ ! -L "$1" ]] ||
+    die "workspace must not be a symbolic link: $1"
+  absolute_path "$1"
+}
+
 validate_workspace_path() {
   local candidate=$1
   [[ "$candidate" == /* ]] || die "workspace path must resolve to an absolute path"
@@ -142,6 +148,139 @@ check_required_workspace_files() {
   [[ -d "$workspace/.git" ]] || die "workspace is not a Git repository"
 }
 
+checkpoint_git() {
+  local workspace=$1
+  shift
+  env \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_TERMINAL_PROMPT=0 \
+    LC_ALL=C \
+    git \
+      -C "$workspace" \
+      -c core.fsmonitor=false \
+      -c core.hooksPath=/dev/null \
+      -c commit.gpgSign=false \
+      "$@"
+}
+
+unstage_checkpoint() {
+  local workspace=$1
+  checkpoint_git "$workspace" \
+    restore --staged --source=HEAD -- . >/dev/null 2>&1 || true
+}
+
+checkpoint_workspace() {
+  local workspace=$1
+  local run_stamp=$2
+  local finding scan_status diff_status
+  local secret_pattern
+  secret_pattern='(sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----|"(access_token|refresh_token|id_token|client_secret)"[[:space:]]*:[[:space:]]*"[^"]{20,}")'
+
+  checkpoint_result=refused
+
+  if ! finding=$(
+    cd /
+    find -- "$workspace" -mindepth 2 -name .git -print -quit
+  ); then
+    printf '%s\n' "checkpoint: unable to inspect the workspace for nested Git metadata"
+    return 73
+  fi
+  if [[ -n "$finding" ]]; then
+    printf '%s\n' "checkpoint: refused because nested Git metadata is present"
+    return 73
+  fi
+
+  if ! finding=$(
+    cd /
+    find -- "$workspace" \
+      -path "$workspace/.git" -prune -o \
+      \( ! -type d ! -type f ! -type l \) -print -quit
+  ); then
+    printf '%s\n' "checkpoint: unable to inspect workspace file types"
+    return 73
+  fi
+  if [[ -n "$finding" ]]; then
+    printf '%s\n' "checkpoint: refused because a special file is present"
+    return 73
+  fi
+
+  if ! finding=$(
+    cd /
+    find -- "$workspace" \
+      -path "$workspace/.git" -prune -o \
+      -type f -size +10485760c -print -quit
+  ); then
+    printf '%s\n' "checkpoint: unable to inspect workspace file sizes"
+    return 73
+  fi
+  if [[ -n "$finding" ]]; then
+    printf '%s\n' "checkpoint: refused because a file exceeds 10 MiB"
+    return 73
+  fi
+
+  if ! checkpoint_git "$workspace" add -A -- .; then
+    printf '%s\n' "checkpoint: git add failed"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+
+  checkpoint_git "$workspace" diff --cached --quiet --exit-code
+  diff_status=$?
+  if [[ "$diff_status" -eq 0 ]]; then
+    checkpoint_result=none
+    printf '%s\n' "checkpoint: no workspace changes; durable progress is required"
+    return 72
+  fi
+  if [[ "$diff_status" -ne 1 ]]; then
+    printf '%s\n' "checkpoint: unable to inspect the staged change"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+
+  if ! checkpoint_git "$workspace" diff --cached --check; then
+    printf '%s\n' "checkpoint: refused because git diff --check failed"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+
+  checkpoint_git "$workspace" grep \
+    --cached \
+    -I \
+    -q \
+    -E \
+    -e "$secret_pattern" --
+  scan_status=$?
+  if [[ "$scan_status" -eq 0 ]]; then
+    printf '%s\n' "checkpoint: refused because staged content resembles a credential"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+  if [[ "$scan_status" -ne 1 ]]; then
+    printf '%s\n' "checkpoint: credential scan could not complete"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+
+  if ! checkpoint_git "$workspace" \
+    -c user.name="WYWA Worker" \
+    -c user.email="wywa@localhost" \
+    commit -q -m "Checkpoint WYWA cycle $run_stamp"; then
+    printf '%s\n' "checkpoint: git commit failed"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+
+  checkpoint_result=$(
+    checkpoint_git "$workspace" rev-parse --short=12 HEAD
+  )
+  if [[ -n "$(checkpoint_git "$workspace" status --porcelain)" ]]; then
+    printf '%s\n' "checkpoint: working tree changed during checkpoint creation"
+    return 73
+  fi
+  printf 'checkpoint: committed %s\n' "$checkpoint_result"
+}
+
 prepare_runtime_dir() {
   local workspace=$1
   local root runtime_dir
@@ -176,8 +315,15 @@ cmd_init() {
   [[ "$workspace" != / ]] || die "refusing to initialize the filesystem root"
   [[ ! -L "$requested" ]] || die "refusing to initialize a symbolic-link target"
   if [[ -e "$workspace" ]]; then
+    local first_entry
     [[ -d "$workspace" ]] || die "target exists and is not a directory"
-    if find "$workspace" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+    if ! first_entry=$(
+      cd /
+      find -- "$workspace" -mindepth 1 -maxdepth 1 -print -quit
+    ); then
+      die "unable to inspect target directory safely: $workspace"
+    fi
+    if [[ -n "$first_entry" ]]; then
       die "target directory is not empty: $workspace"
     fi
   fi
@@ -242,7 +388,7 @@ doctor_workspace() {
 cmd_doctor() {
   require_single_workspace_arg "$@"
   local workspace
-  workspace=$(absolute_path "$1")
+  workspace=$(canonical_workspace_path "$1")
   doctor_workspace "$workspace"
 }
 
@@ -280,12 +426,13 @@ cmd_run() {
     die "duration must be a positive integer followed by s, m, h, or d"
 
   local workspace
-  workspace=$(absolute_path "$workspace_arg")
+  workspace=$(canonical_workspace_path "$workspace_arg")
   doctor_workspace "$workspace"
 
   local codex_bin runtime_dir logs_dir lock_file last_message
   local last_run prompt run_stamp run_log message_tmp receipt_tmp
-  local codex_pid='' termination_status='' run_status=0
+  local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
+  local checkpoint_result=skipped
   local -a clean_env command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
@@ -317,6 +464,10 @@ cmd_run() {
     return 0
   fi
 
+  if [[ -n "$(checkpoint_git "$workspace" status --porcelain)" ]]; then
+    die "workspace has uncommitted changes; inspect and resolve them before a real run"
+  fi
+
   umask 077
   exec 9>"$lock_file"
   if ! flock -n 9; then
@@ -339,12 +490,16 @@ cmd_run() {
     else
       rm -f -- "$message_tmp"
     fi
-    printf '%s status=%s sandbox=workspace-write log=%s\n' \
+    printf '%s status=%s sandbox=workspace-write checkpoint=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
+      "$checkpoint_result" \
       "$run_log" >"$receipt_tmp"
     mv -f -- "$receipt_tmp" "$last_run"
-    find "$logs_dir" -type f -name 'cycle-*.log' -mtime +30 -delete
+    (
+      cd /
+      find "$logs_dir" -type f -name 'cycle-*.log' -mtime +30 -delete
+    )
   }
   trap finalize_run EXIT
 
@@ -388,13 +543,31 @@ cmd_run() {
   fi
   set -e
 
+  if [[ "$run_status" -eq 0 && ! -s "$message_tmp" ]]; then
+    printf '%s\n' "run: Codex returned success without a final message" >>"$run_log"
+    checkpoint_result=refused
+    run_status=70
+  fi
+
+  if [[ "$run_status" -eq 0 ]]; then
+    set +e
+    checkpoint_workspace "$workspace" "$run_stamp" >>"$run_log" 2>&1
+    checkpoint_status=$?
+    set -e
+    if [[ "$checkpoint_status" -ne 0 ]]; then
+      run_status=$checkpoint_status
+      printf 'run: checkpoint refused; inspect private log: %s\n' \
+        "$run_log" >&2
+    fi
+  fi
+
   exit "$run_status"
 }
 
 cmd_status() {
   require_single_workspace_arg "$@"
   local workspace runtime_dir
-  workspace=$(absolute_path "$1")
+  workspace=$(canonical_workspace_path "$1")
   validate_workspace_path "$workspace"
   runtime_dir=$(runtime_dir_for "$workspace")
 
@@ -507,7 +680,7 @@ cmd_install_user() {
   local workspace identifier systemctl_bin loginctl_bin linger user_config_dir unit_dir
   local install_root install_bin install_templates service_name timer_name
   local service_file timer_file service_content timer_content
-  workspace=$(absolute_path "$workspace_arg")
+  workspace=$(canonical_workspace_path "$workspace_arg")
   doctor_workspace "$workspace"
   identifier=$(workspace_id "$workspace")
   systemctl_bin=$(resolve_systemctl_bin)
@@ -539,7 +712,6 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 TimeoutStartSec=infinity
 UMask=0077
 NoNewPrivileges=yes
-PrivateTmp=yes
 "
   timer_content="[Unit]
 Description=Wake While You Were Away worker $identifier after recovery time
@@ -609,7 +781,7 @@ cmd_uninstall_user() {
 
   local workspace identifier systemctl_bin user_config_dir unit_dir
   local service_name timer_name service_file timer_file
-  workspace=$(absolute_path "$1")
+  workspace=$(canonical_workspace_path "$1")
   validate_workspace_path "$workspace"
   check_root_boundary
   identifier=$(workspace_id "$workspace")

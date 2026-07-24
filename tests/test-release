@@ -2,6 +2,7 @@
 set -euo pipefail
 
 repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd -- "$repo_dir"
 builder=$repo_dir/bin/build-release
 test_root=$(mktemp -d)
 
@@ -45,6 +46,8 @@ release_root=$(find \
   fail "release omitted onboarding"
 [[ -f "$release_root/CHANGELOG.md" ]] ||
   fail "release omitted the changelog"
+[[ -f "$release_root/PRODUCT_HUNT.md" ]] ||
+  fail "release omitted the launch pack"
 [[ -f "$release_root/LICENSE" ]] ||
   fail "release omitted the Apache-2.0 license"
 [[ -f "$release_root/templates/MANDATE.md" ]] ||
