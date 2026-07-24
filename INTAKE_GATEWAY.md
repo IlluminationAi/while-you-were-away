@@ -1,10 +1,12 @@
 # Private intake gateway
 
-Status: loopback-only operational boundary. There is no public submission
-route, reverse proxy, or automatic catalog mutation.
+Status: two action-pinned loopback workers are operational. There is no public
+submission route, production reverse proxy, or automatic catalog mutation.
 
 `wywa-intake-gateway` accepts one versioned JSON envelope at
-`POST /v1/intake` on `127.0.0.1`. The envelope contains only the canonical
+`POST /v1/intake` on `127.0.0.1`. The live profile runs an application worker
+on port 8742 and a withdrawal worker on port 8743. Each process is pinned to
+its one expected signed action. The envelope contains only the canonical
 signed request object and its detached signature:
 
 ```json
@@ -61,9 +63,9 @@ bin/wywa-intake-queue enable \
   --reason "attended intake window"
 ```
 
-Stopping the gateway is the harder network brake. It also stops live
-withdrawals, so prefer the application switch unless the HTTP parser,
-verification chain, or host itself is suspect.
+Stopping only the application worker is the harder application network brake;
+the withdrawal worker remains available. Stop both workers only when the HTTP
+parser, verification chain, or host itself is suspect.
 
 ## Run and inspect
 
@@ -75,15 +77,21 @@ bin/wywa-intake-gateway serve \
   --state /private/intake-state \
   --port 8742 \
   --max-concurrency 4 \
-  --status-file /run/wywa-intake-gateway/status.json
+  --expected-action apply \
+  --status-file /run/wywa-intake-apply-gateway/status.json
+bin/wywa-intake-gateway serve \
+  --state /private/intake-state \
+  --port 8743 \
+  --max-concurrency 1 \
+  --expected-action withdraw \
+  --status-file /run/wywa-intake-withdraw-gateway/status.json
 curl --noproxy '*' http://127.0.0.1:8742/healthz
-curl --noproxy '*' http://127.0.0.1:8742/status
+curl --noproxy '*' http://127.0.0.1:8743/healthz
 ```
 
-`--expected-action apply` or `--expected-action withdraw` pins a process to
-one signed action and publishes that pin in its bounded status. This is useful
-only with distinct root-controlled loopback workers and edge routes; a client
-cannot choose or override the pin.
+The bounded health and status documents publish both the action pin and the
+SHA-256 of the executing gateway source. This makes an upgrade or rollback
+observable on each lane. A client cannot choose or override either pin.
 
 Before any start or restart, verify that the queue state is a mode-0700,
 nonsymlink directory and that the listener address is not configurable beyond
@@ -108,7 +116,9 @@ Responses never echo the signature or a verifier's network error detail.
 1. Disable queue applications. Withdrawals continue.
 2. Capture `/status`, queue `status`, the unit state, and the loopback socket
    binding. Do not copy signed bodies into an ordinary log.
-3. If parser or process integrity is in doubt, stop the gateway. Preserve the
+3. If the application parser or process is in doubt, stop the application
+   worker and leave the separately pinned withdrawal worker running. Stop both
+   only if their shared verification chain or host is suspect. Preserve the
    private queue ledger; do not truncate it.
 4. Verify the ledger hash chain and exact installed executables against a
    reviewed source checkpoint.
@@ -125,9 +135,9 @@ separate manual authority boundary.
 ## Isolated reverse-proxy harness
 
 `platform/intake-edge-harness.nginx.conf.in` is test-only. It binds a random
-IPv4 loopback port, not 80 or 443, and proxies to separate disposable
-action-pinned workers sharing one queue. `tests/test-intake-edge` validates the
-real nginx parser and proves:
+IPv4 loopback TLS port with an ephemeral certificate, not 80 or 443, and
+proxies to separate disposable action-pinned workers sharing one queue.
+`tests/test-intake-edge` validates the real nginx and TLS parsers and proves:
 
 - only exact `POST /v1/intake/apply` and `/v1/intake/withdraw` reach their
   respective workers;
@@ -143,10 +153,14 @@ real nginx parser and proves:
   are not forwarded;
 - access and rate-limit logging remain off; and
 - upstream loss returns one bounded 503 response, while a fresh gateway on the
-  same socket restores accepted intake without changing the queue.
+  same socket restores accepted intake without changing the queue; and
+- a staged executable upgrade changes both workers' published source hashes,
+  a one-worker failure leaves signed withdrawal available, a disabled queue
+  enforces withdrawal-only emergency posture, and an atomic rollback restores
+  both prior hashes without merging the signed-action lanes.
 
 This is mechanism evidence from one host and one source address. It does not
-test TLS, distributed addresses, NAT contention, provider DDoS controls, or a
-real hostile internet. The split closes the specific shared-throttle flaw in
-the disposable design; public exposure still requires outside review or
-bounded real-traffic evidence and a production lifecycle for both workers.
+test public routing, distributed addresses, NAT contention, provider DDoS
+controls, or a real hostile internet. The split closes the specific
+shared-throttle and one-worker lifecycle flaws; public exposure still requires
+outside review or bounded real-traffic evidence.

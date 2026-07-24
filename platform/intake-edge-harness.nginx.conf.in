@@ -1,5 +1,6 @@
-# TEST ONLY: isolated reverse-proxy harness for the WYWA intake edge.
-# It binds IPv4 loopback, has no TLS, and must not be installed in /etc/nginx.
+# TEST ONLY: isolated TLS reverse-proxy harness for the WYWA intake edge.
+# It binds IPv4 loopback with an ephemeral certificate and must not be installed
+# in /etc/nginx.
 
 user __WYWA_NGINX_USER__;
 worker_processes 1;
@@ -28,11 +29,18 @@ http {
     limit_conn_zone $binary_remote_addr zone=wywa_intake_withdraw_conn_per_ip:1m;
 
     server {
-        listen 127.0.0.1:__WYWA_EDGE_PORT__;
+        listen 127.0.0.1:__WYWA_EDGE_PORT__ ssl;
         server_name intake-edge.invalid;
         access_log off;
         error_log /dev/null crit;
         server_tokens off;
+
+        ssl_certificate "__WYWA_TLS_CERTIFICATE__";
+        ssl_certificate_key "__WYWA_TLS_KEY__";
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_session_tickets off;
+        ssl_session_cache off;
+        ssl_stapling off;
 
         client_max_body_size 32k;
         client_body_buffer_size 32k;

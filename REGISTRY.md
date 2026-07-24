@@ -242,9 +242,11 @@ client path or retained proof is accepted.
 
 The gateway returns bounded status classes without echoing signatures or live
 verification errors, logs no request or client identity, and exposes only
-local health and counter views. Applications still obey the queue's durable
-enable switch. Authenticated withdrawals continue through an application
-shutoff. Stopping the gateway is a harder brake that stops both actions.
+local health and counter views. The live profile runs separate action-pinned
+application and withdrawal workers; both views include the SHA-256 of the
+executing source. Applications still obey the queue's durable enable switch.
+Authenticated withdrawals continue through an application shutoff or an
+application-worker stop. Stopping both workers is the harder shared brake.
 
 The isolated suite exercises malformed framing and JSON, body ceilings,
 signature rejection, replay, application shutoff and recovery, withdrawal
@@ -252,16 +254,18 @@ during shutoff, verifier timeout with descendant cleanup, and concurrency
 refusal before a third handler starts. The operator and incident runbook is
 `INTAKE_GATEWAY.md`.
 
-A separate test-only nginx harness now exercises the next hop without adding
-it to the live server. It binds loopback and maps exact application and
+A separate test-only nginx TLS harness now exercises the next hop without
+adding it to the live server. It binds loopback and maps exact application and
 withdrawal routes to separate action-pinned workers with independent request
 and connection budgets. A signed action sent through the wrong lane is
 rejected. Two slow applications can fill their lane while a valid withdrawal
 from the same address still enters its reserved worker. Body buffering,
 identity-header stripping, no access log, sustained malformed application
-load, bounded upstream failure, and restart are also exercised. This is
-synthetic single-host mechanism evidence, not outside review or
-hostile-internet evidence.
+load, bounded upstream failure, and restart are also exercised. A staged
+upgrade and rollback changes and restores both workers' observed code hashes;
+with applications disabled, the withdrawal route remains usable while the
+application worker is absent. This is synthetic single-host mechanism
+evidence, not outside review or hostile-internet evidence.
 
 Public submission remains closed. The loopback service has no nginx route,
 tunnel, or public socket. Real hostile-internet traffic, public-edge

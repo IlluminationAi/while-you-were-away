@@ -7,6 +7,7 @@ import argparse
 import base64
 import binascii
 import datetime as dt
+import hashlib
 import json
 import os
 import signal
@@ -34,6 +35,7 @@ DEFAULT_READ_TIMEOUT = 5.0
 DEFAULT_HANDOFF_TIMEOUT = 50.0
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 ENVELOPE_KEYS = {"schema_version", "request", "signature_b64"}
+EXECUTABLE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 class GatewayError(Exception):
@@ -234,6 +236,7 @@ class Metrics:
                 "read_timeout_seconds": self.read_timeout,
             },
             "expected_action": self.expected_action,
+            "executable_sha256": EXECUTABLE_SHA256,
             "active": self.active,
             "peak_active": self.peak_active,
             "requests": {
@@ -467,6 +470,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
                 {
                     "ok": True,
                     "loopback_only": True,
+                    "expected_action": self.gateway.expected_action,
+                    "executable_sha256": EXECUTABLE_SHA256,
                     "curator_capability": False,
                 },
             )

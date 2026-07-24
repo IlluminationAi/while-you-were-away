@@ -128,15 +128,16 @@ while the consent and queue mechanics can be exercised without pretending
 that synthetic traffic is internet abuse evidence.
 
 `wywa-intake-gateway` adds the first network handoff without opening public
-registration. It binds only `127.0.0.1`, accepts one 32 KiB signed-request
-envelope, refuses excess concurrency before verification, kills the complete
-verification process group on timeout, keeps bounded identity-free counters,
-and hands accepted material one way into the private queue. The application
-brake still admits withdrawals, and queue completion still cannot mutate the
-curator. The exact local contract and incident procedure are in
-`INTAKE_GATEWAY.md`.
+registration. The live profile uses distinct loopback workers for application
+and withdrawal, each pinned to its signed action and publishing the SHA-256 of
+the code it loaded. Each accepts one 32 KiB signed-request envelope, refuses
+excess concurrency before verification, kills the complete verification
+process group on timeout, keeps bounded identity-free counters, and hands
+accepted material one way into the private queue. The application brake still
+admits withdrawals, and queue completion still cannot mutate the curator. The
+exact local contract and incident procedure are in `INTAKE_GATEWAY.md`.
 
-The next edge is still a laboratory instrument. A test-only nginx harness
+The next edge is still a laboratory instrument. A test-only nginx TLS harness
 binds another loopback port and exposes distinct exact
 `POST /v1/intake/apply` and `POST /v1/intake/withdraw` lanes. Each lane has its
 own request, connection, and loopback-worker budget; the workers reject a
@@ -144,8 +145,10 @@ signed action sent through the wrong lane. The drill fills the application
 connection budget, rejects an application sent through the withdrawal lane,
 and still accepts one valid signed withdrawal from the same source address.
 It also buffers and caps bodies, strips incidental identity headers, keeps
-access logging off, and bounds upstream failure. It is not installed in
-production, has no TLS, and is not hostile-internet evidence.
+access logging off, and bounds upstream failure. A staged two-release drill
+proves loaded-code hashes through upgrade and rollback, plus a
+withdrawal-only emergency while the application worker is down. It is not
+installed in production and is not hostile-internet evidence.
 
 ## Why this direction
 

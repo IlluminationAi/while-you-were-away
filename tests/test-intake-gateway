@@ -279,10 +279,15 @@ def main() -> None:
             }
             assert gateway_status["curator_capability"] is False
             assert gateway_status["retains_client_identity"] is False
+            assert gateway_status["executable_sha256"] == hashlib.sha256(
+                shadow_gateway.read_bytes()
+            ).hexdigest()
             assert status_file.stat().st_mode & 0o777 == 0o600
 
             code, health = http_request(port, "GET", "/healthz")
             assert code == 200 and health["ok"] is True
+            assert health["expected_action"] is None
+            assert health["executable_sha256"] == gateway_status["executable_sha256"]
             code, missing = http_request(port, "GET", "/")
             assert code == 404 and missing["error"] == "route-not-found"
             code, wrong_method = http_request(port, "PUT", "/v1/intake", {})
@@ -550,6 +555,7 @@ def main() -> None:
                 "listener",
                 "limits",
                 "expected_action",
+                "executable_sha256",
                 "active",
                 "peak_active",
                 "requests",

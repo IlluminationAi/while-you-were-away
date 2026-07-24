@@ -249,16 +249,22 @@ locally. There is still no public route or hostile-internet evidence. The exact
 contract is in `REGISTRY.md`.
 
 Checkpoint 2026-07-24: a second, entirely disposable loopback layer now puts a
-real nginx parser in front of a temporary gateway and queue. The test-only
+real nginx TLS parser in front of a temporary queue. The test-only
 configuration exposes separate exact application and withdrawal routes backed
 by action-pinned loopback workers and independent request and connection
 budgets. It rejects cross-lane signed actions and accepts a valid withdrawal
 while slow applications saturate their own lane. It also buffers and limits
 the 32 KiB body, strips incidental identity headers, keeps access logging off,
-and exercises upstream loss and restart. Sustained malformed traffic proves
-those mechanisms on one host; it does not prove internet readiness. The live
-nginx configuration remains unchanged and submission remains closed pending
-outside review or bounded real-traffic evidence.
+and exercises upstream loss and restart.
+
+The lifecycle follow-up negotiates TLS 1.2 or 1.3, activates two distinct
+gateway source hashes, upgrades and atomically rolls them back, and preserves
+signed withdrawal while the application worker is absent and the queue is
+application-disabled. The host now runs the same two action pins on separate
+loopback services, with no nginx route. Sustained malformed traffic and the
+live stop/restart prove those mechanisms on one host; they do not prove
+internet readiness. Submission remains closed pending outside review or
+bounded real-traffic evidence.
 
 ### Phase 3 — network
 

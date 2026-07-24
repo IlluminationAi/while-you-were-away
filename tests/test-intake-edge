@@ -13,6 +13,7 @@ import os
 import pwd
 import shutil
 import socket
+import ssl
 import subprocess
 import tempfile
 import threading
@@ -26,6 +27,7 @@ GATEWAY = PROJECT / "bin" / "wywa-intake-gateway"
 INTAKE = PROJECT / "bin" / "wywa-intake"
 QUEUE = PROJECT / "bin" / "wywa-intake-queue"
 TEMPLATE = PROJECT / "platform" / "intake-edge-harness.nginx.conf.in"
+TLS_CONTEXT: ssl.SSLContext | None = None
 
 
 def run(
@@ -101,6 +103,13 @@ def stop_process(process: subprocess.Popen[str] | None) -> tuple[str, str]:
             process.wait(timeout=5)
     stdout, stderr = process.communicate()
     return stdout, stderr
+
+
+def atomic_symlink(target: Path, link: Path) -> None:
+    temporary = link.with_name(f".{link.name}.new")
+    temporary.unlink(missing_ok=True)
+    temporary.symlink_to(target, target_is_directory=True)
+    temporary.replace(link)
 
 
 def make_key(path: Path) -> str:
@@ -186,7 +195,14 @@ def http_request(
     content_type: str = "application/json",
     timeout: float = 8.0,
 ) -> tuple[int, bytes, dict[str, str]]:
-    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    if TLS_CONTEXT is None:
+        raise AssertionError("TLS context is not initialized")
+    connection = http.client.HTTPSConnection(
+        "127.0.0.1",
+        port,
+        timeout=timeout,
+        context=TLS_CONTEXT,
+    )
     headers: dict[str, str] = {}
     if body is not None:
         headers["Content-Type"] = content_type
@@ -199,12 +215,11 @@ def http_request(
 
 
 def raw_request(port: int, data: bytes) -> bytes:
-    with socket.create_connection(("127.0.0.1", port), timeout=3) as connection:
+    if TLS_CONTEXT is None:
+        raise AssertionError("TLS context is not initialized")
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as raw:
+        connection = TLS_CONTEXT.wrap_socket(raw, server_hostname="127.0.0.1")
         connection.sendall(data)
-        try:
-            connection.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
         chunks: list[bytes] = []
         while True:
             chunk = connection.recv(65536)
@@ -212,6 +227,32 @@ def raw_request(port: int, data: bytes) -> bytes:
                 break
             chunks.append(chunk)
     return b"".join(chunks)
+
+
+def negotiated_tls_version(port: int) -> str:
+    if TLS_CONTEXT is None:
+        raise AssertionError("TLS context is not initialized")
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as raw:
+        with TLS_CONTEXT.wrap_socket(raw, server_hostname="127.0.0.1") as secured:
+            return secured.version() or ""
+
+
+def plain_http_refused(port: int) -> bool:
+    with socket.create_connection(("127.0.0.1", port), timeout=3) as connection:
+        connection.sendall(
+            b"GET / HTTP/1.1\r\nHost: intake-edge.invalid\r\n"
+            b"Connection: close\r\n\r\n"
+        )
+        try:
+            response = connection.recv(128)
+        except (ConnectionResetError, TimeoutError):
+            return True
+    if not response.startswith(b"HTTP/"):
+        return True
+    try:
+        return status_code(response) in {400, 497}
+    except (IndexError, ValueError):
+        return False
 
 
 def status_code(response: bytes) -> int:
@@ -268,11 +309,39 @@ def start_edge(root: Path, config: Path, port: int) -> subprocess.Popen[str]:
 
 
 def main() -> None:
+    global TLS_CONTEXT
+
     if shutil.which("nginx") is None:
         raise AssertionError("nginx is required for the isolated edge harness")
+    if shutil.which("openssl") is None:
+        raise AssertionError("openssl is required for the isolated TLS edge")
 
     with tempfile.TemporaryDirectory(prefix="wywa-intake-edge-test-") as temporary:
         root = Path(temporary)
+        tls_key = root / "edge-key.pem"
+        tls_certificate = root / "edge-certificate.pem"
+        run(
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=intake-edge.invalid",
+            "-addext",
+            "subjectAltName=DNS:intake-edge.invalid,IP:127.0.0.1",
+            "-keyout",
+            str(tls_key),
+            "-out",
+            str(tls_certificate),
+        )
+        tls_key.chmod(0o600)
+        TLS_CONTEXT = ssl.create_default_context(cafile=str(tls_certificate))
+        TLS_CONTEXT.minimum_version = ssl.TLSVersion.TLSv1_2
+
         shadow = root / "shadow"
         shadow.mkdir()
         shadow_gateway = shadow / "wywa-intake-gateway"
@@ -367,11 +436,15 @@ def main() -> None:
             "__WYWA_EDGE_PORT__": str(edge_port),
             "__WYWA_APPLY_UPSTREAM_PORT__": str(apply_gateway_port),
             "__WYWA_WITHDRAW_UPSTREAM_PORT__": str(withdraw_gateway_port),
+            "__WYWA_TLS_CERTIFICATE__": str(tls_certificate),
+            "__WYWA_TLS_KEY__": str(tls_key),
         }
         for marker, value in replacements.items():
             config_text = config_text.replace(marker, value)
         if "__WYWA_" in config_text:
             raise AssertionError("nginx edge template retained a placeholder")
+        assert "ssl_protocols TLSv1.2 TLSv1.3;" in config_text
+        assert "ssl_session_tickets off;" in config_text
         for header in (
             "Authorization",
             "Cookie",
@@ -421,6 +494,8 @@ def main() -> None:
             assert f"127.0.0.1:{edge_port}" in sockets
             assert f"0.0.0.0:{edge_port}" not in sockets
             assert f"[::]:{edge_port}" not in sockets
+            assert negotiated_tls_version(edge_port) in {"TLSv1.2", "TLSv1.3"}
+            assert plain_http_refused(edge_port)
 
             code, _, headers = http_request(edge_port, "GET", "/v1/intake/apply")
             assert code == 405
@@ -700,6 +775,246 @@ def main() -> None:
             assert code == 202
             assert json.loads(accepted_body)["accepted"] is True
 
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            withdraw_out, withdraw_err = stop_process(withdraw_gateway)
+            withdraw_gateway = None
+            gateway_stderr.append(withdraw_err)
+            assert not apply_out and not withdraw_out
+            wait_for_port(apply_gateway_port, open_state=False)
+            wait_for_port(withdraw_gateway_port, open_state=False)
+
+            releases = root / "releases"
+            release_one = releases / "release-one"
+            release_two = releases / "release-two"
+            for release in (release_one, release_two):
+                release.mkdir(parents=True)
+                for source in (
+                    shadow_gateway,
+                    shadow_intake,
+                    shadow_queue,
+                    fake_registry,
+                    records_path,
+                ):
+                    shutil.copy2(source, release / source.name)
+            with (release_two / "wywa-intake-gateway").open(
+                "a",
+                encoding="utf-8",
+            ) as handle:
+                handle.write("\n# isolated lifecycle release two\n")
+            release_one_hash = hashlib.sha256(
+                (release_one / "wywa-intake-gateway").read_bytes()
+            ).hexdigest()
+            release_two_hash = hashlib.sha256(
+                (release_two / "wywa-intake-gateway").read_bytes()
+            ).hexdigest()
+            assert release_one_hash != release_two_hash
+            current_release = root / "current-release"
+            atomic_symlink(release_one, current_release)
+
+            apply_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            withdraw_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                withdraw_status_file,
+                withdraw_gateway_port,
+                expected_action="withdraw",
+                max_concurrency=1,
+            )
+            assert json.loads(
+                apply_status_file.read_text(encoding="utf-8")
+            )["executable_sha256"] == release_one_hash
+            assert json.loads(
+                withdraw_status_file.read_text(encoding="utf-8")
+            )["executable_sha256"] == release_one_hash
+
+            atomic_symlink(release_two, current_release)
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            withdraw_out, withdraw_err = stop_process(withdraw_gateway)
+            withdraw_gateway = None
+            gateway_stderr.append(withdraw_err)
+            assert not apply_out and not withdraw_out
+            apply_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            withdraw_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                withdraw_status_file,
+                withdraw_gateway_port,
+                expected_action="withdraw",
+                max_concurrency=1,
+            )
+            upgraded_apply = json.loads(
+                apply_status_file.read_text(encoding="utf-8")
+            )
+            upgraded_withdraw = json.loads(
+                withdraw_status_file.read_text(encoding="utf-8")
+            )
+            assert upgraded_apply["expected_action"] == "apply"
+            assert upgraded_withdraw["expected_action"] == "withdraw"
+            assert upgraded_apply["executable_sha256"] == release_two_hash
+            assert upgraded_withdraw["executable_sha256"] == release_two_hash
+
+            emergency_application = issue(
+                shadow_intake,
+                key,
+                verification,
+                root / "emergency-application",
+                request_id="f0000000000000000000000000000000",
+                at=now,
+            )
+            emergency_withdrawal = issue(
+                shadow_intake,
+                withdraw_key,
+                withdraw_verification,
+                root / "emergency-withdrawal",
+                action="withdraw",
+                request_id="10000000000000000000000000000000",
+                at=now,
+            )
+            code, mismatch_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/withdraw",
+                body=encode(emergency_application),
+            )
+            assert code == 400
+            assert json.loads(mismatch_body)["error"] == (
+                "signed-action-does-not-match-lane"
+            )
+            code, mismatch_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/apply",
+                body=encode(emergency_withdrawal),
+            )
+            assert code == 400
+            assert json.loads(mismatch_body)["error"] == (
+                "signed-action-does-not-match-lane"
+            )
+
+            run(
+                shadow_queue,
+                "disable",
+                "--state",
+                str(state),
+                "--reason",
+                "isolated withdrawal-only emergency",
+            )
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            assert not apply_out
+            wait_for_port(apply_gateway_port, open_state=False)
+            code, unavailable_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/apply",
+                body=encode(emergency_application),
+            )
+            assert code == 503
+            assert json.loads(unavailable_body)["error"] == (
+                "edge-upstream-unavailable"
+            )
+            code, emergency_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/withdraw",
+                body=encode(emergency_withdrawal),
+            )
+            assert code == 202
+            assert json.loads(emergency_body)["action"] == "withdraw"
+            emergency_withdraw_status = json.loads(
+                withdraw_status_file.read_text(encoding="utf-8")
+            )
+            assert emergency_withdraw_status["expected_action"] == "withdraw"
+            assert emergency_withdraw_status["requests"]["accepted"] == 1
+
+            apply_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            code, closed_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/apply",
+                body=encode(emergency_application),
+            )
+            assert code == 503
+            assert json.loads(closed_body)["error"] == "applications-disabled"
+
+            atomic_symlink(release_one, current_release)
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            withdraw_out, withdraw_err = stop_process(withdraw_gateway)
+            withdraw_gateway = None
+            gateway_stderr.append(withdraw_err)
+            assert not apply_out and not withdraw_out
+            apply_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            withdraw_gateway = start_gateway(
+                current_release / "wywa-intake-gateway",
+                state,
+                withdraw_status_file,
+                withdraw_gateway_port,
+                expected_action="withdraw",
+                max_concurrency=1,
+            )
+            rolled_back_apply = json.loads(
+                apply_status_file.read_text(encoding="utf-8")
+            )
+            rolled_back_withdraw = json.loads(
+                withdraw_status_file.read_text(encoding="utf-8")
+            )
+            assert rolled_back_apply["expected_action"] == "apply"
+            assert rolled_back_withdraw["expected_action"] == "withdraw"
+            assert rolled_back_apply["executable_sha256"] == release_one_hash
+            assert rolled_back_withdraw["executable_sha256"] == release_one_hash
+            rollback_withdrawal = issue(
+                shadow_intake,
+                withdraw_key,
+                withdraw_verification,
+                root / "rollback-withdrawal",
+                action="withdraw",
+                request_id="20000000000000000000000000000000",
+                at=now,
+            )
+            code, rollback_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/withdraw",
+                body=encode(rollback_withdrawal),
+            )
+            assert code == 202
+            assert json.loads(rollback_body)["action"] == "withdraw"
+
             assert not list(harness_root.rglob("*.log"))
         finally:
             edge_out, edge_err = stop_process(edge)
@@ -716,7 +1031,8 @@ def main() -> None:
             "PASS: isolated WYWA intake edge "
             f"(120 malformed: {rate_limited} edge-limited, "
             f"{malformed_forwarded} bounded upstream rejections; "
-            "signed action lanes, reserved withdrawal, and recovery passed)"
+            "TLS, signed action lanes, reserved withdrawal, "
+            "upgrade, rollback, and emergency recovery passed)"
         )
 
 

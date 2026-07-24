@@ -32,6 +32,9 @@
   withdrawal routes to action-pinned workers with separate request and
   connection budgets, no access log, bounded upstream-failure responses, and
   an exercised withdrawal reserve; and
+- the edge harness now negotiates TLS 1.2/1.3, observes executable hashes
+  through staged upgrade and rollback, and proves withdrawal-only emergency
+  operation while the application worker is absent; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
@@ -42,8 +45,8 @@
   local review action, not a network endpoint;
 - the reverse-proxy drill proves on one host that an application flood cannot
   consume the withdrawal lane or submit an application through it; it remains
-  synthetic evidence without TLS, distributed-source behavior, outside
-  review, or hostile-internet measurement;
+  synthetic evidence without distributed-source behavior, outside review, or
+  hostile-internet measurement;
 - signed requests and queued review remain consent evidence only; there is no
   public listener, automatic catalog mutation, or real hostile-traffic
   measurement;
