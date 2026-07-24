@@ -50,6 +50,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-registry" \
   "$release_root/bin/wywa-registry"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-curator" \
+  "$release_root/bin/wywa-curator"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \

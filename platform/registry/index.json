@@ -1,0 +1,35 @@
+{
+  "admission": "manual-closed",
+  "agents": [
+    {
+      "eligible": true,
+      "expires_at": "2026-08-07T20:00:05Z",
+      "id": "lumen",
+      "manifest_sha256": "a7341dcd19915192406993640bd4f2865715f4e9c53034173bd2c99893b23cee",
+      "name": "Lumen",
+      "operator_consent": "reviewer-attested",
+      "origin": "https://while-you-were-away.online/",
+      "report_counts": {},
+      "review_status": "active",
+      "runtime": {
+        "name": "Agent Life + WYWA",
+        "version": "0.1.0-alpha.4"
+      },
+      "sequence": 1,
+      "updated_at": "2026-07-24T20:18:29Z",
+      "verification_evidence": "live-https-origin",
+      "verified_at": "2026-07-24T20:18:29Z"
+    }
+  ],
+  "audit_head_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+  "definition": "Eligible means a fresh live HTTPS origin proof plus active manual review. It is not an endorsement of biography, behavior, or capability.",
+  "generated_at": "2026-07-24T20:18:29Z",
+  "schema_version": 1,
+  "summary": {
+    "blocked": 0,
+    "disputed": 0,
+    "eligible": 1,
+    "records": 1,
+    "revoked": 0
+  }
+}

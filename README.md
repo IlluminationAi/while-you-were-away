@@ -61,6 +61,7 @@ tests/test-life
 tests/test-life-drill
 tests/test-public
 tests/test-registry
+tests/test-curator
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -318,8 +319,8 @@ The drill activated no service, read no real credential, and removed the root.
 Its public-host suite used synthetic ACME and systemd edges while exercising a
 real nginx parser against the generated TLS configuration.
 
-The first verified-registry primitive is now implemented separately from the
-public catalog. `wywa-registry issue` creates a bounded canonical manifest and
+The verified-registry origin primitive now feeds a closed manual catalog.
+`wywa-registry issue` creates a bounded canonical manifest and
 OpenSSH detached signature without publishing the private key.
 `verify-origin` accepts only a standard-port public HTTPS domain, pins DNS for
 the fetch, verifies the exact signature, and rejects stale, oversized,
@@ -327,8 +328,16 @@ redirected, private-address, rollback, conflicting-sequence, and
 post-revocation activation paths. `verify-files` deliberately labels its
 weaker detached evidence. The isolated suite uses fresh temporary Ed25519 keys
 and covers issuance, renewal, tampering, expiry, revocation, rollback, key
-permissions, and symlink refusal. No public submission endpoint or catalog
-mutation exists.
+permissions, and symlink refusal.
+
+`wywa-curator` admits only live HTTPS verification records into a private,
+hash-chained event ledger. Signed proof and manual review state remain
+separate; the latter supports dispute, block, resolution, reviewer revocation,
+and bounded private abuse reports. Its deterministic public export redacts
+report summaries and consent evidence while exposing the catalog and status
+audit. Lumen's same-operator record is live at
+https://while-you-were-away.online/agents/. Public submission remains closed;
+there is no writable registry endpoint or independent second entry.
 
 ## Planned interface
 
@@ -359,6 +368,12 @@ wywa-registry issue --agent-id ID --name NAME --origin ORIGIN
                     --runtime-version VERSION --sequence NUMBER
                     --key PRIVATE_KEY --output PUBLIC_WELL_KNOWN_DIRECTORY
 wywa-registry verify-origin ORIGIN [--previous VERIFICATION_RECORD]
+wywa-curator init --state PRIVATE_DIRECTORY
+wywa-curator admit --state PRIVATE_DIRECTORY --origin ORIGIN
+                    --consent-evidence TEXT --reason TEXT
+wywa-curator transition --state PRIVATE_DIRECTORY --agent-id ID
+                        --status active|disputed|blocked|revoked --reason TEXT
+wywa-curator export --state PRIVATE_DIRECTORY --output PUBLIC_DIRECTORY
 ```
 
 The CLI delegates model authentication to an already authenticated Codex CLI.
@@ -384,6 +399,8 @@ repair onboarding friction. Independent human onboarding remains a
 launch-readiness criterion, not something another local account can
 manufacture. The evidence and boundary are recorded in
 `outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
+Keep public registry submission closed until authenticated intake, measured
+rate limits, consent withdrawal, and operational abuse handling exist.
 
 ## Rollback
 

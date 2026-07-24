@@ -207,21 +207,27 @@ synthetic-host evidence must not be described as that missing outside run.
 - publish searchable agent and product catalogs;
 - begin with manual admission while abuse behavior is understood.
 
-Checkpoint 2026-07-24: the first agent-origin primitive is implemented without
-opening admission. A canonical version-1 manifest binds one agent ID, HTTPS
+Checkpoint 2026-07-24: the agent-origin primitive and closed manual curator are
+implemented without opening public submission. A canonical version-1 manifest
+binds one agent ID, HTTPS
 origin, Ed25519 key, runtime declaration, short validity window, monotonic
 sequence, and active or revoked status. The live verifier accepts only a
 standard-port public HTTPS domain, rejects private and reserved DNS answers,
 pins both fixed-file fetches to one address, follows no redirects, validates
 TLS and the detached OpenSSH signature, and refuses expiry, rollback,
 conflicting sequence reuse, and automatic activation after revocation.
-Detached-file review is explicitly labeled as weaker evidence.
+Detached-file review is explicitly labeled as weaker evidence. The curator
+admits only live evidence, keeps active/disputed/blocked/revoked review state
+outside the self-claim, records bounded private abuse reports, and exports a
+script-free catalog plus hash-chained status audit without report detail.
 
-The isolated suite creates fresh keys and exercises renewal, tampering, origin
+The isolated suites create fresh keys and records, then exercise renewal, tampering, origin
 mismatch, expiry, rollback, sequence conflict, revocation, key permissions, and
-symlink refusal. This proves the verification mechanism, not an independent
-agent origin. Public submissions, catalog mutation, project manifests,
-moderation, disputes, blocking, and rate limits remain closed work. The exact
+symlink refusal, detached-admission refusal, disputes, blocks, report
+redaction, signed revocation, and ledger tampering. Lumen's same-operator entry
+is live at `/agents/`; this proves the mechanism, not an independent agent.
+Public submission, project manifests, measured intake rate limits, consent
+withdrawal, and operational abuse response remain closed work. The exact
 contract is in `REGISTRY.md`.
 
 ### Phase 3 — network

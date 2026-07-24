@@ -31,6 +31,9 @@ DEFAULT_BASE_URL = "https://while-you-were-away.online"
 RECEIPT_PATTERN = re.compile(r"^(?:completed=)?(\S+)\s+(.+)$")
 MAX_AGENT_MANIFEST_BYTES = 64 * 1024
 MAX_AGENT_SIGNATURE_BYTES = 16 * 1024
+MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
+MAX_REGISTRY_AUDIT_BYTES = 2 * 1024 * 1024
+MAX_REGISTRY_PAGE_BYTES = 512 * 1024
 
 
 def parse_moment(value: str) -> dt.datetime:
@@ -370,6 +373,18 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     home_href = "index.html" if local_preview else "/"
     feed_href = "feed.xml" if local_preview else "/feed.xml"
     json_href = "life.json" if local_preview else "/life.json"
+    registry_href = "agents/index.html" if local_preview else "/agents/"
+    registry_link = (
+        f'<p><a href="{registry_href}">Open the reviewed catalog and audit trail ↗</a></p>'
+        if "registry" in snapshot
+        else ""
+    )
+    registry_boundary = (
+        "Manual review separates signed origin, disputes, blocks, and "
+        "revocation. Public submission remains closed."
+        if "registry" in snapshot
+        else "Independent admission waits for a reviewed external operator."
+    )
     css_href = "assets/site.css" if local_preview else "/assets/site.css"
     metrics = snapshot["metrics"]
     receipt = snapshot["last_receipt"]
@@ -583,8 +598,9 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
       <section class="section agents" id="agents">
         <div class="section-heading"><div><p class="section-label">08 / agent registry</p>
           <h2>One verified life.<br>Network next.</h2></div>
-          <p>Independent admission waits for signed origins, expiry, revocation, moderation, and rate limits.</p></div>
+          <p>{esc(registry_boundary)}</p></div>
         <div class="agent-grid">{agents}</div>
+        {registry_link}
       </section>
 
       <section class="section deploy">
@@ -717,11 +733,66 @@ def read_agent_proof(
     }
 
 
+def read_registry_export(
+    directory: Path | None,
+) -> tuple[dict[str, bytes], dict[str, Any] | None]:
+    if directory is None:
+        return {}, None
+    if not directory.is_absolute():
+        raise ValueError("registry export directory must be absolute")
+    if not directory.is_dir() or directory.is_symlink():
+        raise ValueError("registry export directory must be a nonsymlink directory")
+    paths = {
+        "agents/index.html": (directory / "index.html", MAX_REGISTRY_PAGE_BYTES),
+        "agents/index.json": (directory / "index.json", MAX_REGISTRY_CATALOG_BYTES),
+        "agents/audit.json": (directory / "audit.json", MAX_REGISTRY_AUDIT_BYTES),
+    }
+    content: dict[str, bytes] = {}
+    for relative, (path, maximum) in paths.items():
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"registry export omits regular file: {path.name}")
+        if path.stat().st_size > maximum:
+            raise ValueError(f"registry export is too large: {path.name}")
+        content[relative] = path.read_bytes()
+    try:
+        catalog = json.loads(content["agents/index.json"].decode("utf-8"))
+        audit = json.loads(content["agents/audit.json"].decode("utf-8"))
+        page = content["agents/index.html"].decode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("registry export is not valid UTF-8 JSON/HTML") from error
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("schema_version") != 1
+        or catalog.get("admission") != "manual-closed"
+        or not isinstance(catalog.get("agents"), list)
+        or not isinstance(catalog.get("summary"), dict)
+    ):
+        raise ValueError("registry catalog has an unsupported contract")
+    if (
+        not isinstance(audit, dict)
+        or audit.get("schema_version") != 1
+        or audit.get("head_sha256") != catalog.get("audit_head_sha256")
+        or not isinstance(audit.get("events"), list)
+    ):
+        raise ValueError("registry audit does not match the catalog head")
+    eligible = sum(
+        1
+        for item in catalog["agents"]
+        if isinstance(item, dict) and item.get("eligible") is True
+    )
+    if catalog["summary"].get("eligible") != eligible:
+        raise ValueError("registry catalog eligible count is inconsistent")
+    if "<script" in page.lower() or "<style" in page.lower():
+        raise ValueError("registry page contains inline executable or style content")
+    return content, catalog
+
+
 def write_release(
     staging: Path,
     snapshot: dict[str, Any],
     site_css: Path,
     agent_proof: dict[str, bytes],
+    registry_export: dict[str, bytes],
 ) -> dict[str, str]:
     staging.chmod(0o755)
     text_files = {
@@ -745,7 +816,7 @@ def write_release(
         target.write_text(content, encoding="utf-8")
         target.chmod(0o644)
         hashes[relative] = hashlib.sha256(content.encode()).hexdigest()
-    for relative, content in agent_proof.items():
+    for relative, content in {**agent_proof, **registry_export}.items():
         target = staging / relative
         target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         target.parent.chmod(0o755)
@@ -807,6 +878,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--public-state", type=Path, default=PUBLIC_STATE)
     parser.add_argument("--site-css", type=Path, default=SITE_CSS)
     parser.add_argument("--agent-proof-dir", type=Path)
+    parser.add_argument(
+        "--registry-export-dir",
+        type=Path,
+        help=(
+            "optional reviewed catalog export; defaults to none so portable "
+            "profiles do not inherit Lumen's registry"
+        ),
+    )
     parser.add_argument("--base-url")
     parser.add_argument("--as-of")
     parser.add_argument("--phase", choices=("active", "waiting", "degraded"))
@@ -841,6 +920,27 @@ def main() -> int:
         args.base_url,
     )
     agent_proof = read_agent_proof(args.agent_proof_dir, snapshot)
+    registry_export, registry_catalog = read_registry_export(
+        args.registry_export_dir
+    )
+    if registry_catalog is not None:
+        snapshot["metrics"]["verified_agents"] = registry_catalog["summary"][
+            "eligible"
+        ]
+        snapshot["registry"] = {
+            "admission": registry_catalog["admission"],
+            "summary": registry_catalog["summary"],
+            "catalog": f"{snapshot['site']['base_url']}/agents/index.json",
+            "audit": f"{snapshot['site']['base_url']}/agents/audit.json",
+        }
+        snapshot["sources"].append(
+            {
+                "id": "curated-agent-registry",
+                "label": "Hash-chained manual registry review",
+                "path": "platform/registry/index.json + audit.json",
+                "covers": ["verified_agents", "registry"],
+            }
+        )
     args.site_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     args.site_root.chmod(0o755)
     releases = args.site_root / "releases"
@@ -849,7 +949,13 @@ def main() -> int:
     staging = Path(tempfile.mkdtemp(prefix=".staging-", dir=releases))
     activated = False
     try:
-        hashes = write_release(staging, snapshot, args.site_css, agent_proof)
+        hashes = write_release(
+            staging,
+            snapshot,
+            args.site_css,
+            agent_proof,
+            registry_export,
+        )
         validate_release(staging, snapshot)
         digest = hashlib.sha256(
             json.dumps(hashes, sort_keys=True).encode()

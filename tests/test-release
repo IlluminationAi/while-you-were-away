@@ -48,6 +48,8 @@ release_root=$(find \
   fail "release omitted the public-host lifecycle CLI"
 [[ -x "$release_root/bin/wywa-registry" ]] ||
   fail "release omitted the signed-origin proof CLI"
+[[ -x "$release_root/bin/wywa-curator" ]] ||
+  fail "release omitted the closed manual curator CLI"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
@@ -87,6 +89,7 @@ shellcheck \
 "$release_root/bin/wywa-life" --help >/dev/null
 "$release_root/bin/wywa-public" --help >/dev/null
 "$release_root/bin/wywa-registry" --help >/dev/null
+"$release_root/bin/wywa-curator" --help >/dev/null
 "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"

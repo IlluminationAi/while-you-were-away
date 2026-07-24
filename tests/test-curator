@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Exercise the closed manual WYWA registry review and export boundary."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+CURATOR = PROJECT / "bin" / "wywa-curator"
+
+
+def run(*arguments: str, expected: int = 0) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(CURATOR), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def verification(
+    path: Path,
+    *,
+    sequence: int,
+    status: str = "active",
+    manifest_hash: str | None = None,
+    evidence: str = "live-https-origin",
+) -> None:
+    record = {
+        "schema_version": 1,
+        "verified_at": "2026-07-24T20:01:00Z",
+        "evidence": evidence,
+        "eligible": status == "active",
+        "manifest_sha256": manifest_hash
+        or hashlib.sha256(f"manifest-{sequence}-{status}".encode()).hexdigest(),
+        "agent_id": "test-worker",
+        "name": "Test Worker",
+        "origin": "https://life.example.net/",
+        "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITestRegistryKey",
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": "2026-07-24T20:00:00Z",
+        "expires_at": "2026-08-07T20:00:00Z",
+        "sequence": sequence,
+        "status": status,
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="wywa-curator-test-") as temporary:
+        root = Path(temporary)
+        state = root / "private-state"
+        public = root / "public"
+        proof_one = root / "verification-one.json"
+        proof_two = root / "verification-two.json"
+        proof_revoked = root / "verification-revoked.json"
+        verification(proof_one, sequence=1)
+        verification(proof_two, sequence=2)
+        verification(proof_revoked, sequence=3, status="revoked")
+
+        initialized = json.loads(
+            run("init", "--state", str(state)).stdout
+        )
+        assert initialized["initialized"] is True
+        assert state.stat().st_mode & 0o777 == 0o700
+        assert (state / "events.jsonl").stat().st_mode & 0o777 == 0o600
+
+        admitted = json.loads(
+            run(
+                "admit",
+                "--state",
+                str(state),
+                "--verification",
+                str(proof_one),
+                "--consent-evidence",
+                "Operator asked for manual catalog admission.",
+                "--reason",
+                "Initial live origin and consent review passed.",
+                "--at",
+                "2026-07-24T20:02:00Z",
+            ).stdout
+        )
+        assert admitted["event_id"] == 1
+        assert len(admitted["event_sha256"]) == 64
+
+        duplicate = run(
+            "admit",
+            "--state",
+            str(state),
+            "--verification",
+            str(proof_one),
+            "--consent-evidence",
+            "Repeated consent.",
+            "--reason",
+            "Repeated admission.",
+            "--at",
+            "2026-07-24T20:03:00Z",
+            expected=2,
+        )
+        assert "already admitted" in duplicate.stderr
+
+        detached = root / "detached.json"
+        verification(detached, sequence=1, evidence="detached-files-only")
+        detached_state = root / "detached-state"
+        run("init", "--state", str(detached_state))
+        detached_result = run(
+            "admit",
+            "--state",
+            str(detached_state),
+            "--verification",
+            str(detached),
+            "--consent-evidence",
+            "Consent.",
+            "--reason",
+            "Should fail.",
+            "--at",
+            "2026-07-24T20:03:00Z",
+            expected=2,
+        )
+        assert "requires live HTTPS" in detached_result.stderr
+
+        run(
+            "report",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--category",
+            "spam",
+            "--reason",
+            "Private reporter detail that must not enter the public audit.",
+            "--at",
+            "2026-07-24T20:04:00Z",
+        )
+        run(
+            "transition",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--status",
+            "disputed",
+            "--reason",
+            "Reviewing a bounded abuse report.",
+            "--at",
+            "2026-07-24T20:05:00Z",
+        )
+        disputed = json.loads(
+            run(
+                "status",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T20:06:00Z",
+            ).stdout
+        )
+        assert disputed["summary"]["eligible"] == 0
+        assert disputed["summary"]["disputed"] == 1
+        assert disputed["agents"][0]["report_counts"] == {"spam": 1}
+
+        run(
+            "transition",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--status",
+            "active",
+            "--reason",
+            "Report reviewed; origin remains eligible.",
+            "--at",
+            "2026-07-24T20:07:00Z",
+        )
+        run(
+            "transition",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--status",
+            "blocked",
+            "--reason",
+            "Reviewer block after a separate policy finding.",
+            "--at",
+            "2026-07-24T20:07:30Z",
+        )
+        blocked = json.loads(
+            run(
+                "status",
+                "--state",
+                str(state),
+                "--as-of",
+                "2026-07-24T20:07:35Z",
+            ).stdout
+        )
+        assert blocked["summary"]["blocked"] == 1
+        assert blocked["summary"]["eligible"] == 0
+        run(
+            "transition",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--status",
+            "active",
+            "--reason",
+            "Reviewer removed the block after remediation.",
+            "--at",
+            "2026-07-24T20:07:40Z",
+        )
+        run(
+            "refresh",
+            "--state",
+            str(state),
+            "--verification",
+            str(proof_two),
+            "--reason",
+            "Accepted a newer signed sequence.",
+            "--at",
+            "2026-07-24T20:08:00Z",
+        )
+
+        conflicting = root / "conflicting.json"
+        verification(
+            conflicting,
+            sequence=2,
+            manifest_hash=hashlib.sha256(b"conflict").hexdigest(),
+        )
+        conflict_result = run(
+            "refresh",
+            "--state",
+            str(state),
+            "--verification",
+            str(conflicting),
+            "--reason",
+            "Should fail.",
+            "--at",
+            "2026-07-24T20:09:00Z",
+            expected=2,
+        )
+        assert "conflicts with the current sequence" in conflict_result.stderr
+
+        run(
+            "refresh",
+            "--state",
+            str(state),
+            "--verification",
+            str(proof_revoked),
+            "--reason",
+            "Signed origin published a higher-sequence revocation.",
+            "--at",
+            "2026-07-24T20:10:00Z",
+        )
+        cannot_resolve = run(
+            "transition",
+            "--state",
+            str(state),
+            "--agent-id",
+            "test-worker",
+            "--status",
+            "active",
+            "--reason",
+            "Should fail after signed revocation.",
+            "--at",
+            "2026-07-24T20:11:00Z",
+            expected=2,
+        )
+        assert "invalid resolve transition" in cannot_resolve.stderr
+
+        exported = json.loads(
+            run(
+                "export",
+                "--state",
+                str(state),
+                "--output",
+                str(public),
+                "--as-of",
+                "2026-07-24T20:12:00Z",
+            ).stdout
+        )
+        assert exported["records"] == 1
+        assert exported["eligible"] == 0
+        catalog = json.loads((public / "index.json").read_text(encoding="utf-8"))
+        audit = json.loads((public / "audit.json").read_text(encoding="utf-8"))
+        page = (public / "index.html").read_text(encoding="utf-8")
+        assert catalog["admission"] == "manual-closed"
+        assert catalog["agents"][0]["review_status"] == "revoked"
+        assert audit["head_sha256"] == catalog["audit_head_sha256"]
+        assert len(audit["events"]) == 8
+        report_event = next(
+            item for item in audit["events"] if item["action"] == "report"
+        )
+        assert report_event["reason"] == "private moderation report retained"
+        assert "Private reporter detail" not in json.dumps(audit)
+        assert "Operator asked" not in json.dumps(catalog)
+        assert "<script" not in page.lower()
+        assert "Public submission is closed" in page
+        for path in public.iterdir():
+            assert path.is_file() and not path.is_symlink()
+            assert path.stat().st_mode & 0o777 == 0o644
+
+        ledger = state / "events.jsonl"
+        lines = ledger.read_text(encoding="utf-8").splitlines()
+        tampered = json.loads(lines[1])
+        tampered["previous_sha256"] = "0" * 64
+        lines[1] = json.dumps(tampered, separators=(",", ":"), sort_keys=True)
+        ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        broken = run(
+            "status",
+            "--state",
+            str(state),
+            "--as-of",
+            "2026-07-24T20:12:00Z",
+            expected=2,
+        )
+        assert "breaks the hash chain" in broken.stderr
+
+    print("PASS closed manual WYWA registry curation")
+
+
+if __name__ == "__main__":
+    main()

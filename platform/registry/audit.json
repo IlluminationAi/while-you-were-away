@@ -1,0 +1,19 @@
+{
+  "events": [
+    {
+      "action": "admit",
+      "agent_id": "lumen",
+      "at": "2026-07-24T20:18:29Z",
+      "event_id": 1,
+      "event_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+      "from_status": null,
+      "previous_sha256": null,
+      "reason": "Initial same-operator admission after live HTTPS origin verification; not independent-agent evidence.",
+      "to_status": "active"
+    }
+  ],
+  "generated_at": "2026-07-24T20:18:29Z",
+  "head_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+  "privacy": "Status reasons are public. Report summaries and consent evidence remain in the private curation ledger.",
+  "schema_version": 1
+}

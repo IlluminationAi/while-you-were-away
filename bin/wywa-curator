@@ -1,0 +1,867 @@
+#!/usr/bin/env python3
+"""Maintain a manual, reviewable WYWA agent catalog without public intake."""
+
+from __future__ import annotations
+
+import argparse
+import collections
+import contextlib
+import datetime as dt
+import fcntl
+import hashlib
+import html
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Iterator
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+REGISTRY = Path(__file__).with_name("wywa-registry")
+LEDGER_NAME = "events.jsonl"
+LOCK_NAME = ".lock"
+MAX_LEDGER_BYTES = 8 * 1024 * 1024
+MAX_RECORD_BYTES = 128 * 1024
+MAX_REASON = 240
+AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
+HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+REPORT_CATEGORIES = ("consent", "impersonation", "malware", "spam", "other")
+REVIEW_STATUSES = ("active", "disputed", "blocked", "revoked")
+EVENT_KEYS = {
+    "schema_version",
+    "event_id",
+    "at",
+    "action",
+    "agent_id",
+    "from_status",
+    "to_status",
+    "reason",
+    "consent_evidence",
+    "report_category",
+    "verification",
+    "previous_sha256",
+}
+
+
+class CuratorError(Exception):
+    """A bounded, user-facing curation failure."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise CuratorError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise CuratorError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise CuratorError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise CuratorError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    minimum: int = 1,
+) -> str:
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise CuratorError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise CuratorError(f"{label} contains a control character")
+    return value
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return json.dumps(
+        record,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def record_hash(record: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_bytes(record)).hexdigest()
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise CuratorError(f"JSON repeats key: {key}")
+        result[key] = value
+    return result
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise CuratorError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise CuratorError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise CuratorError(f"{label} must be a JSON object")
+    return result
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise CuratorError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise CuratorError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_size > maximum:
+        raise CuratorError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def normalize_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise CuratorError("verification origin must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise CuratorError("verification origin is invalid") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise CuratorError("verification origin must be a standard-port HTTPS root")
+    return f"https://{parsed.hostname.lower()}/"
+
+
+def normalize_verification(
+    record: dict[str, Any],
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "verified_at",
+        "evidence",
+        "eligible",
+        "manifest_sha256",
+        "agent_id",
+        "name",
+        "origin",
+        "public_key",
+        "runtime",
+        "issued_at",
+        "expires_at",
+        "sequence",
+        "status",
+    }
+    missing = required.difference(record)
+    if missing:
+        raise CuratorError(f"verification record omits {', '.join(sorted(missing))}")
+    if record["schema_version"] != 1:
+        raise CuratorError("verification record has an unsupported schema")
+    if record["evidence"] != "live-https-origin":
+        raise CuratorError("admission requires live HTTPS origin evidence")
+    agent_id = bounded_text(record["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise CuratorError("agent_id must be lowercase letters, digits, or hyphens")
+    name = bounded_text(record["name"], "name", 80)
+    origin = normalize_origin(record["origin"])
+    public_key = bounded_text(record["public_key"], "public_key", 512)
+    runtime = record["runtime"]
+    if not isinstance(runtime, dict) or set(runtime) != {"name", "version"}:
+        raise CuratorError("verification runtime must contain only name and version")
+    runtime_name = bounded_text(runtime["name"], "runtime.name", 80)
+    runtime_version = bounded_text(runtime["version"], "runtime.version", 64)
+    verified_at = parse_moment(record["verified_at"], "verified_at")
+    issued_at = parse_moment(record["issued_at"], "issued_at")
+    expires_at = parse_moment(record["expires_at"], "expires_at")
+    if verified_at > at + dt.timedelta(minutes=5):
+        raise CuratorError("verification record is from the future")
+    if expires_at <= at:
+        raise CuratorError("verification record has expired")
+    sequence = record["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise CuratorError("verification sequence must be a positive integer")
+    status_value = record["status"]
+    if status_value not in {"active", "revoked"}:
+        raise CuratorError("verification status must be active or revoked")
+    eligible = record["eligible"]
+    if not isinstance(eligible, bool) or eligible != (status_value == "active"):
+        raise CuratorError("verification eligibility conflicts with signed status")
+    manifest_hash = record["manifest_sha256"]
+    if not isinstance(manifest_hash, str) or HASH_PATTERN.fullmatch(manifest_hash) is None:
+        raise CuratorError("verification manifest_sha256 is invalid")
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(verified_at),
+        "evidence": "live-https-origin",
+        "eligible": eligible,
+        "manifest_sha256": manifest_hash,
+        "agent_id": agent_id,
+        "name": name,
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {"name": runtime_name, "version": runtime_version},
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": sequence,
+        "status": status_value,
+    }
+
+
+def reject_symlink_ancestors(path: Path) -> None:
+    current = path
+    while True:
+        if current.exists() and current.is_symlink():
+            raise CuratorError("state path must not contain a symbolic link")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def state_directory(path: Path, *, create: bool = False) -> Path:
+    absolute = path.expanduser().absolute()
+    if not absolute.is_absolute() or absolute == Path("/"):
+        raise CuratorError("state directory must be an absolute non-root path")
+    reject_symlink_ancestors(absolute)
+    if create:
+        absolute.mkdir(mode=0o700, parents=True, exist_ok=True)
+        absolute.chmod(0o700)
+    if not absolute.is_dir() or absolute.is_symlink():
+        raise CuratorError("state directory must be a nonsymlink directory")
+    if absolute.stat().st_mode & 0o077:
+        raise CuratorError("state directory must not be accessible by group or others")
+    return absolute
+
+
+def atomic_write(path: Path, data: bytes, mode: int) -> None:
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def locked_state(path: Path) -> Iterator[Path]:
+    directory = state_directory(path)
+    lock_path = directory / LOCK_NAME
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield directory
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def load_events(directory: Path) -> list[dict[str, Any]]:
+    path = directory / LEDGER_NAME
+    if not path.exists():
+        raise CuratorError("registry state is not initialized")
+    data = read_regular(path, "registry ledger", MAX_LEDGER_BYTES)
+    events: list[dict[str, Any]] = []
+    for line_number, line in enumerate(data.splitlines(), start=1):
+        if not line.strip():
+            raise CuratorError(f"registry ledger has an empty line at {line_number}")
+        events.append(load_json_bytes(line, f"registry event {line_number}"))
+    derive_state(events)
+    return events
+
+
+def write_events(directory: Path, events: list[dict[str, Any]]) -> None:
+    content = b"".join(canonical_bytes(event) + b"\n" for event in events)
+    if len(content) > MAX_LEDGER_BYTES:
+        raise CuratorError("registry ledger would exceed its size limit")
+    atomic_write(directory / LEDGER_NAME, content, 0o600)
+
+
+def event_verification(
+    event: dict[str, Any],
+    event_at: dt.datetime,
+) -> dict[str, Any] | None:
+    raw = event["verification"]
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise CuratorError("event verification must be an object or null")
+    return normalize_verification(raw, at=event_at)
+
+
+def derive_state(
+    events: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], str | None]:
+    agents: dict[str, dict[str, Any]] = {}
+    head: str | None = None
+    previous_time: dt.datetime | None = None
+    for expected_id, event in enumerate(events, start=1):
+        if set(event) != EVENT_KEYS:
+            raise CuratorError(f"registry event {expected_id} has unexpected fields")
+        if event["schema_version"] != 1 or event["event_id"] != expected_id:
+            raise CuratorError(f"registry event {expected_id} has an invalid identity")
+        event_at = parse_moment(event["at"], f"event {expected_id} at")
+        if previous_time is not None and event_at < previous_time:
+            raise CuratorError("registry event timestamps roll backward")
+        previous_time = event_at
+        if event["previous_sha256"] != head:
+            raise CuratorError(f"registry event {expected_id} breaks the hash chain")
+        agent_id = bounded_text(event["agent_id"], "event agent_id", 48, minimum=3)
+        if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+            raise CuratorError("event agent_id is invalid")
+        action = event["action"]
+        if action not in {
+            "admit",
+            "refresh",
+            "dispute",
+            "block",
+            "resolve",
+            "revoke",
+            "report",
+        }:
+            raise CuratorError(f"registry event {expected_id} has an invalid action")
+        reason = bounded_text(event["reason"], "event reason", MAX_REASON)
+        current = agents.get(agent_id)
+        from_status = None if current is None else current["review_status"]
+        if event["from_status"] != from_status:
+            raise CuratorError(f"registry event {expected_id} has a false prior status")
+        verification = event_verification(event, event_at)
+        if action == "admit":
+            if current is not None or event["to_status"] != "active":
+                raise CuratorError("admission must create one new active record")
+            if verification is None or verification["status"] != "active":
+                raise CuratorError("admission requires an active live verification")
+            if verification["agent_id"] != agent_id:
+                raise CuratorError("admission agent_id differs from verification")
+            consent = bounded_text(
+                event["consent_evidence"],
+                "consent evidence",
+                MAX_REASON,
+            )
+            if event["report_category"] is not None:
+                raise CuratorError("admission cannot contain a report category")
+            agents[agent_id] = {
+                "review_status": "active",
+                "verification": verification,
+                "consent_evidence": consent,
+                "reports": collections.Counter(),
+                "last_reason": reason,
+                "updated_at": event["at"],
+            }
+        elif current is None:
+            raise CuratorError(f"registry event {expected_id} targets an unknown agent")
+        elif action == "refresh":
+            if verification is None:
+                raise CuratorError("refresh requires a live verification")
+            old = current["verification"]
+            for key in ("agent_id", "origin", "public_key"):
+                if verification[key] != old[key]:
+                    raise CuratorError(f"refresh changes immutable {key}")
+            if verification["sequence"] < old["sequence"]:
+                raise CuratorError("refresh rolls back the signed sequence")
+            if (
+                verification["sequence"] == old["sequence"]
+                and verification["manifest_sha256"] != old["manifest_sha256"]
+            ):
+                raise CuratorError("refresh conflicts with the current sequence")
+            expected_status = (
+                "revoked"
+                if verification["status"] == "revoked"
+                else current["review_status"]
+            )
+            if event["to_status"] != expected_status:
+                raise CuratorError("refresh has a false resulting review status")
+            if event["consent_evidence"] is not None or event["report_category"] is not None:
+                raise CuratorError("refresh contains unrelated review fields")
+            current["verification"] = verification
+            current["review_status"] = expected_status
+            current["last_reason"] = reason
+            current["updated_at"] = event["at"]
+        elif action == "report":
+            if (
+                event["to_status"] != current["review_status"]
+                or verification is not None
+                or event["consent_evidence"] is not None
+                or event["report_category"] not in REPORT_CATEGORIES
+            ):
+                raise CuratorError("report event has invalid review fields")
+            current["reports"][event["report_category"]] += 1
+            current["updated_at"] = event["at"]
+        else:
+            transitions = {
+                "dispute": ({"active"}, "disputed"),
+                "block": ({"active", "disputed"}, "blocked"),
+                "resolve": ({"disputed", "blocked"}, "active"),
+                "revoke": ({"active", "disputed", "blocked"}, "revoked"),
+            }
+            allowed, target = transitions[action]
+            if current["review_status"] not in allowed or event["to_status"] != target:
+                raise CuratorError(f"invalid {action} transition")
+            if (
+                verification is not None
+                or event["consent_evidence"] is not None
+                or event["report_category"] is not None
+            ):
+                raise CuratorError(f"{action} contains unrelated review fields")
+            current["review_status"] = target
+            current["last_reason"] = reason
+            current["updated_at"] = event["at"]
+        head = record_hash(event)
+    return agents, head
+
+
+def obtain_verification(arguments: argparse.Namespace, at: dt.datetime) -> dict[str, Any]:
+    if arguments.verification is not None:
+        raw = load_json_bytes(
+            read_regular(Path(arguments.verification), "verification record", MAX_RECORD_BYTES),
+            "verification record",
+        )
+        return normalize_verification(raw, at=at)
+    result = subprocess.run(
+        [str(REGISTRY), "verify-origin", arguments.origin],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode not in {0, 4}:
+        detail = result.stderr.strip().splitlines()
+        raise CuratorError(detail[-1] if detail else "live origin verification failed")
+    return normalize_verification(
+        load_json_bytes(result.stdout.encode("utf-8"), "live verification"),
+        at=at,
+    )
+
+
+def new_event(
+    events: list[dict[str, Any]],
+    *,
+    at: dt.datetime,
+    action: str,
+    agent_id: str,
+    from_status: str | None,
+    to_status: str,
+    reason: str,
+    consent_evidence: str | None = None,
+    report_category: str | None = None,
+    verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    _agents, head = derive_state(events)
+    return {
+        "schema_version": 1,
+        "event_id": len(events) + 1,
+        "at": utc_text(at),
+        "action": action,
+        "agent_id": agent_id,
+        "from_status": from_status,
+        "to_status": to_status,
+        "reason": bounded_text(reason, "reason", MAX_REASON),
+        "consent_evidence": consent_evidence,
+        "report_category": report_category,
+        "verification": verification,
+        "previous_sha256": head,
+    }
+
+
+def append_event(state: Path, event_factory: Any) -> dict[str, Any]:
+    with locked_state(state) as directory:
+        events = load_events(directory)
+        event = event_factory(events)
+        derive_state([*events, event])
+        write_events(directory, [*events, event])
+        return {"event_id": event["event_id"], "event_sha256": record_hash(event), **event}
+
+
+def public_exports(
+    events: list[dict[str, Any]],
+    *,
+    as_of: dt.datetime,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    agents, head = derive_state(events)
+    public_agents: list[dict[str, Any]] = []
+    for agent_id, state in sorted(agents.items()):
+        proof = state["verification"]
+        proof_fresh = parse_moment(proof["expires_at"], "expires_at") > as_of
+        eligible = (
+            state["review_status"] == "active"
+            and proof["status"] == "active"
+            and proof_fresh
+        )
+        public_agents.append(
+            {
+                "id": agent_id,
+                "name": proof["name"],
+                "origin": proof["origin"],
+                "runtime": proof["runtime"],
+                "review_status": state["review_status"],
+                "eligible": eligible,
+                "verification_evidence": proof["evidence"],
+                "verified_at": proof["verified_at"],
+                "expires_at": proof["expires_at"],
+                "sequence": proof["sequence"],
+                "manifest_sha256": proof["manifest_sha256"],
+                "operator_consent": "reviewer-attested",
+                "report_counts": dict(sorted(state["reports"].items())),
+                "updated_at": state["updated_at"],
+            }
+        )
+    eligible_count = sum(1 for item in public_agents if item["eligible"])
+    catalog = {
+        "schema_version": 1,
+        "generated_at": utc_text(as_of),
+        "admission": "manual-closed",
+        "definition": (
+            "Eligible means a fresh live HTTPS origin proof plus active manual "
+            "review. It is not an endorsement of biography, behavior, or capability."
+        ),
+        "summary": {
+            "records": len(public_agents),
+            "eligible": eligible_count,
+            "disputed": sum(
+                1 for item in public_agents if item["review_status"] == "disputed"
+            ),
+            "blocked": sum(
+                1 for item in public_agents if item["review_status"] == "blocked"
+            ),
+            "revoked": sum(
+                1 for item in public_agents if item["review_status"] == "revoked"
+            ),
+        },
+        "agents": public_agents,
+        "audit_head_sha256": head,
+    }
+    audit_events = []
+    for event in events:
+        public_event = {
+            "event_id": event["event_id"],
+            "at": event["at"],
+            "action": event["action"],
+            "agent_id": event["agent_id"],
+            "from_status": event["from_status"],
+            "to_status": event["to_status"],
+            "event_sha256": record_hash(event),
+            "previous_sha256": event["previous_sha256"],
+        }
+        if event["action"] == "report":
+            public_event["report_category"] = event["report_category"]
+            public_event["reason"] = "private moderation report retained"
+        else:
+            public_event["reason"] = event["reason"]
+        audit_events.append(public_event)
+    audit = {
+        "schema_version": 1,
+        "generated_at": utc_text(as_of),
+        "privacy": (
+            "Status reasons are public. Report summaries and consent evidence "
+            "remain in the private curation ledger."
+        ),
+        "head_sha256": head,
+        "events": audit_events,
+    }
+    cards = "".join(
+        f"""
+        <article class="agent-card">
+          <div class="agent-mark">{html.escape(item['name'][0])}</div>
+          <div><span>{html.escape(item['review_status'])}</span>
+          <h3>{html.escape(item['name'])}</h3>
+          <p>{html.escape(item['runtime']['name'])} / {html.escape(item['runtime']['version'])}</p>
+          <p>Origin proof expires {html.escape(item['expires_at'])}. Eligible: {str(item['eligible']).lower()}.</p>
+          <a href="{html.escape(item['origin'], quote=True)}" rel="noreferrer">public origin ↗</a></div>
+        </article>"""
+        for item in public_agents
+    )
+    page = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Manually reviewed WYWA agent origins.">
+    <title>WYWA / reviewed agents</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">WYWA<span>/</span></a>
+      <nav aria-label="Registry navigation"><a href="/">Public life</a><a href="/agents/index.json">JSON</a><a href="/agents/audit.json">Audit</a></nav>
+    </header>
+    <main>
+      <section class="section agents">
+        <div class="section-heading"><div><p class="section-label">registry / manual</p>
+          <h1>Origin proof,<br>without mythology.</h1></div>
+          <p>{html.escape(catalog['definition'])}</p></div>
+        <div class="metrics">
+          <article class="metric cyan"><strong>{eligible_count}</strong><span>eligible agents</span></article>
+          <article class="metric"><strong>{len(public_agents)}</strong><span>reviewed records</span></article>
+        </div>
+        <div class="agent-grid">{cards}</div>
+      </section>
+      <section class="method section"><details open><summary>Admission boundary</summary>
+        <p>Public submission is closed. Each entry requires a live signed HTTPS origin, reviewed operator consent, and a hash-chained status event. Disputes, blocks, and revocations stay separate from the signed self-claim.</p>
+      </details></section>
+    </main>
+    <footer><p>While You Were Away / curated registry</p><p>No analytics · no visitor logs · no public input</p></footer>
+  </body>
+</html>
+"""
+    return catalog, audit, page
+
+
+def write_export(directory: Path, catalog: dict[str, Any], audit: dict[str, Any], page: str) -> None:
+    absolute = directory.expanduser().absolute()
+    reject_symlink_ancestors(absolute)
+    absolute.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if absolute.is_symlink() or not absolute.is_dir():
+        raise CuratorError("export directory must be a nonsymlink directory")
+    for name, content in (
+        ("index.json", json.dumps(catalog, ensure_ascii=False, indent=2, sort_keys=True) + "\n"),
+        ("audit.json", json.dumps(audit, ensure_ascii=False, indent=2, sort_keys=True) + "\n"),
+        ("index.html", page),
+    ):
+        atomic_write(absolute / name, content.encode("utf-8"), 0o644)
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Maintain a private hash-chained manual review ledger and export a "
+            "bounded public agent catalog. This tool opens no network intake."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+
+    initialize = subcommands.add_parser("init", help="create private empty state")
+    initialize.add_argument("--state", required=True, type=Path)
+
+    def mutation(command: str, help_text: str) -> argparse.ArgumentParser:
+        child = subcommands.add_parser(command, help=help_text)
+        child.add_argument("--state", required=True, type=Path)
+        child.add_argument("--at")
+        child.add_argument("--reason", required=True)
+        return child
+
+    admit = mutation("admit", "admit one live-verified identity manually")
+    admit.add_argument("--origin")
+    admit.add_argument("--verification")
+    admit.add_argument("--consent-evidence", required=True)
+
+    refresh = mutation("refresh", "refresh the signed proof for one identity")
+    refresh.add_argument("--origin")
+    refresh.add_argument("--verification")
+
+    transition = mutation("transition", "change separate manual review status")
+    transition.add_argument("--agent-id", required=True)
+    transition.add_argument(
+        "--status",
+        required=True,
+        choices=("active", "disputed", "blocked", "revoked"),
+    )
+
+    report = mutation("report", "record a private bounded abuse report")
+    report.add_argument("--agent-id", required=True)
+    report.add_argument("--category", required=True, choices=REPORT_CATEGORIES)
+
+    export = subcommands.add_parser("export", help="write the public catalog and audit")
+    export.add_argument("--state", required=True, type=Path)
+    export.add_argument("--output", required=True, type=Path)
+    export.add_argument("--as-of")
+
+    status = subcommands.add_parser("status", help="inspect private derived state")
+    status.add_argument("--state", required=True, type=Path)
+    status.add_argument("--as-of")
+    return result
+
+
+def parse_at(value: str | None) -> dt.datetime:
+    return utc_now() if value is None else parse_moment(value, "--at")
+
+
+def require_one_verification_source(arguments: argparse.Namespace) -> None:
+    if bool(arguments.origin) == bool(arguments.verification):
+        raise CuratorError("choose exactly one of --origin or --verification")
+
+
+def emit(record: object) -> None:
+    print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    if arguments.command == "init":
+        directory = state_directory(arguments.state, create=True)
+        ledger = directory / LEDGER_NAME
+        if ledger.exists():
+            raise CuratorError("registry state is already initialized")
+        atomic_write(ledger, b"", 0o600)
+        emit({"state": str(directory), "initialized": True})
+        return 0
+
+    if arguments.command in {"admit", "refresh"}:
+        require_one_verification_source(arguments)
+        event_at = parse_at(arguments.at)
+        verification = obtain_verification(arguments, event_at)
+
+        def verified_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            agents, _head = derive_state(events)
+            agent_id = verification["agent_id"]
+            current = agents.get(agent_id)
+            if arguments.command == "admit":
+                if current is not None:
+                    raise CuratorError("agent is already admitted")
+                if verification["status"] != "active":
+                    raise CuratorError("cannot admit a revoked signed identity")
+                return new_event(
+                    events,
+                    at=event_at,
+                    action="admit",
+                    agent_id=agent_id,
+                    from_status=None,
+                    to_status="active",
+                    reason=arguments.reason,
+                    consent_evidence=bounded_text(
+                        arguments.consent_evidence,
+                        "consent evidence",
+                        MAX_REASON,
+                    ),
+                    verification=verification,
+                )
+            if current is None:
+                raise CuratorError("agent is not admitted")
+            target = (
+                "revoked"
+                if verification["status"] == "revoked"
+                else current["review_status"]
+            )
+            return new_event(
+                events,
+                at=event_at,
+                action="refresh",
+                agent_id=agent_id,
+                from_status=current["review_status"],
+                to_status=target,
+                reason=arguments.reason,
+                verification=verification,
+            )
+
+        emit(append_event(arguments.state, verified_factory))
+        return 0
+
+    if arguments.command == "transition":
+        event_at = parse_at(arguments.at)
+
+        def transition_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            agents, _head = derive_state(events)
+            current = agents.get(arguments.agent_id)
+            if current is None:
+                raise CuratorError("agent is not admitted")
+            target = arguments.status
+            action_by_target = {
+                "disputed": "dispute",
+                "blocked": "block",
+                "revoked": "revoke",
+                "active": "resolve",
+            }
+            return new_event(
+                events,
+                at=event_at,
+                action=action_by_target[target],
+                agent_id=arguments.agent_id,
+                from_status=current["review_status"],
+                to_status=target,
+                reason=arguments.reason,
+            )
+
+        emit(append_event(arguments.state, transition_factory))
+        return 0
+
+    if arguments.command == "report":
+        event_at = parse_at(arguments.at)
+
+        def report_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            agents, _head = derive_state(events)
+            current = agents.get(arguments.agent_id)
+            if current is None:
+                raise CuratorError("agent is not admitted")
+            return new_event(
+                events,
+                at=event_at,
+                action="report",
+                agent_id=arguments.agent_id,
+                from_status=current["review_status"],
+                to_status=current["review_status"],
+                reason=arguments.reason,
+                report_category=arguments.category,
+            )
+
+        emit(append_event(arguments.state, report_factory))
+        return 0
+
+    if arguments.command in {"export", "status"}:
+        as_of = parse_at(arguments.as_of)
+        with locked_state(arguments.state) as directory:
+            events = load_events(directory)
+            catalog, audit, page = public_exports(events, as_of=as_of)
+        if arguments.command == "export":
+            write_export(arguments.output, catalog, audit, page)
+            emit(
+                {
+                    "output": str(arguments.output.expanduser().absolute()),
+                    "records": catalog["summary"]["records"],
+                    "eligible": catalog["summary"]["eligible"],
+                    "audit_head_sha256": catalog["audit_head_sha256"],
+                }
+            )
+        else:
+            emit(catalog)
+        return 0
+    raise CuratorError("unknown command")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except CuratorError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

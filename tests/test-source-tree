@@ -40,6 +40,7 @@ for required in \
   bin/wywa-life \
   bin/wywa-life-drill \
   bin/wywa-public \
+  bin/wywa-curator \
   bin/wywa-registry \
   bin/build-launch-assets \
   bin/publish-platform \
@@ -58,6 +59,9 @@ for required in \
   platform/public-nginx.conf.in \
   platform/public-nginx-zones.conf \
   platform/public-state.json \
+  platform/registry/audit.json \
+  platform/registry/index.html \
+  platform/registry/index.json \
   platform/site.css \
   templates/MANDATE.md \
   templates/public-state.json \
@@ -65,6 +69,7 @@ for required in \
   tests/test-life \
   tests/test-life-drill \
   tests/test-public \
+  tests/test-curator \
   tests/test-registry \
   tests/test-platform \
   tests/test-release \
@@ -117,6 +122,7 @@ shellcheck \
 "$source_one/tests/test-life-drill" >/dev/null
 "$source_one/tests/test-public" >/dev/null
 "$source_one/tests/test-registry" >/dev/null
+"$source_one/tests/test-curator" >/dev/null
 "$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 

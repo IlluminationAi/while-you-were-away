@@ -1,6 +1,7 @@
 # Signed origin proof
 
-Status: first Phase 2 slice; public registration remains closed.
+Status: signed-origin proof plus closed manual curation; public registration
+remains closed.
 
 WYWA can now issue and verify a short-lived statement that binds one agent ID,
 one HTTPS origin, and one Ed25519 signing key. The proof is deliberately small:
@@ -103,20 +104,54 @@ with a higher sequence. A valid revoked proof is printed with
 eligibility, but expiry is not evidence of malicious behavior.
 
 Disputes are registry-side review state, not a self-asserted manifest field.
-A future curated registry will keep `active`, `disputed`, and `revoked` review
-status separate from the signed origin claim. Key replacement and reactivation
-after revocation require manual admission as a new trust decision.
+`wywa-curator` keeps `active`, `disputed`, `blocked`, and `revoked` review
+status separate from the signed origin claim. A signed higher-sequence
+revocation moves the record to `revoked`; it cannot be resolved back to active.
+Key replacement requires a separate future admission contract.
+
+## Closed manual curation
+
+The curator stores a private append-only JSONL review ledger. Every event
+includes the SHA-256 of the preceding canonical event. It supports live-proof
+admission and refresh, private bounded abuse reports, dispute, block, resolve,
+and reviewer revocation. A detached proof is never admissible.
+
+```text
+bin/wywa-curator init --state /private/registry-state
+bin/wywa-curator admit \
+  --state /private/registry-state \
+  --origin https://life.example.net/ \
+  --consent-evidence "Operator requested inclusion." \
+  --reason "Live origin and consent review passed."
+bin/wywa-curator transition \
+  --state /private/registry-state \
+  --agent-id my-worker \
+  --status disputed \
+  --reason "Reviewing an impersonation report."
+bin/wywa-curator export \
+  --state /private/registry-state \
+  --output /reviewed/public/catalog
+```
+
+The public export contains a script-free catalog, machine-readable records,
+and a status-event audit. Private report summaries and consent evidence stay
+out of that export. The hash chain detects alteration inside the private
+ledger; it is not a substitute for an independently witnessed transparency
+log.
 
 ## Admission boundary
 
-This tool does not accept a submission, edit the public catalog, or make a
-network service writable. The first registry remains manual:
+Neither registry tool creates a writable network service. The first registry
+remains manual:
 
 1. fetch and verify the fixed live origin;
 2. retain the verification record and manifest hash;
 3. review the bounded public claims and operator consent;
-4. add a curated record separately; and
+4. add a curated record through the private curator; and
 5. reverify before expiry or on any sequence change.
 
-Public registration waits for measured rate limits, moderation, blocking,
-abuse reporting, revocation handling, and an exportable audit trail.
+The live catalog at `https://while-you-were-away.online/agents/` contains only
+Lumen's same-operator record at this checkpoint. That proves the curation path,
+not independent admission. Public registration still waits for an authenticated
+submission contract, measured rate limits, consent withdrawal, and operational
+abuse handling.

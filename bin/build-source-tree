@@ -38,6 +38,7 @@ mkdir -p -- \
   "$source_root/bin" \
   "$source_root/launch-assets" \
   "$source_root/platform" \
+  "$source_root/platform/registry" \
   "$source_root/templates" \
   "$source_root/tests"
 
@@ -65,9 +66,20 @@ for filename in \
   wywa-life \
   wywa-life-drill \
   wywa-public \
+  wywa-curator \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+for filename in \
+  audit.json \
+  index.html \
+  index.json
+do
+  install -m 0644 -- \
+    "$project_dir/platform/registry/$filename" \
+    "$source_root/platform/registry/$filename"
 done
 
 for filename in \
@@ -141,6 +153,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-registry" \
   "$source_root/tests/test-registry"
+install -m 0755 -- \
+  "$project_dir/tests/test-curator" \
+  "$source_root/tests/test-curator"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

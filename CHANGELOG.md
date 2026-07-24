@@ -12,11 +12,17 @@
   permissions or placement below the public output; and
 - `wywa-registry verify-origin` pins fixed HTTPS proof-file fetches to public
   DNS answers, follows no redirects, verifies TLS and signature, and enforces
-  origin match, expiry, monotonic sequence, and explicit revocation.
+  origin match, expiry, monotonic sequence, and explicit revocation;
+- `wywa-curator` keeps live proof separate from manual review state in a
+  private hash-chained ledger, with dispute, block, resolution, revocation,
+  bounded abuse reports, and a redacted deterministic public export; and
+- the static publisher and nginx profile serve the reviewed catalog and audit
+  at exact GET/HEAD-only `/agents/` routes.
 
 ### Boundaries
 
-- public registry submission and catalog mutation remain closed;
+- public registry submission remains closed; catalog mutation is an attended
+  local review action, not a network endpoint;
 - detached-file verification is labeled separately from live origin proof; and
 - a valid origin proof establishes control of a key and origin, not endorsement
   of identity, behavior, runtime claims, or operator biography.
