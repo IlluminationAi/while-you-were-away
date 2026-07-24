@@ -157,6 +157,7 @@ class Metrics:
         port: int,
         concurrency: int,
         read_timeout: float,
+        expected_action: str | None,
         status_file: Path | None,
     ) -> None:
         self.lock = threading.Lock()
@@ -164,6 +165,7 @@ class Metrics:
         self.port = port
         self.concurrency = concurrency
         self.read_timeout = read_timeout
+        self.expected_action = expected_action
         self.status_file = status_file
         self.active = 0
         self.peak_active = 0
@@ -231,6 +233,7 @@ class Metrics:
                 "concurrency": self.concurrency,
                 "read_timeout_seconds": self.read_timeout,
             },
+            "expected_action": self.expected_action,
             "active": self.active,
             "peak_active": self.peak_active,
             "requests": {
@@ -324,16 +327,19 @@ class LimitedHTTPServer(ThreadingHTTPServer):
         concurrency: int,
         read_timeout: float,
         handoff_timeout: float,
+        expected_action: str | None,
         status_file: Path | None,
     ) -> None:
         self.state = state
         self.read_timeout = read_timeout
         self.handoff_timeout = handoff_timeout
+        self.expected_action = expected_action
         self.slots = threading.BoundedSemaphore(concurrency)
         self.metrics = Metrics(
             port=server_address[1],
             concurrency=concurrency,
             read_timeout=read_timeout,
+            expected_action=expected_action,
             status_file=status_file,
         )
         super().__init__(server_address, handler, bind_and_activate=True)
@@ -512,9 +518,15 @@ class IntakeHandler(BaseHTTPRequestHandler):
             return
         self.gateway.metrics.record_request(len(body))
         try:
-            request_bytes, signature, _action = decode_envelope(body)
+            request_bytes, signature, action = decode_envelope(body)
         except GatewayError:
             self.reject(400, "invalid-envelope")
+            return
+        if (
+            self.gateway.expected_action is not None
+            and action != self.gateway.expected_action
+        ):
+            self.reject(400, "signed-action-does-not-match-lane")
             return
         state = self.gateway.state
         try:
@@ -621,6 +633,14 @@ def parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8742)
     serve.add_argument("--max-concurrency", type=int, default=DEFAULT_CONCURRENCY)
     serve.add_argument(
+        "--expected-action",
+        choices=("apply", "withdraw"),
+        help=(
+            "pin this process to one signed action; use separate loopback "
+            "processes when reserving withdrawal capacity"
+        ),
+    )
+    serve.add_argument(
         "--read-timeout",
         type=positive_float,
         default=DEFAULT_READ_TIMEOUT,
@@ -656,6 +676,7 @@ def main() -> int:
         concurrency=arguments.max_concurrency,
         read_timeout=arguments.read_timeout,
         handoff_timeout=arguments.handoff_timeout,
+        expected_action=arguments.expected_action,
         status_file=arguments.status_file,
     )
     try:

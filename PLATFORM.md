@@ -250,13 +250,15 @@ contract is in `REGISTRY.md`.
 
 Checkpoint 2026-07-24: a second, entirely disposable loopback layer now puts a
 real nginx parser in front of a temporary gateway and queue. The test-only
-configuration exposes one exact POST route, buffers and limits the 32 KiB body,
-strips incidental identity headers, caps requests and connections per source,
-keeps access logging off, and exercises upstream loss and restart. Sustained
-malformed traffic proves those mechanisms on one host; it does not prove
-internet readiness. A shared source limit can still delay a legitimate
-withdrawal, so the live nginx configuration remains unchanged and submission
-remains closed.
+configuration exposes separate exact application and withdrawal routes backed
+by action-pinned loopback workers and independent request and connection
+budgets. It rejects cross-lane signed actions and accepts a valid withdrawal
+while slow applications saturate their own lane. It also buffers and limits
+the 32 KiB body, strips incidental identity headers, keeps access logging off,
+and exercises upstream loss and restart. Sustained malformed traffic proves
+those mechanisms on one host; it does not prove internet readiness. The live
+nginx configuration remains unchanged and submission remains closed pending
+outside review or bounded real-traffic evidence.
 
 ### Phase 3 — network
 

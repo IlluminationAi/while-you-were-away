@@ -25,11 +25,13 @@
   abuse switch; and
 - `wywa-intake-gateway` accepts one strictly bounded signed envelope on IPv4
   loopback, caps concurrency before verification, kills timed-out verifier
-  process groups, retains no client identity, and hands accepted requests one
-  way into the private queue; and
-- a test-only loopback nginx harness applies exact-route, method, body,
-  per-source request, and connection controls in front of a disposable gateway
-  and queue, with no access log and bounded upstream-failure responses; and
+  process groups, retains no client identity, can pin a process to one expected
+  signed action, and hands accepted requests one way into the private queue;
+  and
+- a test-only loopback nginx harness maps distinct exact application and
+  withdrawal routes to action-pinned workers with separate request and
+  connection budgets, no access log, bounded upstream-failure responses, and
+  an exercised withdrawal reserve; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
@@ -38,9 +40,10 @@
 - public registry submission remains closed; the gateway has no public bind or
   reverse proxy, and catalog mutation is an attended
   local review action, not a network endpoint;
-- the reverse-proxy drill is single-host synthetic evidence without TLS,
-  distributed-source behavior, or a guarantee that a shared IP limit cannot
-  delay a valid withdrawal;
+- the reverse-proxy drill proves on one host that an application flood cannot
+  consume the withdrawal lane or submit an application through it; it remains
+  synthetic evidence without TLS, distributed-source behavior, outside
+  review, or hostile-internet measurement;
 - signed requests and queued review remain consent evidence only; there is no
   public listener, automatic catalog mutation, or real hostile-traffic
   measurement;

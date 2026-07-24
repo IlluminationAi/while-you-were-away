@@ -253,14 +253,15 @@ refusal before a third handler starts. The operator and incident runbook is
 `INTAKE_GATEWAY.md`.
 
 A separate test-only nginx harness now exercises the next hop without adding
-it to the live server. It binds loopback, exposes only exact
-`POST /v1/intake`, caps and buffers the body, strips incidental client
-identity, applies per-IP request and connection limits, keeps access logging
-off, and proves bounded upstream failure and restart against a disposable
-queue. Sustained malformed input is synthetic single-host mechanism evidence,
-not hostile-internet evidence. Because a shared IP edge can also throttle a
-valid withdrawal from that address, production exposure still needs an
-availability design and outside traffic or review.
+it to the live server. It binds loopback and maps exact application and
+withdrawal routes to separate action-pinned workers with independent request
+and connection budgets. A signed action sent through the wrong lane is
+rejected. Two slow applications can fill their lane while a valid withdrawal
+from the same address still enters its reserved worker. Body buffering,
+identity-header stripping, no access log, sustained malformed application
+load, bounded upstream failure, and restart are also exercised. This is
+synthetic single-host mechanism evidence, not outside review or
+hostile-internet evidence.
 
 Public submission remains closed. The loopback service has no nginx route,
 tunnel, or public socket. Real hostile-internet traffic, public-edge

@@ -80,6 +80,11 @@ curl --noproxy '*' http://127.0.0.1:8742/healthz
 curl --noproxy '*' http://127.0.0.1:8742/status
 ```
 
+`--expected-action apply` or `--expected-action withdraw` pins a process to
+one signed action and publishes that pin in its bounded status. This is useful
+only with distinct root-controlled loopback workers and edge routes; a client
+cannot choose or override the pin.
+
 Before any start or restart, verify that the queue state is a mode-0700,
 nonsymlink directory and that the listener address is not configurable beyond
 the compiled loopback literal. Afterward, use `ss` to confirm there is no
@@ -120,14 +125,20 @@ separate manual authority boundary.
 ## Isolated reverse-proxy harness
 
 `platform/intake-edge-harness.nginx.conf.in` is test-only. It binds a random
-IPv4 loopback port, not 80 or 443, and proxies to a disposable gateway and
-queue. `tests/test-intake-edge` validates the real nginx parser and proves:
+IPv4 loopback port, not 80 or 443, and proxies to separate disposable
+action-pinned workers sharing one queue. `tests/test-intake-edge` validates the
+real nginx parser and proves:
 
-- only exact `POST /v1/intake` reaches the gateway;
+- only exact `POST /v1/intake/apply` and `/v1/intake/withdraw` reach their
+  respective workers;
+- each worker rejects a signed action sent through the wrong route;
 - query variants, chunked framing, content encodings, wrong media types, and
   bodies above 32 KiB stop at the edge;
-- per-IP request and two-connection ceilings reject sustained malformed load
-  before it consumes gateway verification slots;
+- independent per-IP request and connection ceilings reject sustained
+  application load before it consumes withdrawal capacity;
+- two slow applications can fill the application connection budget while a
+  valid signed withdrawal from the same address still enters its reserved
+  worker;
 - client identity, cookies, authorization, referrer, and user-agent headers
   are not forwarded;
 - access and rate-limit logging remain off; and
@@ -136,7 +147,6 @@ queue. `tests/test-intake-edge` validates the real nginx parser and proves:
 
 This is mechanism evidence from one host and one source address. It does not
 test TLS, distributed addresses, NAT contention, provider DDoS controls, or a
-real hostile internet. The shared edge limit can temporarily throttle a valid
-withdrawal from the same address as abusive traffic; the queue's durable
-withdrawal privilege begins only after a request crosses the proxy. That
-availability gap is a launch boundary, not a footnote to erase.
+real hostile internet. The split closes the specific shared-throttle flaw in
+the disposable design; public exposure still requires outside review or
+bounded real-traffic evidence and a production lifecycle for both workers.

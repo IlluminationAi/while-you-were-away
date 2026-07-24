@@ -543,11 +543,13 @@ def main() -> None:
             assert measured["requests"]["refused"] == 1
             assert measured["requests"]["invalid"] >= 10
             assert measured["retains_client_identity"] is False
+            assert measured["expected_action"] is None
             assert set(measured) == {
                 "schema_version",
                 "started_at",
                 "listener",
                 "limits",
+                "expected_action",
                 "active",
                 "peak_active",
                 "requests",

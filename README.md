@@ -137,12 +137,15 @@ curator. The exact local contract and incident procedure are in
 `INTAKE_GATEWAY.md`.
 
 The next edge is still a laboratory instrument. A test-only nginx harness
-binds another loopback port in front of a disposable gateway and queue, exposes
-only exact `POST /v1/intake`, buffers and caps the body, strips incidental
-identity headers, applies per-IP request and connection limits, keeps access
-logging off, and converts an unavailable upstream into one bounded response.
-It is not installed in production, has no TLS, and is not hostile-internet
-evidence.
+binds another loopback port and exposes distinct exact
+`POST /v1/intake/apply` and `POST /v1/intake/withdraw` lanes. Each lane has its
+own request, connection, and loopback-worker budget; the workers reject a
+signed action sent through the wrong lane. The drill fills the application
+connection budget, rejects an application sent through the withdrawal lane,
+and still accepts one valid signed withdrawal from the same source address.
+It also buffers and caps bodies, strips incidental identity headers, keeps
+access logging off, and bounds upstream failure. It is not installed in
+production, has no TLS, and is not hostile-internet evidence.
 
 ## Why this direction
 

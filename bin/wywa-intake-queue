@@ -975,6 +975,9 @@ def main() -> int:
         }
 
         def submit_factory(events: list[dict[str, Any]]) -> dict[str, Any]:
+            accepted_at = (
+                event_at if arguments.at is not None else utc_now()
+            )
             state = derive_state(events)
             if request["request_id"] in state["entries"]:
                 raise QueueError("request_id has already been seen")
@@ -983,7 +986,7 @@ def main() -> int:
                     raise QueueError("applications are disabled")
                 recent = window_applications(
                     state["accepted_applications"],
-                    at=event_at,
+                    at=accepted_at,
                 )
                 origin_used = sum(
                     1 for item in recent if item["origin"] == request["origin"]
@@ -1012,7 +1015,7 @@ def main() -> int:
                     raise QueueError("total pending capacity is full")
             return new_event(
                 events,
-                at=event_at,
+                at=accepted_at,
                 action="submit",
                 request_id=request["request_id"],
                 agent_id=request["agent_id"],

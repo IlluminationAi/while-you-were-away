@@ -144,6 +144,7 @@ def issue(
     verification: Path,
     output: Path,
     *,
+    action: str = "apply",
     request_id: str,
     at: dt.datetime,
 ) -> dict[str, Any]:
@@ -151,7 +152,7 @@ def issue(
         intake,
         "issue",
         "--action",
-        "apply",
+        action,
         "--verification",
         str(verification),
         "--key",
@@ -222,6 +223,9 @@ def start_gateway(
     state: Path,
     status_file: Path,
     port: int,
+    *,
+    expected_action: str,
+    max_concurrency: int,
 ) -> subprocess.Popen[str]:
     status_file.unlink(missing_ok=True)
     process = subprocess.Popen(
@@ -233,7 +237,9 @@ def start_gateway(
             "--port",
             str(port),
             "--max-concurrency",
-            "4",
+            str(max_concurrency),
+            "--expected-action",
+            expected_action,
             "--read-timeout",
             "2",
             "--handoff-timeout",
@@ -283,9 +289,31 @@ def main() -> None:
         record = verification_record("edge-test-worker", origin, public_key, at=now)
         verification = root / "verification.json"
         verification.write_text(json.dumps(record), encoding="utf-8")
+        withdraw_key = root / "withdraw_ed25519"
+        withdraw_public_key = make_key(withdraw_key)
+        withdraw_origin = "https://withdraw-test.example.net/"
+        withdraw_record = verification_record(
+            "withdraw-test-worker",
+            withdraw_origin,
+            withdraw_public_key,
+            at=now,
+        )
+        withdraw_verification = root / "withdraw-verification.json"
+        withdraw_verification.write_text(
+            json.dumps(withdraw_record),
+            encoding="utf-8",
+        )
 
         records_path = shadow / "registry-records.json"
-        records_path.write_text(json.dumps({origin: record}), encoding="utf-8")
+        records_path.write_text(
+            json.dumps(
+                {
+                    origin: record,
+                    withdraw_origin: withdraw_record,
+                }
+            ),
+            encoding="utf-8",
+        )
         fake_registry = shadow / "wywa-registry"
         fake_registry.write_text(
             "#!/usr/bin/env python3\n"
@@ -296,10 +324,11 @@ def main() -> None:
             "from pathlib import Path\n"
             "root = Path(__file__).resolve().parent\n"
             "records = json.loads((root / 'registry-records.json').read_text())\n"
-            "if (root / 'sleep').exists():\n"
+            f"slow_origin = {origin!r}\n"
+            "origin = sys.argv[-1]\n"
+            "if (root / 'sleep').exists() and origin == slow_origin:\n"
             "    (root / f'entered-{os.getpid()}').write_text('entered\\n')\n"
             "    time.sleep(1.2)\n"
-            "origin = sys.argv[-1]\n"
             "if origin not in records:\n"
             "    print('unknown test origin', file=sys.stderr)\n"
             "    raise SystemExit(2)\n"
@@ -319,11 +348,14 @@ def main() -> None:
             "isolated edge test",
         )
 
-        gateway_port = reserve_port()
+        apply_gateway_port = reserve_port()
+        withdraw_gateway_port = reserve_port()
         edge_port = reserve_port()
-        while edge_port == gateway_port:
+        while len({apply_gateway_port, withdraw_gateway_port, edge_port}) != 3:
+            withdraw_gateway_port = reserve_port()
             edge_port = reserve_port()
-        status_file = root / "gateway-status.json"
+        apply_status_file = root / "apply-gateway-status.json"
+        withdraw_status_file = root / "withdraw-gateway-status.json"
 
         harness_root = root / "nginx"
         (harness_root / "client-body").mkdir(parents=True)
@@ -333,7 +365,8 @@ def main() -> None:
             "__WYWA_NGINX_USER__": pwd.getpwuid(os.geteuid()).pw_name,
             "__WYWA_HARNESS_ROOT__": str(harness_root),
             "__WYWA_EDGE_PORT__": str(edge_port),
-            "__WYWA_UPSTREAM_PORT__": str(gateway_port),
+            "__WYWA_APPLY_UPSTREAM_PORT__": str(apply_gateway_port),
+            "__WYWA_WITHDRAW_UPSTREAM_PORT__": str(withdraw_gateway_port),
         }
         for marker, value in replacements.items():
             config_text = config_text.replace(marker, value)
@@ -353,18 +386,29 @@ def main() -> None:
         config.write_text(config_text, encoding="utf-8")
         run("nginx", "-t", "-p", f"{harness_root}/", "-c", str(config))
 
-        gateway: subprocess.Popen[str] | None = None
+        apply_gateway: subprocess.Popen[str] | None = None
+        withdraw_gateway: subprocess.Popen[str] | None = None
         edge: subprocess.Popen[str] | None = None
         gateway_stderr: list[str] = []
         edge_stderr: list[str] = []
         rate_limited = 0
         malformed_forwarded = 0
         try:
-            gateway = start_gateway(
+            apply_gateway = start_gateway(
                 shadow_gateway,
                 state,
-                status_file,
-                gateway_port,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            withdraw_gateway = start_gateway(
+                shadow_gateway,
+                state,
+                withdraw_status_file,
+                withdraw_gateway_port,
+                expected_action="withdraw",
+                max_concurrency=1,
             )
             edge = start_edge(harness_root, config, edge_port)
 
@@ -378,9 +422,11 @@ def main() -> None:
             assert f"0.0.0.0:{edge_port}" not in sockets
             assert f"[::]:{edge_port}" not in sockets
 
-            code, _, headers = http_request(edge_port, "GET", "/v1/intake")
+            code, _, headers = http_request(edge_port, "GET", "/v1/intake/apply")
             assert code == 405
             assert headers["cache-control"] == "no-store"
+            code, _, _ = http_request(edge_port, "GET", "/v1/intake/withdraw")
+            assert code == 405
             code, _, _ = http_request(
                 edge_port,
                 "POST",
@@ -391,7 +437,7 @@ def main() -> None:
             code, _, _ = http_request(
                 edge_port,
                 "POST",
-                "/v1/intake?bypass=1",
+                "/v1/intake/apply?bypass=1",
                 body=b"{}",
             )
             assert code == 404
@@ -400,29 +446,36 @@ def main() -> None:
                 "POST",
                 "/v1/intake",
                 body=b"{}",
+            )
+            assert code == 404
+            code, _, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/apply",
+                body=b"{}",
                 content_type="text/plain",
             )
             assert code == 415
 
             before_oversize = json.loads(
-                status_file.read_text(encoding="utf-8")
+                apply_status_file.read_text(encoding="utf-8")
             )["requests"]["received"]
             code, body, _ = http_request(
                 edge_port,
                 "POST",
-                "/v1/intake",
+                "/v1/intake/apply",
                 body=b"{" + (b"x" * 32768),
             )
             assert code == 413
             assert json.loads(body)["error"] == "edge-body-too-large"
             after_oversize = json.loads(
-                status_file.read_text(encoding="utf-8")
+                apply_status_file.read_text(encoding="utf-8")
             )["requests"]["received"]
             assert before_oversize == after_oversize
 
             chunked = raw_request(
                 edge_port,
-                b"POST /v1/intake HTTP/1.1\r\n"
+                b"POST /v1/intake/apply HTTP/1.1\r\n"
                 b"Host: intake-edge.invalid\r\n"
                 b"Content-Type: application/json\r\n"
                 b"Transfer-Encoding: chunked\r\n"
@@ -441,7 +494,7 @@ def main() -> None:
                             http_request,
                             edge_port,
                             "POST",
-                            "/v1/intake",
+                            "/v1/intake/apply",
                             body=b"{broken",
                         )
                         for _ in range(24)
@@ -461,16 +514,31 @@ def main() -> None:
             edge_stderr.append(edge_err)
             assert not edge_out
             wait_for_port(edge_port, open_state=False)
-            gateway_out, gateway_err = stop_process(gateway)
-            gateway = None
-            gateway_stderr.append(gateway_err)
-            assert not gateway_out
-            wait_for_port(gateway_port, open_state=False)
-            gateway = start_gateway(
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            assert not apply_out
+            wait_for_port(apply_gateway_port, open_state=False)
+            withdraw_out, withdraw_err = stop_process(withdraw_gateway)
+            withdraw_gateway = None
+            gateway_stderr.append(withdraw_err)
+            assert not withdraw_out
+            wait_for_port(withdraw_gateway_port, open_state=False)
+            apply_gateway = start_gateway(
                 shadow_gateway,
                 state,
-                status_file,
-                gateway_port,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
+            )
+            withdraw_gateway = start_gateway(
+                shadow_gateway,
+                state,
+                withdraw_status_file,
+                withdraw_gateway_port,
+                expected_action="withdraw",
+                max_concurrency=1,
             )
             edge = start_edge(harness_root, config, edge_port)
 
@@ -498,19 +566,50 @@ def main() -> None:
                 request_id="c0000000000000000000000000000000",
                 at=now,
             )
+            withdrawal = issue(
+                shadow_intake,
+                withdraw_key,
+                withdraw_verification,
+                root / "withdrawal",
+                action="withdraw",
+                request_id="e0000000000000000000000000000000",
+                at=now,
+            )
+            code, mismatch_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/withdraw",
+                body=encode(third),
+            )
+            assert code == 400
+            assert json.loads(mismatch_body)["error"] == (
+                "signed-action-does-not-match-lane"
+            )
+            code, mismatch_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/apply",
+                body=encode(withdrawal),
+            )
+            assert code == 400
+            assert json.loads(mismatch_body)["error"] == (
+                "signed-action-does-not-match-lane"
+            )
             (shadow / "sleep").write_text("enabled\n", encoding="utf-8")
-            slow_results: list[int] = []
+            slow_results: list[tuple[int, str]] = []
             slow_lock = threading.Lock()
 
             def send_slow(record_to_send: dict[str, Any]) -> None:
-                result = http_request(
+                code, body, _ = http_request(
                     edge_port,
                     "POST",
-                    "/v1/intake",
+                    "/v1/intake/apply",
                     body=encode(record_to_send),
-                )[0]
+                )
                 with slow_lock:
-                    slow_results.append(result)
+                    slow_results.append(
+                        (code, json.loads(body).get("error", "accepted"))
+                    )
 
             first_thread = threading.Thread(target=send_slow, args=(first,))
             second_thread = threading.Thread(target=send_slow, args=(second,))
@@ -520,7 +619,7 @@ def main() -> None:
             code, limited_body, limited_headers = http_request(
                 edge_port,
                 "POST",
-                "/v1/intake",
+                "/v1/intake/apply",
                 body=encode(third),
             )
             assert code == 429
@@ -528,25 +627,46 @@ def main() -> None:
                 "edge-rate-or-connection-limit"
             )
             assert limited_headers["retry-after"] == "5"
+            code, withdrawal_body, _ = http_request(
+                edge_port,
+                "POST",
+                "/v1/intake/withdraw",
+                body=encode(withdrawal),
+            )
+            assert code == 202
+            assert json.loads(withdrawal_body)["action"] == "withdraw"
             first_thread.join(timeout=6)
             second_thread.join(timeout=6)
             assert not first_thread.is_alive()
             assert not second_thread.is_alive()
-            assert sorted(slow_results) == [202, 202]
+            assert sorted(slow_results) == [
+                (202, "accepted"),
+                (202, "accepted"),
+            ], slow_results
             (shadow / "sleep").unlink()
-            gateway_status = json.loads(status_file.read_text(encoding="utf-8"))
-            assert gateway_status["peak_active"] == 2
-            assert gateway_status["requests"]["overloaded"] == 0
+            apply_status = json.loads(
+                apply_status_file.read_text(encoding="utf-8")
+            )
+            withdraw_status = json.loads(
+                withdraw_status_file.read_text(encoding="utf-8")
+            )
+            assert apply_status["expected_action"] == "apply"
+            assert apply_status["peak_active"] == 2
+            assert apply_status["requests"]["overloaded"] == 0
+            assert withdraw_status["expected_action"] == "withdraw"
+            assert withdraw_status["peak_active"] == 1
+            assert withdraw_status["requests"]["accepted"] == 1
 
-            gateway_out, gateway_err = stop_process(gateway)
-            gateway = None
-            gateway_stderr.append(gateway_err)
-            assert not gateway_out
-            wait_for_port(gateway_port, open_state=False)
+            apply_out, apply_err = stop_process(apply_gateway)
+            apply_gateway = None
+            gateway_stderr.append(apply_err)
+            assert not apply_out
+            wait_for_port(apply_gateway_port, open_state=False)
+            time.sleep(0.3)
             code, unavailable_body, unavailable_headers = http_request(
                 edge_port,
                 "POST",
-                "/v1/intake",
+                "/v1/intake/apply",
                 body=b"{}",
             )
             assert code == 503
@@ -555,11 +675,13 @@ def main() -> None:
             )
             assert unavailable_headers["retry-after"] == "30"
 
-            gateway = start_gateway(
+            apply_gateway = start_gateway(
                 shadow_gateway,
                 state,
-                status_file,
-                gateway_port,
+                apply_status_file,
+                apply_gateway_port,
+                expected_action="apply",
+                max_concurrency=4,
             )
             recovered = issue(
                 shadow_intake,
@@ -572,7 +694,7 @@ def main() -> None:
             code, accepted_body, _ = http_request(
                 edge_port,
                 "POST",
-                "/v1/intake",
+                "/v1/intake/apply",
                 body=encode(recovered),
             )
             assert code == 202
@@ -581,10 +703,11 @@ def main() -> None:
             assert not list(harness_root.rglob("*.log"))
         finally:
             edge_out, edge_err = stop_process(edge)
-            gateway_out, gateway_err = stop_process(gateway)
+            apply_out, apply_err = stop_process(apply_gateway)
+            withdraw_out, withdraw_err = stop_process(withdraw_gateway)
             edge_stderr.append(edge_err)
-            gateway_stderr.append(gateway_err)
-            if edge_out or gateway_out:
+            gateway_stderr.extend((apply_err, withdraw_err))
+            if edge_out or apply_out or withdraw_out:
                 raise AssertionError("edge or gateway wrote unexpected stdout")
             if "Traceback" in "".join(edge_stderr + gateway_stderr):
                 raise AssertionError("edge drill emitted an internal traceback")
@@ -593,7 +716,7 @@ def main() -> None:
             "PASS: isolated WYWA intake edge "
             f"(120 malformed: {rate_limited} edge-limited, "
             f"{malformed_forwarded} bounded upstream rejections; "
-            "connection cap and upstream recovery passed)"
+            "signed action lanes, reserved withdrawal, and recovery passed)"
         )
 
 
