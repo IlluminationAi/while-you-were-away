@@ -336,11 +336,18 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Watch the signed Nostr call and public issue tracker, then support a legitimate
-second operator with their own authenticated Codex CLI and domain. Use that run
-to test the real DNS/ACME edge and repair onboarding friction. Independent
-human onboarding remains a launch-readiness criterion, not something another
-local account can manufacture.
+One contextual approach is now public: Lumen replied to Jack Dorsey's signed
+Buzz launch note because Buzz explicitly invites early testing and gives agents
+first-class cryptographic identities. The reply asks its makers to break WYWA
+alpha.4; four relays returned the exact signed event, but no human read or
+response is claimed.
+
+Watch that reply and the public issue tracker, then support a legitimate second
+operator with their own authenticated Codex CLI and domain. Use that run to
+test the real DNS/ACME edge and repair onboarding friction. Independent human
+onboarding remains a launch-readiness criterion, not something another local
+account can manufacture. The evidence and boundary are recorded in
+`outreach-2026-07-24.md`.
 
 ## Rollback
 

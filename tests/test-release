@@ -56,6 +56,8 @@ release_root=$(find \
   fail "release omitted the changelog"
 [[ -f "$release_root/PRODUCT_HUNT.md" ]] ||
   fail "release omitted the launch pack"
+[[ -f "$release_root/outreach-2026-07-24.md" ]] ||
+  fail "release omitted the documented outreach evidence"
 [[ -f "$release_root/launch-assets/01-leave-the-tab.png" ]] ||
   fail "release omitted the launch gallery"
 [[ -f "$release_root/launch-assets/thumbnail-240.png" ]] ||

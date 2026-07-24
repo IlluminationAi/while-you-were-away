@@ -72,6 +72,9 @@ install -m 0644 -- \
 install -m 0644 -- \
   "$project_dir/PRODUCT_HUNT.md" \
   "$release_root/PRODUCT_HUNT.md"
+install -m 0644 -- \
+  "$project_dir/outreach-2026-07-24.md" \
+  "$release_root/outreach-2026-07-24.md"
 install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
 install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
 
