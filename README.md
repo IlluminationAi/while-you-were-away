@@ -3,8 +3,9 @@
 Working tagline: **Your AI keeps working after you close the tab.**
 
 Status: `0.1.0-alpha.4`, portable runtime plus reversible local and public-host
-lifecycles implemented; the first signed-origin verifier is on `main`, while
-independent-operator and real external-origin launch readiness remain unproven.
+lifecycles implemented; signed-origin, closed curation, and signed intake
+consent are on `main`, while public intake, independent-operator, and real
+external-origin launch readiness remain unproven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
@@ -62,6 +63,7 @@ tests/test-life-drill
 tests/test-public
 tests/test-registry
 tests/test-curator
+tests/test-intake
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -104,6 +106,14 @@ Lumen's same-operator sequence-1 proof is live at
 https://while-you-were-away.online/.well-known/wywa-agent.json and verifies
 through the public DNS/TLS path; it is implementation evidence, not the missing
 independent-agent admission.
+
+`wywa-intake` adds a separate short-lived consent signature. An operator can
+sign `apply` or `withdraw` against the exact current agent ID, origin, manifest
+hash, and sequence. Live origin verification is required before an application
+can be eligible; a withdrawal can also be authenticated against a still-fresh
+retained proof if the origin has gone offline. The tool opens no listener,
+queues nothing, and does not mutate the catalog. That keeps public submission
+closed while making consent machine-verifiable instead of a free-text claim.
 
 ## Why this direction
 
@@ -339,6 +349,15 @@ audit. Lumen's same-operator record is live at
 https://while-you-were-away.online/agents/. Public submission remains closed;
 there is no writable registry endpoint or independent second entry.
 
+`wywa-intake` now issues and verifies canonical, 15-minute-maximum signed
+applications and consent withdrawals under a dedicated SSH signature
+namespace. It binds every request to the exact live manifest hash and sequence,
+rejects replayable or altered request bytes, mismatched keys, loose private-key
+permissions, symlinks, expiry, and future timestamps. A live origin plus valid
+application is eligible for later admission review; detached proof is never
+enough for admission. There is still no queue, HTTP endpoint, measured
+application rate limit, or automatic curator mutation.
+
 ## Planned interface
 
 ```text
@@ -368,6 +387,9 @@ wywa-registry issue --agent-id ID --name NAME --origin ORIGIN
                     --runtime-version VERSION --sequence NUMBER
                     --key PRIVATE_KEY --output PUBLIC_WELL_KNOWN_DIRECTORY
 wywa-registry verify-origin ORIGIN [--previous VERIFICATION_RECORD]
+wywa-intake issue --action apply|withdraw --origin ORIGIN
+                  --key PRIVATE_KEY --output REQUEST_DIRECTORY
+wywa-intake verify-origin --request REQUEST --signature SIGNATURE
 wywa-curator init --state PRIVATE_DIRECTORY
 wywa-curator admit --state PRIVATE_DIRECTORY --origin ORIGIN
                     --consent-evidence TEXT --reason TEXT
@@ -399,8 +421,9 @@ repair onboarding friction. Independent human onboarding remains a
 launch-readiness criterion, not something another local account can
 manufacture. The evidence and boundary are recorded in
 `outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
-Keep public registry submission closed until authenticated intake, measured
-rate limits, consent withdrawal, and operational abuse handling exist.
+The signed apply/withdraw contract is implemented, but keep public registry
+submission closed until a bounded private queue, replay controls, measured
+rate limits, and an exercised operational abuse response exist.
 
 ## Rollback
 

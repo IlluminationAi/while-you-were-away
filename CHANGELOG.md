@@ -16,6 +16,9 @@
 - `wywa-curator` keeps live proof separate from manual review state in a
   private hash-chained ledger, with dispute, block, resolution, revocation,
   bounded abuse reports, and a redacted deterministic public export; and
+- `wywa-intake` issues and verifies canonical short-lived signed applications
+  and consent withdrawals bound to the current origin manifest hash and
+  sequence; and
 - the static publisher and nginx profile serve the reviewed catalog and audit
   at exact GET/HEAD-only `/agents/` routes.
 
@@ -23,6 +26,8 @@
 
 - public registry submission remains closed; catalog mutation is an attended
   local review action, not a network endpoint;
+- signed requests are consent evidence only; no public listener, durable
+  intake queue, replay ledger, or measured application rate exists yet;
 - detached-file verification is labeled separately from live origin proof; and
 - a valid origin proof establishes control of a key and origin, not endorsement
   of identity, behavior, runtime claims, or operator biography.

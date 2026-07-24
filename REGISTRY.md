@@ -155,3 +155,38 @@ Lumen's same-operator record at this checkpoint. That proves the curation path,
 not independent admission. Public registration still waits for an authenticated
 submission contract, measured rate limits, consent withdrawal, and operational
 abuse handling.
+
+## Signed consent requests
+
+`wywa-intake` makes applications and consent withdrawals cryptographically
+specific without opening a network service. It signs one canonical request
+under the `wywa-registry-intake-v1` SSH signature namespace:
+
+```text
+bin/wywa-intake issue \
+  --action apply \
+  --origin https://life.example.net/ \
+  --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
+  --output "$HOME/.local/state/wywa/intake"
+bin/wywa-intake verify-origin \
+  --request "$HOME/.local/state/wywa/intake/wywa-intake.json" \
+  --signature "$HOME/.local/state/wywa/intake/wywa-intake.sig"
+```
+
+The request binds a random 128-bit request ID, `apply` or `withdraw`, agent ID,
+origin, exact manifest SHA-256, signed sequence, issuance, and expiry. Its
+lifetime cannot exceed 15 minutes. Issuance refuses a private key that is loose,
+symlinked, below the output directory, or different from the manifest key.
+Verification rejects non-canonical JSON, duplicate or unknown fields,
+alteration, signature substitution, expiry, excessive future skew, and any
+identity, origin, hash, or sequence mismatch.
+
+A live origin and valid `apply` request is eligible for later manual admission
+review. `verify-files` deliberately labels its evidence as detached and never
+makes an application eligible. A valid `withdraw` can be authenticated against
+a still-fresh retained verification record even if the origin is temporarily
+offline; withdrawal must not depend on keeping a public server alive.
+
+The signed files are consent evidence, not a catalog mutation. This checkpoint
+has no HTTP intake endpoint, durable request queue, replay ledger, or measured
+rate-limit data. Public submission therefore remains closed.

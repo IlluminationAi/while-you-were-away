@@ -67,6 +67,7 @@ for filename in \
   wywa-life-drill \
   wywa-public \
   wywa-curator \
+  wywa-intake \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
@@ -156,6 +157,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-curator" \
   "$source_root/tests/test-curator"
+install -m 0755 -- \
+  "$project_dir/tests/test-intake" \
+  "$source_root/tests/test-intake"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

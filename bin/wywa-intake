@@ -1,0 +1,605 @@
+#!/usr/bin/env python3
+"""Issue and verify short-lived signed WYWA registry consent requests."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+REGISTRY = Path(__file__).with_name("wywa-registry")
+NAMESPACE = "wywa-registry-intake-v1"
+REQUEST_NAME = "wywa-intake.json"
+SIGNATURE_NAME = "wywa-intake.sig"
+MAX_REQUEST_BYTES = 16 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_VERIFICATION_BYTES = 128 * 1024
+MAX_LIFETIME = dt.timedelta(minutes=15)
+MAX_FUTURE_SKEW = dt.timedelta(minutes=5)
+REQUEST_KEYS = {
+    "schema_version",
+    "request_id",
+    "action",
+    "agent_id",
+    "origin",
+    "manifest_sha256",
+    "sequence",
+    "issued_at",
+    "expires_at",
+}
+AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
+HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+REQUEST_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+
+
+class IntakeError(Exception):
+    """A bounded, user-facing intake request failure."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise IntakeError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise IntakeError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise IntakeError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise IntakeError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def bounded_text(value: object, label: str, maximum: int, minimum: int = 1) -> str:
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise IntakeError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise IntakeError(f"{label} contains a control character")
+    return value
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise IntakeError(f"JSON repeats key: {key}")
+        result[key] = value
+    return result
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise IntakeError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise IntakeError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise IntakeError(f"{label} must be a JSON object")
+    return result
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise IntakeError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise IntakeError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_size > maximum:
+        raise IntakeError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def normalize_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise IntakeError("origin must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise IntakeError("origin is invalid") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise IntakeError("origin must be a standard-port HTTPS root")
+    return f"https://{parsed.hostname.lower()}/"
+
+
+def normalize_public_key(value: object) -> str:
+    public_key = bounded_text(value, "public_key", 512)
+    fields = public_key.split()
+    if len(fields) != 2 or fields[0] != "ssh-ed25519":
+        raise IntakeError("public_key must be one comment-free ssh-ed25519 key")
+    if not re.fullmatch(r"[A-Za-z0-9+/]+={0,3}", fields[1]):
+        raise IntakeError("public_key encoding is invalid")
+    return " ".join(fields)
+
+
+def normalize_verification(
+    record: dict[str, Any],
+    *,
+    at: dt.datetime,
+    require_live: bool,
+) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "verified_at",
+        "evidence",
+        "eligible",
+        "manifest_sha256",
+        "agent_id",
+        "name",
+        "origin",
+        "public_key",
+        "runtime",
+        "issued_at",
+        "expires_at",
+        "sequence",
+        "status",
+    }
+    missing = required.difference(record)
+    if missing:
+        raise IntakeError(f"verification record omits {', '.join(sorted(missing))}")
+    if record["schema_version"] != 1:
+        raise IntakeError("verification record has an unsupported schema")
+    evidence = record["evidence"]
+    if evidence not in {"live-https-origin", "detached-files-only"}:
+        raise IntakeError("verification record has unsupported evidence")
+    if require_live and evidence != "live-https-origin":
+        raise IntakeError("live processing requires live HTTPS origin evidence")
+    agent_id = bounded_text(record["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise IntakeError("agent_id must be lowercase letters, digits, or hyphens")
+    name = bounded_text(record["name"], "name", 80)
+    origin = normalize_origin(record["origin"])
+    public_key = normalize_public_key(record["public_key"])
+    verified_at = parse_moment(record["verified_at"], "verified_at")
+    issued_at = parse_moment(record["issued_at"], "verification issued_at")
+    expires_at = parse_moment(record["expires_at"], "verification expires_at")
+    if verified_at > at + MAX_FUTURE_SKEW:
+        raise IntakeError("verification record is from the future")
+    if expires_at <= at:
+        raise IntakeError("verification record has expired")
+    sequence = record["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise IntakeError("verification sequence must be a positive integer")
+    manifest_hash = record["manifest_sha256"]
+    if not isinstance(manifest_hash, str) or HASH_PATTERN.fullmatch(manifest_hash) is None:
+        raise IntakeError("verification manifest_sha256 is invalid")
+    if record["status"] != "active" or record["eligible"] is not True:
+        raise IntakeError("intake requests require a currently active signed identity")
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(verified_at),
+        "evidence": evidence,
+        "eligible": True,
+        "manifest_sha256": manifest_hash,
+        "agent_id": agent_id,
+        "name": name,
+        "origin": origin,
+        "public_key": public_key,
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": sequence,
+        "status": "active",
+    }
+
+
+def normalize_request(
+    record: dict[str, Any],
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if set(record) != REQUEST_KEYS:
+        raise IntakeError("request fields do not match schema version 1")
+    if record["schema_version"] != 1:
+        raise IntakeError("request has an unsupported schema")
+    request_id = record["request_id"]
+    if not isinstance(request_id, str) or REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+        raise IntakeError("request_id must be 32 lowercase hexadecimal characters")
+    action = record["action"]
+    if action not in {"apply", "withdraw"}:
+        raise IntakeError("action must be apply or withdraw")
+    agent_id = bounded_text(record["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise IntakeError("agent_id must be lowercase letters, digits, or hyphens")
+    origin = normalize_origin(record["origin"])
+    manifest_hash = record["manifest_sha256"]
+    if not isinstance(manifest_hash, str) or HASH_PATTERN.fullmatch(manifest_hash) is None:
+        raise IntakeError("manifest_sha256 is invalid")
+    sequence = record["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise IntakeError("sequence must be a positive integer")
+    issued_at = parse_moment(record["issued_at"], "issued_at")
+    expires_at = parse_moment(record["expires_at"], "expires_at")
+    if expires_at <= issued_at:
+        raise IntakeError("request expiry must follow issuance")
+    if expires_at - issued_at > MAX_LIFETIME:
+        raise IntakeError("request lifetime exceeds 15 minutes")
+    if issued_at > at + MAX_FUTURE_SKEW:
+        raise IntakeError("request is from the future")
+    if expires_at <= at:
+        raise IntakeError("request has expired")
+    return {
+        "schema_version": 1,
+        "request_id": request_id,
+        "action": action,
+        "agent_id": agent_id,
+        "origin": origin,
+        "manifest_sha256": manifest_hash,
+        "sequence": sequence,
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+    }
+
+
+def load_verification(path: Path, *, at: dt.datetime) -> dict[str, Any]:
+    raw = load_json_bytes(
+        read_regular(path, "verification record", MAX_VERIFICATION_BYTES),
+        "verification record",
+    )
+    return normalize_verification(raw, at=at, require_live=False)
+
+
+def obtain_live_verification(origin: str, *, at: dt.datetime) -> dict[str, Any]:
+    result = subprocess.run(
+        [str(REGISTRY), "verify-origin", origin],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()
+        raise IntakeError(detail[-1] if detail else "live origin verification failed")
+    raw = load_json_bytes(result.stdout.encode("utf-8"), "live verification")
+    return normalize_verification(raw, at=at, require_live=True)
+
+
+def private_key(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise IntakeError(f"private key does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise IntakeError("private key must be a regular, nonsymlink file")
+    if metadata.st_mode & 0o077:
+        raise IntakeError("private key must not be accessible by group or others")
+    return absolute
+
+
+def derive_public_key(key: Path) -> str:
+    result = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(key)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise IntakeError("ssh-keygen could not read the private key")
+    return normalize_public_key(" ".join(result.stdout.strip().split()[:2]))
+
+
+def sign_request(data: bytes, key: Path) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-sign-") as temporary:
+        request_path = Path(temporary) / REQUEST_NAME
+        request_path.write_bytes(data)
+        result = subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-q",
+                "-n",
+                NAMESPACE,
+                "-f",
+                str(key),
+                str(request_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise IntakeError("ssh-keygen could not sign the intake request")
+        signature_path = Path(f"{request_path}.sig")
+        return read_regular(signature_path, "generated signature", MAX_SIGNATURE_BYTES)
+
+
+def verify_signature(data: bytes, signature: bytes, public_key: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-verify-") as temporary:
+        root = Path(temporary)
+        allowed = root / "allowed_signers"
+        signature_path = root / SIGNATURE_NAME
+        allowed.write_text(f"wywa-agent {public_key}\n", encoding="utf-8")
+        signature_path.write_bytes(signature)
+        result = subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                "wywa-agent",
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature_path),
+            ],
+            input=data,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise IntakeError("intake request signature is invalid")
+
+
+def reject_symlink_ancestors(path: Path) -> None:
+    current = path
+    while True:
+        if current.exists() and current.is_symlink():
+            raise IntakeError("output path must not contain a symbolic link")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def output_directory(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise IntakeError("output directory must be an absolute non-root path")
+    reject_symlink_ancestors(absolute)
+    absolute.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if absolute.is_symlink() or not absolute.is_dir():
+        raise IntakeError("output must be a nonsymlink directory")
+    return absolute
+
+
+def atomic_write(path: Path, data: bytes, mode: int) -> None:
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{path.name}.",
+        dir=path.parent,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def match_request_to_verification(
+    request: dict[str, Any],
+    verification: dict[str, Any],
+) -> None:
+    for request_key, verification_key in (
+        ("agent_id", "agent_id"),
+        ("origin", "origin"),
+        ("manifest_sha256", "manifest_sha256"),
+        ("sequence", "sequence"),
+    ):
+        if request[request_key] != verification[verification_key]:
+            raise IntakeError(f"request {request_key} differs from the signed origin")
+
+
+def verification_result(
+    request: dict[str, Any],
+    verification: dict[str, Any],
+    *,
+    live: bool,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(at),
+        "evidence": (
+            "live-origin-signed-intake"
+            if live
+            else "detached-proof-signed-intake"
+        ),
+        "authenticated_signature": True,
+        "eligible_for_admission": live and request["action"] == "apply",
+        "eligible_for_withdrawal": request["action"] == "withdraw",
+        "request_sha256": hashlib.sha256(canonical_bytes(request)).hexdigest(),
+        "request": request,
+        "identity": {
+            "agent_id": verification["agent_id"],
+            "name": verification["name"],
+            "origin": verification["origin"],
+            "public_key": verification["public_key"],
+            "manifest_sha256": verification["manifest_sha256"],
+            "sequence": verification["sequence"],
+            "origin_evidence": verification["evidence"],
+            "origin_expires_at": verification["expires_at"],
+        },
+    }
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Create or verify a short-lived signed registry application or "
+            "consent-withdrawal request. This tool opens no network listener."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+
+    issue = subcommands.add_parser("issue", help="create and sign one request")
+    issue.add_argument("--action", choices=("apply", "withdraw"), required=True)
+    source = issue.add_mutually_exclusive_group(required=True)
+    source.add_argument("--origin")
+    source.add_argument("--verification", type=Path)
+    issue.add_argument("--key", required=True, type=Path)
+    issue.add_argument("--output", required=True, type=Path)
+    issue.add_argument("--request-id")
+    issue.add_argument("--at")
+    issue.add_argument("--lifetime-seconds", type=int, default=600)
+    issue.add_argument("--replace", action="store_true")
+
+    verify_origin = subcommands.add_parser(
+        "verify-origin",
+        help="verify signature against a fresh live origin proof",
+    )
+    verify_origin.add_argument("--request", required=True, type=Path)
+    verify_origin.add_argument("--signature", required=True, type=Path)
+    verify_origin.add_argument("--at")
+
+    verify_files = subcommands.add_parser(
+        "verify-files",
+        help="verify signature against a supplied proof record",
+    )
+    verify_files.add_argument("--request", required=True, type=Path)
+    verify_files.add_argument("--signature", required=True, type=Path)
+    verify_files.add_argument("--verification", required=True, type=Path)
+    verify_files.add_argument("--at")
+    return result
+
+
+def parse_at(value: str | None) -> dt.datetime:
+    return utc_now() if value is None else parse_moment(value, "--at")
+
+
+def emit(record: object) -> None:
+    print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    event_at = parse_at(arguments.at)
+
+    if arguments.command == "issue":
+        if not 60 <= arguments.lifetime_seconds <= int(MAX_LIFETIME.total_seconds()):
+            raise IntakeError("lifetime must be between 60 and 900 seconds")
+        verification = (
+            obtain_live_verification(normalize_origin(arguments.origin), at=event_at)
+            if arguments.origin is not None
+            else load_verification(arguments.verification, at=event_at)
+        )
+        key = private_key(arguments.key)
+        if derive_public_key(key) != verification["public_key"]:
+            raise IntakeError("private key does not match the signed origin public key")
+        request_id = arguments.request_id or os.urandom(16).hex()
+        if REQUEST_ID_PATTERN.fullmatch(request_id) is None:
+            raise IntakeError("request_id must be 32 lowercase hexadecimal characters")
+        request = {
+            "schema_version": 1,
+            "request_id": request_id,
+            "action": arguments.action,
+            "agent_id": verification["agent_id"],
+            "origin": verification["origin"],
+            "manifest_sha256": verification["manifest_sha256"],
+            "sequence": verification["sequence"],
+            "issued_at": utc_text(event_at),
+            "expires_at": utc_text(
+                event_at + dt.timedelta(seconds=arguments.lifetime_seconds)
+            ),
+        }
+        request = normalize_request(request, at=event_at)
+        request_data = canonical_bytes(request)
+        signature = sign_request(request_data, key)
+        directory = output_directory(arguments.output)
+        request_path = directory / REQUEST_NAME
+        signature_path = directory / SIGNATURE_NAME
+        if not arguments.replace and (request_path.exists() or signature_path.exists()):
+            raise IntakeError("request output already exists; use --replace explicitly")
+        try:
+            if key.is_relative_to(directory):
+                raise IntakeError("private key must remain outside the request output")
+        except ValueError:
+            pass
+        atomic_write(request_path, request_data, 0o600)
+        atomic_write(signature_path, signature, 0o600)
+        emit(
+            {
+                "request": str(request_path),
+                "signature": str(signature_path),
+                "request_sha256": hashlib.sha256(request_data).hexdigest(),
+                "action": request["action"],
+                "source_evidence": verification["evidence"],
+            }
+        )
+        return 0
+
+    request_data = read_regular(arguments.request, "request", MAX_REQUEST_BYTES)
+    request = normalize_request(
+        load_json_bytes(request_data, "request"),
+        at=event_at,
+    )
+    if request_data != canonical_bytes(request):
+        raise IntakeError("request is not in canonical JSON encoding")
+    signature = read_regular(
+        arguments.signature,
+        "signature",
+        MAX_SIGNATURE_BYTES,
+    )
+    if arguments.command == "verify-origin":
+        verification = obtain_live_verification(request["origin"], at=event_at)
+        live = True
+    else:
+        verification = load_verification(arguments.verification, at=event_at)
+        live = False
+    match_request_to_verification(request, verification)
+    verify_signature(request_data, signature, verification["public_key"])
+    emit(verification_result(request, verification, live=live, at=event_at))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except IntakeError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

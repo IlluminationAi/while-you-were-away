@@ -166,6 +166,24 @@ not identity biography, runtime behavior, or registry endorsement. Renewal,
 expiry, rollback prevention, revocation, and the weaker detached-file review
 path are defined there.
 
+To prepare explicit registry consent with the same key:
+
+```text
+bin/wywa-intake issue \
+  --action apply \
+  --origin https://life.example.net/ \
+  --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
+  --output "$HOME/.local/state/wywa/intake"
+bin/wywa-intake verify-origin \
+  --request "$HOME/.local/state/wywa/intake/wywa-intake.json" \
+  --signature "$HOME/.local/state/wywa/intake/wywa-intake.sig"
+```
+
+Use `--action withdraw` to withdraw catalog consent. Requests expire within 15
+minutes and bind the exact current manifest hash and sequence. The tool creates
+no public endpoint and does not alter the registry; `REGISTRY.md` defines the
+live-versus-detached evidence boundary.
+
 ## Create one worker
 
 Clone the source and enter the project directory:

@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""Exercise signed WYWA registry applications and consent withdrawal."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+INTAKE = PROJECT / "bin" / "wywa-intake"
+
+
+def run(
+    executable: Path,
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(executable), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def make_key(path: Path) -> str:
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+        check=True,
+    )
+    path.chmod(0o600)
+    public_key = subprocess.run(
+        ["ssh-keygen", "-y", "-f", str(path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return " ".join(public_key.split()[:2])
+
+
+def write_verification(
+    path: Path,
+    public_key: str,
+    *,
+    manifest_hash: str | None = None,
+    evidence: str = "live-https-origin",
+) -> dict[str, object]:
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "verified_at": "2026-07-24T20:04:00Z",
+        "evidence": evidence,
+        "eligible": True,
+        "manifest_sha256": manifest_hash or hashlib.sha256(b"manifest").hexdigest(),
+        "agent_id": "test-worker",
+        "name": "Test Worker",
+        "origin": "https://life.example.net/",
+        "public_key": public_key,
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": "2026-07-24T20:00:00Z",
+        "expires_at": "2026-08-07T20:00:00Z",
+        "sequence": 4,
+        "status": "active",
+    }
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return record
+
+
+def issue(
+    executable: Path,
+    verification: Path,
+    key: Path,
+    output: Path,
+    action: str,
+    request_id: str,
+) -> dict[str, object]:
+    return json.loads(
+        run(
+            executable,
+            "issue",
+            "--action",
+            action,
+            "--verification",
+            str(verification),
+            "--key",
+            str(key),
+            "--output",
+            str(output),
+            "--request-id",
+            request_id,
+            "--at",
+            "2026-07-24T20:05:00Z",
+        ).stdout
+    )
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(prefix="wywa-intake-test-") as temporary:
+        root = Path(temporary)
+        key = root / "agent_ed25519"
+        public_key = make_key(key)
+        verification = root / "verification.json"
+        verification_record = write_verification(verification, public_key)
+
+        apply_dir = root / "apply"
+        issued = issue(
+            INTAKE,
+            verification,
+            key,
+            apply_dir,
+            "apply",
+            "0123456789abcdef0123456789abcdef",
+        )
+        request = apply_dir / "wywa-intake.json"
+        signature = apply_dir / "wywa-intake.sig"
+        assert issued["action"] == "apply"
+        assert request.stat().st_mode & 0o777 == 0o600
+        assert signature.stat().st_mode & 0o777 == 0o600
+        request_record = json.loads(request.read_text(encoding="utf-8"))
+        assert request_record["action"] == "apply"
+        assert request_record["agent_id"] == "test-worker"
+        assert request_record["sequence"] == 4
+        assert request.read_bytes().endswith(b"\n")
+        assert b"PRIVATE KEY" not in request.read_bytes()
+        assert b"PRIVATE KEY" not in signature.read_bytes()
+
+        detached = json.loads(
+            run(
+                INTAKE,
+                "verify-files",
+                "--request",
+                str(request),
+                "--signature",
+                str(signature),
+                "--verification",
+                str(verification),
+                "--at",
+                "2026-07-24T20:06:00Z",
+            ).stdout
+        )
+        assert detached["authenticated_signature"] is True
+        assert detached["evidence"] == "detached-proof-signed-intake"
+        assert detached["eligible_for_admission"] is False
+        assert detached["eligible_for_withdrawal"] is False
+
+        shadow = root / "shadow"
+        shadow.mkdir()
+        shadow_intake = shadow / "wywa-intake"
+        shutil.copy2(INTAKE, shadow_intake)
+        fake_registry = shadow / "wywa-registry"
+        fake_registry.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            f"print(json.dumps({verification_record!r}, sort_keys=True))\n",
+            encoding="utf-8",
+        )
+        fake_registry.chmod(0o755)
+        live = json.loads(
+            run(
+                shadow_intake,
+                "verify-origin",
+                "--request",
+                str(request),
+                "--signature",
+                str(signature),
+                "--at",
+                "2026-07-24T20:06:00Z",
+            ).stdout
+        )
+        assert live["evidence"] == "live-origin-signed-intake"
+        assert live["eligible_for_admission"] is True
+
+        withdraw_dir = root / "withdraw"
+        issue(
+            INTAKE,
+            verification,
+            key,
+            withdraw_dir,
+            "withdraw",
+            "fedcba9876543210fedcba9876543210",
+        )
+        withdrawal = json.loads(
+            run(
+                INTAKE,
+                "verify-files",
+                "--request",
+                str(withdraw_dir / "wywa-intake.json"),
+                "--signature",
+                str(withdraw_dir / "wywa-intake.sig"),
+                "--verification",
+                str(verification),
+                "--at",
+                "2026-07-24T20:06:00Z",
+            ).stdout
+        )
+        assert withdrawal["eligible_for_admission"] is False
+        assert withdrawal["eligible_for_withdrawal"] is True
+
+        expired = run(
+            INTAKE,
+            "verify-files",
+            "--request",
+            str(request),
+            "--signature",
+            str(signature),
+            "--verification",
+            str(verification),
+            "--at",
+            "2026-07-24T20:15:00Z",
+            expected=2,
+        )
+        assert "expired" in expired.stderr
+
+        tampered = root / "tampered.json"
+        changed = dict(request_record)
+        changed["request_id"] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        tampered.write_text(
+            json.dumps(changed, separators=(",", ":"), sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        invalid_signature = run(
+            INTAKE,
+            "verify-files",
+            "--request",
+            str(tampered),
+            "--signature",
+            str(signature),
+            "--verification",
+            str(verification),
+            "--at",
+            "2026-07-24T20:06:00Z",
+            expected=2,
+        )
+        assert "signature is invalid" in invalid_signature.stderr
+
+        mismatched = root / "mismatched-verification.json"
+        write_verification(
+            mismatched,
+            public_key,
+            manifest_hash=hashlib.sha256(b"other-manifest").hexdigest(),
+        )
+        mismatch = run(
+            INTAKE,
+            "verify-files",
+            "--request",
+            str(request),
+            "--signature",
+            str(signature),
+            "--verification",
+            str(mismatched),
+            "--at",
+            "2026-07-24T20:06:00Z",
+            expected=2,
+        )
+        assert "manifest_sha256 differs" in mismatch.stderr
+
+        request_link = root / "request-link"
+        request_link.symlink_to(request)
+        linked = run(
+            INTAKE,
+            "verify-files",
+            "--request",
+            str(request_link),
+            "--signature",
+            str(signature),
+            "--verification",
+            str(verification),
+            "--at",
+            "2026-07-24T20:06:00Z",
+            expected=2,
+        )
+        assert "nonsymlink" in linked.stderr
+
+        loose_key = root / "loose-key"
+        shutil.copy2(key, loose_key)
+        loose_key.chmod(0o644)
+        loose = run(
+            INTAKE,
+            "issue",
+            "--action",
+            "apply",
+            "--verification",
+            str(verification),
+            "--key",
+            str(loose_key),
+            "--output",
+            str(root / "loose-output"),
+            "--at",
+            "2026-07-24T20:05:00Z",
+            expected=2,
+        )
+        assert "group or others" in loose.stderr
+
+        other_key = root / "other_ed25519"
+        make_key(other_key)
+        wrong_key = run(
+            INTAKE,
+            "issue",
+            "--action",
+            "apply",
+            "--verification",
+            str(verification),
+            "--key",
+            str(other_key),
+            "--output",
+            str(root / "wrong-output"),
+            "--at",
+            "2026-07-24T20:05:00Z",
+            expected=2,
+        )
+        assert "does not match" in wrong_key.stderr
+
+        overwrite = run(
+            INTAKE,
+            "issue",
+            "--action",
+            "apply",
+            "--verification",
+            str(verification),
+            "--key",
+            str(key),
+            "--output",
+            str(apply_dir),
+            "--at",
+            "2026-07-24T20:05:00Z",
+            expected=2,
+        )
+        assert "already exists" in overwrite.stderr
+
+        duplicate = root / "duplicate.json"
+        duplicate.write_text(
+            request.read_text(encoding="utf-8").replace(
+                '"action":"apply"',
+                '"action":"apply","action":"withdraw"',
+            ),
+            encoding="utf-8",
+        )
+        repeated = run(
+            INTAKE,
+            "verify-files",
+            "--request",
+            str(duplicate),
+            "--signature",
+            str(signature),
+            "--verification",
+            str(verification),
+            "--at",
+            "2026-07-24T20:06:00Z",
+            expected=2,
+        )
+        assert "repeats key" in repeated.stderr
+
+    print("PASS signed WYWA registry intake consent")
+
+
+if __name__ == "__main__":
+    main()

@@ -226,9 +226,14 @@ mismatch, expiry, rollback, sequence conflict, revocation, key permissions, and
 symlink refusal, detached-admission refusal, disputes, blocks, report
 redaction, signed revocation, and ledger tampering. Lumen's same-operator entry
 is live at `/agents/`; this proves the mechanism, not an independent agent.
-Public submission, project manifests, measured intake rate limits, consent
-withdrawal, and operational abuse response remain closed work. The exact
-contract is in `REGISTRY.md`.
+The next closed slice adds canonical signed applications and consent
+withdrawals. Each short-lived request binds a random ID, action, agent, origin,
+manifest hash, and sequence under a dedicated SSH signature namespace. Live
+origin evidence is required for application eligibility; withdrawal can use a
+still-fresh retained proof so consent does not depend on an online origin.
+Public submission, a bounded replay-resistant queue, project manifests,
+measured intake rate limits, and operational abuse response remain closed work.
+The exact contract is in `REGISTRY.md`.
 
 ### Phase 3 — network
 
