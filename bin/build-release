@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+program=${0##*/}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_dir=$(cd -- "$script_dir/.." && pwd -P)
+
+if [[ $# -ne 1 ]]; then
+  printf 'Usage: %s OUTPUT_DIRECTORY\n' "$program" >&2
+  exit 2
+fi
+
+output_dir=$(realpath -m -- "$1")
+[[ "$output_dir" != / ]] || {
+  printf '%s: refusing to use the filesystem root as output\n' "$program" >&2
+  exit 2
+}
+[[ ! -L "$1" ]] || {
+  printf '%s: output directory must not be a symbolic link\n' "$program" >&2
+  exit 2
+}
+
+version=$(<"$project_dir/VERSION")
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+$ ]] || {
+  printf '%s: invalid prerelease version\n' "$program" >&2
+  exit 2
+}
+
+release_name=while-you-were-away-$version
+archive=$output_dir/$release_name.tar.gz
+checksum=$archive.sha256
+staging=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$staging" 2>/dev/null || true
+  rm -rf -- "$staging"
+}
+trap cleanup EXIT
+
+release_root=$staging/$release_name
+mkdir -p -- "$release_root/bin" "$release_root/templates"
+install -m 0755 -- "$project_dir/bin/wywa" "$release_root/bin/wywa"
+install -m 0644 -- "$project_dir/README.md" "$release_root/README.md"
+install -m 0644 -- "$project_dir/CHANGELOG.md" "$release_root/CHANGELOG.md"
+install -m 0644 -- \
+  "$project_dir/GETTING_STARTED.md" \
+  "$release_root/GETTING_STARTED.md"
+install -m 0644 -- "$project_dir/VERSION" "$release_root/VERSION"
+install -m 0644 -- "$project_dir/LICENSE" "$release_root/LICENSE"
+
+template_name=
+for template_name in \
+  MANDATE.md \
+  CONSTITUTION.md \
+  AGENTS.md \
+  WAKE.md \
+  state-CURRENT.md \
+  memory-INDEX.md \
+  projects-README.md \
+  workspace-README.md \
+  gitignore \
+  inbox-gitkeep
+do
+  install -m 0644 -- \
+    "$project_dir/templates/$template_name" \
+    "$release_root/templates/$template_name"
+done
+
+mkdir -p -- "$output_dir"
+archive_tmp=$(mktemp "$output_dir/.${release_name}.tar.gz.XXXXXX")
+checksum_tmp=$(mktemp "$output_dir/.${release_name}.sha256.XXXXXX")
+tar \
+  --sort=name \
+  --mtime=@0 \
+  --owner=0 \
+  --group=0 \
+  --numeric-owner \
+  -cf - \
+  -C "$staging" \
+  "$release_name" |
+  gzip -n >"$archive_tmp"
+chmod 0644 -- "$archive_tmp"
+mv -f -- "$archive_tmp" "$archive"
+
+(
+  cd -- "$output_dir"
+  sha256sum -- "$release_name.tar.gz"
+) >"$checksum_tmp"
+chmod 0644 -- "$checksum_tmp"
+mv -f -- "$checksum_tmp" "$checksum"
+
+printf 'archive: %s\n' "$archive"
+printf 'checksum: %s\n' "$checksum"

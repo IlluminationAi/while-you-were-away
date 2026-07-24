@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+builder=$repo_dir/bin/build-source-tree
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+mkdir -p -- "$test_root/one" "$test_root/two"
+"$builder" "$test_root/one" >/dev/null
+"$builder" "$test_root/two" >/dev/null
+
+source_one=$test_root/one/while-you-were-away
+source_two=$test_root/two/while-you-were-away
+diff -qr -- "$source_one" "$source_two" >/dev/null ||
+  fail "source-tree builds differ"
+
+for required in \
+  README.md \
+  CHANGELOG.md \
+  GETTING_STARTED.md \
+  LICENSE \
+  VERSION \
+  bin/wywa \
+  bin/build-release \
+  bin/build-source-tree \
+  templates/MANDATE.md \
+  tests/test-wywa \
+  tests/test-release \
+  tests/test-source-tree
+do
+  [[ -f "$source_one/$required" ]] ||
+    fail "source tree omitted $required"
+done
+
+shellcheck \
+  "$source_one/bin/wywa" \
+  "$source_one/bin/build-release" \
+  "$source_one/bin/build-source-tree" \
+  "$source_one/tests/test-wywa" \
+  "$source_one/tests/test-release"
+
+"$source_one/tests/test-wywa" >/dev/null
+"$source_one/tests/test-release" >/dev/null
+
+private_pattern='revision''radar|104''\.248\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
+if rg -n \
+  "$private_pattern" \
+  "$source_one" >/dev/null; then
+  fail "source tree contains private deployment material"
+fi
+
+git -C "$source_one" init -q -b main
+git -C "$source_one" config user.name "WYWA Release Test"
+git -C "$source_one" config user.email "wywa-release@localhost"
+git -C "$source_one" add -- .
+git -C "$source_one" commit -q -m "Prepare standalone alpha source"
+[[ -z "$(git -C "$source_one" status --porcelain)" ]] ||
+  fail "standalone source repository is not clean"
+
+printf '%s\n' "PASS: standalone WYWA source tree"

@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+builder=$repo_dir/bin/build-release
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+mkdir -p -- "$test_root/one" "$test_root/two" "$test_root/extracted"
+"$builder" "$test_root/one" >/dev/null
+"$builder" "$test_root/two" >/dev/null
+
+archive_one=$(find "$test_root/one" -maxdepth 1 -type f -name '*.tar.gz')
+archive_two=$(find "$test_root/two" -maxdepth 1 -type f -name '*.tar.gz')
+[[ -n "$archive_one" && -n "$archive_two" ]] ||
+  fail "release archive was not created"
+cmp -s -- "$archive_one" "$archive_two" ||
+  fail "release archives are not reproducible"
+
+(
+  cd -- "$test_root/one"
+  sha256sum -c -- "$(basename -- "$archive_one").sha256" >/dev/null
+) || fail "release checksum did not verify"
+
+tar -xzf "$archive_one" -C "$test_root/extracted"
+release_root=$(find \
+  "$test_root/extracted" \
+  -mindepth 1 \
+  -maxdepth 1 \
+  -type d \
+  -name 'while-you-were-away-*')
+[[ -x "$release_root/bin/wywa" ]] ||
+  fail "release omitted the executable CLI"
+[[ -f "$release_root/GETTING_STARTED.md" ]] ||
+  fail "release omitted onboarding"
+[[ -f "$release_root/CHANGELOG.md" ]] ||
+  fail "release omitted the changelog"
+[[ -f "$release_root/LICENSE" ]] ||
+  fail "release omitted the Apache-2.0 license"
+[[ -f "$release_root/templates/MANDATE.md" ]] ||
+  fail "release omitted templates"
+
+shellcheck "$release_root/bin/wywa"
+"$release_root/bin/wywa" --help >/dev/null
+"$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
+[[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
+  fail "released CLI did not create a clean workspace"
+
+private_pattern='revision''radar|104''\\.248\\.|sergei_''ton|TELEGRAM_''(BOT_)?TOKEN|AGENT_''CHAT_ID'
+if rg -n \
+  "$private_pattern" \
+  "$release_root" >/dev/null; then
+  fail "release contains private deployment material"
+fi
+
+printf '%s\n' "PASS: reproducible WYWA release"

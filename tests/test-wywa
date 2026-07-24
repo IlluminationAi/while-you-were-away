@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+wywa=$repo_dir/bin/wywa
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_status() {
+  local expected=$1
+  shift
+  set +e
+  "$@" >"$test_root/stdout" 2>"$test_root/stderr"
+  local actual=$?
+  set -e
+  [[ "$actual" -eq "$expected" ]] ||
+    fail "expected status $expected, got $actual: $*"
+}
+
+mkdir -p -- "$test_root/home/fake" "$test_root/state"
+export HOME=$test_root/home
+export XDG_STATE_HOME=$test_root/unused-xdg-state
+export WYWA_STATE_ROOT=$test_root/state
+
+fake_codex=$test_root/fake-codex
+cat >"$fake_codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+fake_root=$HOME/fake
+if [[ "${1:-}" == login && "${2:-}" == status ]]; then
+  if [[ -f "$fake_root/login-fail" ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+env | sort >"$fake_root/environment"
+printf '%s\n' "$@" >"$fake_root/arguments"
+
+mode=success
+[[ ! -f "$fake_root/mode" ]] || mode=$(<"$fake_root/mode")
+case "$mode" in
+  sleep)
+    sleep 5
+    ;;
+  hold)
+    sleep 2
+    ;;
+esac
+
+output_file=
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == --output-last-message ]]; then
+    output_file=$2
+    break
+  fi
+  shift
+done
+
+if [[ "$mode" == success || "$mode" == partial ]]; then
+  [[ -n "$output_file" ]] || exit 91
+  if [[ -f "$fake_root/message" ]]; then
+    cp -- "$fake_root/message" "$output_file"
+  else
+    printf '%s\n' "cycle complete" >"$output_file"
+  fi
+fi
+
+if [[ -f "$fake_root/exit-status" ]]; then
+  exit "$(<"$fake_root/exit-status")"
+fi
+exit 0
+EOF
+chmod 0755 -- "$fake_codex"
+export WYWA_CODEX_BIN=$fake_codex
+
+fake_systemctl=$test_root/fake-systemctl
+cat >"$fake_systemctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"$HOME/fake/systemctl-arguments"
+EOF
+chmod 0755 -- "$fake_systemctl"
+
+fake_loginctl=$test_root/fake-loginctl
+cat >"$fake_loginctl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ -f "$HOME/fake/linger-no" ]]; then
+  printf '%s\n' no
+else
+  printf '%s\n' yes
+fi
+EOF
+chmod 0755 -- "$fake_loginctl"
+
+workspace=$test_root/worker
+"$wywa" init "$workspace" >"$test_root/init-output"
+[[ -f "$workspace/MANDATE.md" ]] || fail "init omitted MANDATE.md"
+[[ -f "$workspace/inbox/.gitkeep" ]] || fail "init omitted inbox sentinel"
+[[ "$(stat -c %a "$workspace/MANDATE.md")" == 600 ]] ||
+  fail "workspace files are not private"
+[[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
+  fail "initialized workspace is not clean"
+[[ "$(git -C "$workspace" rev-list --count HEAD)" == 1 ]] ||
+  fail "init did not create exactly one checkpoint"
+
+mkdir -p -- "$test_root/nonempty"
+printf '%s\n' "keep" >"$test_root/nonempty/file"
+expect_status 2 "$wywa" init "$test_root/nonempty"
+[[ "$(<"$test_root/nonempty/file")" == keep ]] ||
+  fail "init modified a non-empty target"
+
+ln -s -- "$workspace" "$test_root/workspace-link"
+expect_status 2 "$wywa" doctor "$test_root/workspace-link"
+
+if (( EUID == 0 )); then
+  unset WYWA_ALLOW_ROOT || true
+  expect_status 2 "$wywa" doctor "$workspace"
+fi
+export WYWA_ALLOW_ROOT=1
+
+ln -s -- "$test_root" "$test_root/bad-state-link"
+expect_status 2 env \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_STATE_ROOT="$test_root/bad-state-link" \
+  HOME="$HOME" \
+  "$wywa" doctor "$workspace"
+
+"$wywa" doctor "$workspace" >"$test_root/doctor-output" 2>"$test_root/doctor-error"
+grep -q '^doctor: ok ' "$test_root/doctor-output" ||
+  fail "doctor did not report success"
+
+touch "$HOME/fake/login-fail"
+expect_status 2 "$wywa" doctor "$workspace"
+rm -f -- "$HOME/fake/login-fail"
+
+"$wywa" run "$workspace" --max-runtime 2m --dry-run \
+  >"$test_root/dry-run-output" 2>"$test_root/dry-run-error"
+grep -q '^sandbox: workspace-write$' "$test_root/dry-run-output" ||
+  fail "dry run omitted the sandbox boundary"
+grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
+  fail "dry run omitted the runtime bound"
+
+export SECRET_SENTINEL=must-not-reach-child
+printf '%s\n' "first verified result" >"$HOME/fake/message"
+printf '%s\n' success >"$HOME/fake/mode"
+"$wywa" run "$workspace" --max-runtime 2m \
+  >"$test_root/run-output" 2>"$test_root/run-error"
+
+grep -q '^--ignore-user-config$' "$HOME/fake/arguments" ||
+  fail "run did not isolate unattended configuration"
+grep -q '^workspace-write$' "$HOME/fake/arguments" ||
+  fail "run did not select workspace-write"
+if grep -q 'dangerously-bypass' "$HOME/fake/arguments"; then
+  fail "run used a dangerous Codex bypass"
+fi
+if grep -q 'SECRET_SENTINEL' "$HOME/fake/environment"; then
+  fail "run leaked an unrelated environment secret"
+fi
+
+runtime_dir=$(find "$WYWA_STATE_ROOT" -mindepth 1 -maxdepth 1 -type d -print)
+[[ -n "$runtime_dir" && "$runtime_dir" != "$workspace"* ]] ||
+  fail "runtime state was not isolated from the workspace"
+[[ "$(stat -c %a "$runtime_dir")" == 700 ]] ||
+  fail "runtime directory is not private"
+grep -q 'status=0 sandbox=workspace-write' "$runtime_dir/last-run" ||
+  fail "successful receipt is missing or malformed"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "successful final message was not published"
+
+"$wywa" status "$workspace" >"$test_root/status-output"
+grep -q '^last run: .*status=0 sandbox=workspace-write' \
+  "$test_root/status-output" ||
+  fail "status omitted the successful receipt"
+grep -q '^first verified result$' "$test_root/status-output" ||
+  fail "status omitted the final message"
+
+printf '%s\n' fail >"$HOME/fake/mode"
+printf '%s\n' 23 >"$HOME/fake/exit-status"
+expect_status 23 "$wywa" run "$workspace" --max-runtime 2m
+grep -q 'status=23 sandbox=workspace-write' "$runtime_dir/last-run" ||
+  fail "failed receipt did not preserve the child status"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "failed run replaced the previous canonical message"
+
+printf '%s\n' partial >"$HOME/fake/mode"
+printf '%s\n' "partial failure output" >"$HOME/fake/message"
+expect_status 23 "$wywa" run "$workspace" --max-runtime 2m
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "partial failure output replaced the canonical message"
+
+rm -f -- "$HOME/fake/exit-status"
+printf '%s\n' sleep >"$HOME/fake/mode"
+expect_status 124 "$wywa" run "$workspace" --max-runtime 1s
+grep -q 'status=124 sandbox=workspace-write' "$runtime_dir/last-run" ||
+  fail "timeout receipt is missing"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "timeout replaced the previous canonical message"
+
+printf '%s\n' hold >"$HOME/fake/mode"
+set +e
+"$wywa" run "$workspace" --max-runtime 10s \
+  >"$test_root/held-run-output" 2>"$test_root/held-run-error" &
+held_pid=$!
+set -e
+
+lock_file=$runtime_dir/cycle.lock
+lock_observed=0
+for _ in $(seq 1 80); do
+  if [[ -f "$lock_file" ]] &&
+    ! flock -n "$lock_file" -c true 2>/dev/null; then
+    lock_observed=1
+    break
+  fi
+  sleep 0.05
+done
+[[ "$lock_observed" == 1 ]] || fail "did not observe the held cycle lock"
+expect_status 75 "$wywa" run "$workspace" --max-runtime 10s
+wait "$held_pid" || fail "held cycle did not complete successfully"
+
+if pgrep -f "$fake_codex" >/dev/null 2>&1; then
+  fail "fake Codex process remained after lifecycle tests"
+fi
+
+rm -f -- "$HOME/fake/exit-status"
+printf '%s\n' success >"$HOME/fake/mode"
+printf '%s\n' "scheduled result" >"$HOME/fake/message"
+
+touch "$HOME/fake/linger-no"
+expect_status 2 env -u WYWA_STATE_ROOT \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_SYSTEMCTL_BIN="$fake_systemctl" \
+  WYWA_LOGINCTL_BIN="$fake_loginctl" \
+  HOME="$HOME" \
+  "$wywa" install-user "$workspace"
+rm -f -- "$HOME/fake/linger-no"
+
+env -u WYWA_STATE_ROOT \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_SYSTEMCTL_BIN="$fake_systemctl" \
+  WYWA_LOGINCTL_BIN="$fake_loginctl" \
+  HOME="$HOME" \
+  "$wywa" install-user "$workspace" \
+  >"$test_root/install-output" 2>"$test_root/install-error"
+
+default_state_root=$HOME/.local/state/wywa
+scheduled_runtime=$(find \
+  "$default_state_root" \
+  -mindepth 1 \
+  -maxdepth 1 \
+  -type d \
+  -print)
+scheduled_id=${scheduled_runtime##*/}
+service_file=$HOME/.config/systemd/user/wywa-$scheduled_id.service
+timer_file=$HOME/.config/systemd/user/wywa-$scheduled_id.timer
+installed_wywa=$HOME/.local/lib/wywa/bin/wywa
+
+[[ -x "$installed_wywa" ]] || fail "install-user omitted the worker binary"
+[[ -f "$HOME/.local/lib/wywa/templates/MANDATE.md" ]] ||
+  fail "install-user omitted reusable templates"
+[[ "$(stat -c %a "$service_file")" == 600 ]] ||
+  fail "installed service is not private"
+[[ "$(stat -c %a "$timer_file")" == 600 ]] ||
+  fail "installed timer is not private"
+grep -Fq "run-state $scheduled_id" "$service_file" ||
+  fail "installed service does not use the registered workspace id"
+if grep -Fq "$workspace" "$service_file"; then
+  fail "installed service exposes the workspace path"
+fi
+if grep -Eq '(SECRET_SENTINEL|OPENAI_API_KEY|CODEX_ACCESS_TOKEN)' \
+  "$service_file" "$timer_file"; then
+  fail "installed units contain credential material"
+fi
+grep -Fxq 'OnUnitInactiveSec=1h' "$timer_file" ||
+  fail "installed timer is not completion-relative"
+if grep -Eq '^(OnUnitActiveSec|Persistent)=' "$timer_file"; then
+  fail "installed timer can catch up immediately after an overrun"
+fi
+grep -Fxq -- '--user daemon-reload' "$HOME/fake/systemctl-arguments" ||
+  fail "install-user omitted the daemon reload"
+grep -Fxq -- "--user enable --now wywa-$scheduled_id.timer" \
+  "$HOME/fake/systemctl-arguments" ||
+  fail "install-user did not enable the timer"
+
+systemd-analyze verify "$service_file" "$timer_file" >/dev/null 2>&1 ||
+  fail "installed user-unit syntax is invalid"
+
+env -u WYWA_STATE_ROOT \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_CODEX_BIN="$fake_codex" \
+  HOME="$HOME" \
+  "$installed_wywa" run-state "$scheduled_id" \
+  >"$test_root/run-state-output" 2>"$test_root/run-state-error"
+grep -q '^scheduled result$' "$scheduled_runtime/last-message.txt" ||
+  fail "installed run-state path did not complete a cycle"
+
+env -u WYWA_STATE_ROOT \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_SYSTEMCTL_BIN="$fake_systemctl" \
+  WYWA_LOGINCTL_BIN="$fake_loginctl" \
+  HOME="$HOME" \
+  "$installed_wywa" install-user "$workspace" \
+  >"$test_root/reinstall-output" 2>"$test_root/reinstall-error"
+
+env -u WYWA_STATE_ROOT \
+  WYWA_ALLOW_ROOT=1 \
+  WYWA_SYSTEMCTL_BIN="$fake_systemctl" \
+  HOME="$HOME" \
+  "$installed_wywa" uninstall-user "$workspace" \
+  >"$test_root/uninstall-output" 2>"$test_root/uninstall-error"
+[[ ! -e "$service_file" && ! -e "$timer_file" ]] ||
+  fail "uninstall-user left unit sources behind"
+[[ -d "$workspace" && -d "$scheduled_runtime" ]] ||
+  fail "uninstall-user deleted workspace or runtime data"
+grep -Fq -- "--user disable --now wywa-$scheduled_id.timer" \
+  "$HOME/fake/systemctl-arguments" ||
+  fail "uninstall-user did not disable the timer"
+
+printf '%s\n' "PASS: WYWA portable runtime"

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+program=${0##*/}
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+project_dir=$(cd -- "$script_dir/.." && pwd -P)
+
+if [[ $# -ne 1 ]]; then
+  printf 'Usage: %s OUTPUT_DIRECTORY\n' "$program" >&2
+  exit 2
+fi
+
+output_dir=$(realpath -m -- "$1")
+[[ "$output_dir" != / ]] || {
+  printf '%s: refusing to use the filesystem root as output\n' "$program" >&2
+  exit 2
+}
+[[ ! -L "$1" ]] || {
+  printf '%s: output directory must not be a symbolic link\n' "$program" >&2
+  exit 2
+}
+
+destination=$output_dir/while-you-were-away
+[[ ! -e "$destination" ]] || {
+  printf '%s: destination already exists: %s\n' "$program" "$destination" >&2
+  exit 2
+}
+
+staging=$(mktemp -d)
+cleanup() {
+  chmod -R u+rwX -- "$staging" 2>/dev/null || true
+  rm -rf -- "$staging"
+}
+trap cleanup EXIT
+
+source_root=$staging/while-you-were-away
+mkdir -p -- \
+  "$source_root/bin" \
+  "$source_root/templates" \
+  "$source_root/tests"
+
+for filename in \
+  .gitignore \
+  CHANGELOG.md \
+  GETTING_STARTED.md \
+  LICENSE \
+  README.md \
+  VERSION
+do
+  install -m 0644 -- "$project_dir/$filename" "$source_root/$filename"
+done
+
+for filename in \
+  build-release \
+  build-source-tree \
+  wywa
+do
+  install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+template_name=
+for template_name in \
+  MANDATE.md \
+  CONSTITUTION.md \
+  AGENTS.md \
+  WAKE.md \
+  state-CURRENT.md \
+  memory-INDEX.md \
+  projects-README.md \
+  workspace-README.md \
+  gitignore \
+  inbox-gitkeep
+do
+  install -m 0644 -- \
+    "$project_dir/templates/$template_name" \
+    "$source_root/templates/$template_name"
+done
+
+install -m 0755 -- \
+  "$project_dir/tests/test-wywa" \
+  "$source_root/tests/test-wywa"
+install -m 0755 -- \
+  "$project_dir/tests/test-release" \
+  "$source_root/tests/test-release"
+install -m 0755 -- \
+  "$project_dir/tests/test-source-tree" \
+  "$source_root/tests/test-source-tree"
+
+mkdir -p -- "$output_dir"
+mv -- "$source_root" "$destination"
+printf 'source tree: %s\n' "$destination"
