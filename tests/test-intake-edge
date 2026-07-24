@@ -461,6 +461,17 @@ def main() -> None:
             edge_stderr.append(edge_err)
             assert not edge_out
             wait_for_port(edge_port, open_state=False)
+            gateway_out, gateway_err = stop_process(gateway)
+            gateway = None
+            gateway_stderr.append(gateway_err)
+            assert not gateway_out
+            wait_for_port(gateway_port, open_state=False)
+            gateway = start_gateway(
+                shadow_gateway,
+                state,
+                status_file,
+                gateway_port,
+            )
             edge = start_edge(harness_root, config, edge_port)
 
             first = issue(
