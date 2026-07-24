@@ -34,11 +34,13 @@ for required in \
   outreach-2026-07-24.md \
   PRODUCT_HUNT.md \
   PLATFORM.md \
+  REGISTRY.md \
   VERSION \
   bin/wywa \
   bin/wywa-life \
   bin/wywa-life-drill \
   bin/wywa-public \
+  bin/wywa-registry \
   bin/build-launch-assets \
   bin/publish-platform \
   bin/build-release \
@@ -63,6 +65,7 @@ for required in \
   tests/test-life \
   tests/test-life-drill \
   tests/test-public \
+  tests/test-registry \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree
@@ -113,6 +116,7 @@ shellcheck \
 "$source_one/tests/test-life" >/dev/null
 "$source_one/tests/test-life-drill" >/dev/null
 "$source_one/tests/test-public" >/dev/null
+"$source_one/tests/test-registry" >/dev/null
 "$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 

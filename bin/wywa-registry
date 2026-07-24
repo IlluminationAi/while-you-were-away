@@ -1,0 +1,730 @@
+#!/usr/bin/env python3
+"""Issue and verify bounded WYWA agent-origin proofs."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import datetime as dt
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+NAMESPACE = "wywa-agent-manifest"
+MANIFEST_NAME = "wywa-agent.json"
+SIGNATURE_NAME = "wywa-agent.sig"
+MAX_MANIFEST_BYTES = 64 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_VALIDITY = dt.timedelta(days=30)
+CLOCK_SKEW = dt.timedelta(minutes=5)
+AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
+DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 ([A-Za-z0-9+/]+={0,2})")
+
+
+class RegistryError(Exception):
+    """A safe, user-facing registry proof error."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise RegistryError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RegistryError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise RegistryError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise RegistryError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise RegistryError(f"JSON repeats key: {key}")
+        record[key] = value
+    return record
+
+
+def read_regular(
+    path: Path,
+    label: str,
+    maximum: int,
+) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise RegistryError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RegistryError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_size > maximum:
+        raise RegistryError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RegistryError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise RegistryError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise RegistryError(f"{label} must be a JSON object")
+    return result
+
+
+def load_json_file(path: Path, label: str, maximum: int) -> dict[str, Any]:
+    return load_json_bytes(read_regular(path, label, maximum), label)
+
+
+def require_exact_keys(
+    record: dict[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
+    actual = set(record)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    detail = []
+    if missing:
+        detail.append(f"missing {', '.join(missing)}")
+    if extra:
+        detail.append(f"unknown {', '.join(extra)}")
+    raise RegistryError(f"{label} has {'; '.join(detail)}")
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    minimum: int = 1,
+) -> str:
+    if not isinstance(value, str):
+        raise RegistryError(f"{label} must be text")
+    if not minimum <= len(value) <= maximum:
+        raise RegistryError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise RegistryError(f"{label} contains a control character")
+    return value
+
+
+def normalize_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise RegistryError("origin must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise RegistryError("origin is not a valid URL") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        raise RegistryError(
+            "origin must be an HTTPS domain root on the standard port"
+        )
+    try:
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as error:
+        raise RegistryError("origin has an invalid internationalized domain") from error
+    if host.endswith(".") or len(host) > 253:
+        raise RegistryError("origin has an invalid domain")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise RegistryError("origin must use a DNS name, not an IP address")
+    labels = host.split(".")
+    if len(labels) < 2 or any(
+        not DNS_LABEL_PATTERN.fullmatch(label) for label in labels
+    ):
+        raise RegistryError("origin has an invalid DNS name")
+    return f"https://{host}/"
+
+
+def validate_public_key(value: object) -> str:
+    if not isinstance(value, str):
+        raise RegistryError("public_key must be text")
+    match = SSH_KEY_PATTERN.fullmatch(value)
+    if match is None:
+        raise RegistryError("public_key must be one comment-free ssh-ed25519 key")
+    try:
+        decoded = base64.b64decode(match.group(1), validate=True)
+    except ValueError as error:
+        raise RegistryError("public_key has invalid base64") from error
+    if len(decoded) < 32 or len(decoded) > 256:
+        raise RegistryError("public_key has an invalid encoded length")
+    return value
+
+
+def validate_manifest(
+    manifest: dict[str, Any],
+    *,
+    expected_origin: str,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    require_exact_keys(
+        manifest,
+        {
+            "schema_version",
+            "agent_id",
+            "name",
+            "origin",
+            "public_key",
+            "runtime",
+            "issued_at",
+            "expires_at",
+            "sequence",
+            "status",
+        },
+        "manifest",
+    )
+    if manifest["schema_version"] != 1:
+        raise RegistryError("manifest has an unsupported schema_version")
+    agent_id = bounded_text(manifest["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise RegistryError("agent_id must be lowercase letters, digits, or hyphens")
+    name = bounded_text(manifest["name"], "name", 80)
+    origin = normalize_origin(manifest["origin"])
+    if origin != normalize_origin(expected_origin):
+        raise RegistryError("manifest origin differs from the expected origin")
+    public_key = validate_public_key(manifest["public_key"])
+    runtime = manifest["runtime"]
+    if not isinstance(runtime, dict):
+        raise RegistryError("runtime must be an object")
+    require_exact_keys(runtime, {"name", "version"}, "runtime")
+    runtime_name = bounded_text(runtime["name"], "runtime.name", 80)
+    runtime_version = bounded_text(runtime["version"], "runtime.version", 64)
+    issued_at = parse_moment(manifest["issued_at"], "issued_at")
+    expires_at = parse_moment(manifest["expires_at"], "expires_at")
+    if expires_at <= issued_at:
+        raise RegistryError("expires_at must be later than issued_at")
+    if expires_at - issued_at > MAX_VALIDITY:
+        raise RegistryError("manifest validity must not exceed 30 days")
+    if issued_at > at + CLOCK_SKEW:
+        raise RegistryError("manifest issued_at is too far in the future")
+    if expires_at <= at:
+        raise RegistryError("manifest has expired")
+    sequence = manifest["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise RegistryError("sequence must be a positive integer")
+    status_value = manifest["status"]
+    if status_value not in {"active", "revoked"}:
+        raise RegistryError("status must be active or revoked")
+    return {
+        "schema_version": 1,
+        "agent_id": agent_id,
+        "name": name,
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": runtime_name,
+            "version": runtime_version,
+        },
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": sequence,
+        "status": status_value,
+    }
+
+
+def verify_signature(
+    manifest_bytes: bytes,
+    signature_path: Path,
+    manifest: dict[str, Any],
+) -> None:
+    read_regular(signature_path, "signature", MAX_SIGNATURE_BYTES)
+    ssh_keygen = shutil.which("ssh-keygen")
+    if ssh_keygen is None:
+        raise RegistryError("ssh-keygen is required")
+    with tempfile.TemporaryDirectory(prefix="wywa-registry-") as temporary:
+        allowed = Path(temporary) / "allowed_signers"
+        allowed.write_text(
+            f"{manifest['agent_id']} {manifest['public_key']}\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                ssh_keygen,
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                manifest["agent_id"],
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature_path.expanduser().absolute()),
+            ],
+            input=manifest_bytes,
+            capture_output=True,
+        )
+    if result.returncode != 0:
+        raise RegistryError("manifest signature verification failed")
+
+
+def validate_previous(
+    previous_path: Path | None,
+    manifest: dict[str, Any],
+    manifest_hash: str,
+) -> None:
+    if previous_path is None:
+        return
+    previous = load_json_file(
+        previous_path,
+        "previous verification record",
+        MAX_MANIFEST_BYTES,
+    )
+    required = {
+        "agent_id",
+        "origin",
+        "public_key",
+        "sequence",
+        "status",
+        "manifest_sha256",
+    }
+    if not required.issubset(previous):
+        raise RegistryError("previous verification record is incomplete")
+    for key in ("agent_id", "origin", "public_key"):
+        if previous[key] != manifest[key]:
+            raise RegistryError(f"previous verification record changes {key}")
+    previous_sequence = previous["sequence"]
+    if (
+        isinstance(previous_sequence, bool)
+        or not isinstance(previous_sequence, int)
+        or previous_sequence < 1
+    ):
+        raise RegistryError("previous verification record has invalid sequence")
+    if manifest["sequence"] < previous_sequence:
+        raise RegistryError("manifest sequence rolls back the previous record")
+    if (
+        manifest["sequence"] == previous_sequence
+        and previous["manifest_sha256"] != manifest_hash
+    ):
+        raise RegistryError("manifest conflicts with the previous sequence")
+    if previous["status"] == "revoked" and manifest["status"] == "active":
+        raise RegistryError("a revoked identity cannot reactivate automatically")
+
+
+def verification_record(
+    manifest: dict[str, Any],
+    manifest_bytes: bytes,
+    *,
+    verified_at: dt.datetime,
+    evidence: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(verified_at),
+        "evidence": evidence,
+        "eligible": manifest["status"] == "active",
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        **manifest,
+    }
+
+
+def verify_files(
+    manifest_path: Path,
+    signature_path: Path,
+    *,
+    expected_origin: str,
+    previous_path: Path | None,
+    at: dt.datetime,
+    evidence: str,
+) -> dict[str, Any]:
+    manifest_bytes = read_regular(
+        manifest_path,
+        "manifest",
+        MAX_MANIFEST_BYTES,
+    )
+    manifest = validate_manifest(
+        load_json_bytes(manifest_bytes, "manifest"),
+        expected_origin=expected_origin,
+        at=at,
+    )
+    verify_signature(manifest_bytes, signature_path, manifest)
+    manifest_hash = hashlib.sha256(manifest_bytes).hexdigest()
+    validate_previous(previous_path, manifest, manifest_hash)
+    return verification_record(
+        manifest,
+        manifest_bytes,
+        verified_at=at,
+        evidence=evidence,
+    )
+
+
+def public_addresses(host: str) -> list[str]:
+    try:
+        answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise RegistryError(f"origin DNS resolution failed: {error}") from error
+    addresses = sorted({answer[4][0] for answer in answers})
+    if not addresses:
+        raise RegistryError("origin DNS returned no addresses")
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if not parsed.is_global:
+            raise RegistryError(
+                f"origin DNS includes a non-public address: {address}"
+            )
+    return addresses
+
+
+def curl_fetch(url: str, host: str, address: str, destination: Path) -> None:
+    curl = shutil.which("curl")
+    if curl is None:
+        raise RegistryError("curl is required for live origin verification")
+    pinned = f"{host}:443:{address}"
+    if ":" in address:
+        pinned = f"{host}:443:[{address}]"
+    result = subprocess.run(
+        [
+            curl,
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--tlsv1.2",
+            "--max-redirs",
+            "0",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "20",
+            "--max-filesize",
+            str(MAX_MANIFEST_BYTES),
+            "--noproxy",
+            "*",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--resolve",
+            pinned,
+            "--output",
+            str(destination),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()
+        summary = detail[-1] if detail else f"curl exited {result.returncode}"
+        raise RegistryError(f"HTTPS fetch failed: {summary}")
+
+
+def verify_origin(
+    origin_value: str,
+    *,
+    previous_path: Path | None,
+) -> dict[str, Any]:
+    origin = normalize_origin(origin_value)
+    host = urlsplit(origin).hostname
+    assert host is not None
+    addresses = public_addresses(host)
+    failures: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="wywa-origin-") as temporary:
+        root = Path(temporary)
+        manifest_path = root / MANIFEST_NAME
+        signature_path = root / SIGNATURE_NAME
+        for address in addresses:
+            manifest_path.unlink(missing_ok=True)
+            signature_path.unlink(missing_ok=True)
+            try:
+                curl_fetch(
+                    f"{origin}.well-known/{MANIFEST_NAME}",
+                    host,
+                    address,
+                    manifest_path,
+                )
+                curl_fetch(
+                    f"{origin}.well-known/{SIGNATURE_NAME}",
+                    host,
+                    address,
+                    signature_path,
+                )
+                return verify_files(
+                    manifest_path,
+                    signature_path,
+                    expected_origin=origin,
+                    previous_path=previous_path,
+                    at=utc_now(),
+                    evidence="live-https-origin",
+                )
+            except RegistryError as error:
+                failures.append(f"{address}: {error}")
+        raise RegistryError(
+            "no resolved origin address returned one valid proof pair ("
+            + "; ".join(failures)
+            + ")"
+        )
+
+
+def derive_public_key(private_key: Path) -> str:
+    absolute = private_key.expanduser().absolute()
+    data = read_regular(absolute, "private key", 64 * 1024)
+    del data
+    metadata = absolute.stat()
+    if metadata.st_mode & 0o077:
+        raise RegistryError("private key must not be accessible by group or others")
+    ssh_keygen = shutil.which("ssh-keygen")
+    if ssh_keygen is None:
+        raise RegistryError("ssh-keygen is required")
+    result = subprocess.run(
+        [ssh_keygen, "-y", "-f", str(absolute)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RegistryError("ssh-keygen could not read the private key")
+    public_key = " ".join(result.stdout.strip().split()[:2])
+    return validate_public_key(public_key)
+
+
+def ensure_output_directory(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    if absolute == Path("/"):
+        raise RegistryError("refusing to use the filesystem root as output")
+    current = absolute
+    while True:
+        if current.exists():
+            if current.is_symlink():
+                raise RegistryError("output path must not contain a symbolic link")
+            if current == Path("/"):
+                break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    absolute.mkdir(mode=0o755, parents=True, exist_ok=True)
+    metadata = absolute.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise RegistryError("output must be a nonsymlink directory")
+    return absolute
+
+
+def issue_manifest(arguments: argparse.Namespace) -> dict[str, Any]:
+    origin = normalize_origin(arguments.origin)
+    issued_at = (
+        utc_now()
+        if arguments.issued_at is None
+        else parse_moment(arguments.issued_at, "--issued-at")
+    )
+    expires_at = issued_at + dt.timedelta(days=arguments.valid_days)
+    private_key = Path(arguments.key).expanduser().absolute()
+    output = ensure_output_directory(Path(arguments.output))
+    if private_key == output or output in private_key.parents:
+        raise RegistryError("private key must remain outside the public output")
+    public_key = derive_public_key(private_key)
+    manifest = {
+        "schema_version": 1,
+        "agent_id": arguments.agent_id,
+        "name": arguments.name,
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": arguments.runtime_name,
+            "version": arguments.runtime_version,
+        },
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": arguments.sequence,
+        "status": arguments.status,
+    }
+    validated = validate_manifest(
+        manifest,
+        expected_origin=origin,
+        at=issued_at,
+    )
+    manifest_bytes = (
+        json.dumps(
+            validated,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+    manifest_destination = output / MANIFEST_NAME
+    signature_destination = output / SIGNATURE_NAME
+    if not arguments.replace and (
+        manifest_destination.exists() or signature_destination.exists()
+    ):
+        raise RegistryError("proof already exists; use --replace for a new sequence")
+    ssh_keygen = shutil.which("ssh-keygen")
+    if ssh_keygen is None:
+        raise RegistryError("ssh-keygen is required")
+    with tempfile.TemporaryDirectory(
+        prefix=".wywa-proof-",
+        dir=output,
+    ) as temporary:
+        temporary_root = Path(temporary)
+        manifest_temporary = temporary_root / MANIFEST_NAME
+        manifest_temporary.write_bytes(manifest_bytes)
+        os.chmod(manifest_temporary, 0o644)
+        result = subprocess.run(
+            [
+                ssh_keygen,
+                "-Y",
+                "sign",
+                "-f",
+                str(private_key),
+                "-n",
+                NAMESPACE,
+                str(manifest_temporary),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RegistryError("ssh-keygen could not sign the manifest")
+        generated_signature = Path(f"{manifest_temporary}.sig")
+        read_regular(generated_signature, "generated signature", MAX_SIGNATURE_BYTES)
+        os.chmod(generated_signature, 0o644)
+        verify_signature(manifest_bytes, generated_signature, validated)
+        os.replace(manifest_temporary, manifest_destination)
+        os.replace(generated_signature, signature_destination)
+    return {
+        "schema_version": 1,
+        "manifest": str(manifest_destination),
+        "signature": str(signature_destination),
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "agent_id": validated["agent_id"],
+        "origin": validated["origin"],
+        "sequence": validated["sequence"],
+        "status": validated["status"],
+        "expires_at": validated["expires_at"],
+    }
+
+
+def parse_at(value: str | None) -> dt.datetime:
+    if value is None:
+        return utc_now()
+    return parse_moment(value, "--at")
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Issue detached SSH-signed agent manifests and verify them "
+            "without opening public registry input."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+
+    issue = subcommands.add_parser(
+        "issue",
+        help="write one signed manifest pair for an HTTPS origin",
+    )
+    issue.add_argument("--agent-id", required=True)
+    issue.add_argument("--name", required=True)
+    issue.add_argument("--origin", required=True)
+    issue.add_argument("--runtime-name", default="While You Were Away")
+    issue.add_argument("--runtime-version", required=True)
+    issue.add_argument("--sequence", type=int, required=True)
+    issue.add_argument("--status", choices=("active", "revoked"), default="active")
+    issue.add_argument("--valid-days", type=int, choices=range(1, 31), default=14)
+    issue.add_argument("--issued-at")
+    issue.add_argument("--key", required=True)
+    issue.add_argument("--output", required=True)
+    issue.add_argument("--replace", action="store_true")
+
+    verify_local = subcommands.add_parser(
+        "verify-files",
+        help="verify detached files; this does not prove live HTTPS control",
+    )
+    verify_local.add_argument("manifest")
+    verify_local.add_argument("signature")
+    verify_local.add_argument("--expected-origin", required=True)
+    verify_local.add_argument("--previous")
+    verify_local.add_argument("--at")
+
+    verify_live = subcommands.add_parser(
+        "verify-origin",
+        help="fetch and verify the fixed proof pair from a public HTTPS origin",
+    )
+    verify_live.add_argument("origin")
+    verify_live.add_argument("--previous")
+    return result
+
+
+def emit(record: dict[str, Any]) -> None:
+    print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    if arguments.command == "issue":
+        record = issue_manifest(arguments)
+        emit(record)
+        return 0
+    if arguments.command == "verify-files":
+        record = verify_files(
+            Path(arguments.manifest),
+            Path(arguments.signature),
+            expected_origin=arguments.expected_origin,
+            previous_path=Path(arguments.previous) if arguments.previous else None,
+            at=parse_at(arguments.at),
+            evidence="detached-files-only",
+        )
+        emit(record)
+        return 0 if record["eligible"] else 4
+    if arguments.command == "verify-origin":
+        record = verify_origin(
+            arguments.origin,
+            previous_path=Path(arguments.previous) if arguments.previous else None,
+        )
+        emit(record)
+        return 0 if record["eligible"] else 4
+    raise RegistryError("unknown command")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RegistryError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

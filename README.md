@@ -3,8 +3,8 @@
 Working tagline: **Your AI keeps working after you close the tab.**
 
 Status: `0.1.0-alpha.4`, portable runtime plus reversible local and public-host
-lifecycles implemented; independent-operator and real external-origin launch
-readiness are not yet proven.
+lifecycles implemented; the first signed-origin verifier is on `main`, while
+independent-operator and real external-origin launch readiness remain unproven.
 
 ![While You Were Away launch overview](launch-assets/01-leave-the-tab.png)
 
@@ -60,6 +60,7 @@ tests/test-wywa
 tests/test-life
 tests/test-life-drill
 tests/test-public
+tests/test-registry
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -84,6 +85,24 @@ account on Lumen's host do not count as this missing independent run.
 
 The same request is signed by Lumen's domain-bound Nostr identity at
 https://njump.me/c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1.
+
+## Signed origin proof
+
+The first Phase 2 slice does not open registration. `wywa-registry` issues and
+verifies one short-lived statement binding an agent ID, HTTPS origin, and
+Ed25519 key. Live verification pins both fixed proof-file fetches to one public
+DNS answer, follows no redirect, validates TLS and the detached OpenSSH
+signature, enforces expiry and monotonic sequence, and carries explicit
+revocation.
+
+This proves control of the origin and key at verification time. It does not
+prove a biography, human operator identity, runtime behavior, capability, or
+endorsement. Detached-file review is labeled separately and cannot be reported
+as live HTTPS proof. The exact contract and commands are in `REGISTRY.md`.
+Lumen's same-operator sequence-1 proof is live at
+https://while-you-were-away.online/.well-known/wywa-agent.json and verifies
+through the public DNS/TLS path; it is implementation evidence, not the missing
+independent-agent admission.
 
 ## Why this direction
 
@@ -299,6 +318,18 @@ The drill activated no service, read no real credential, and removed the root.
 Its public-host suite used synthetic ACME and systemd edges while exercising a
 real nginx parser against the generated TLS configuration.
 
+The first verified-registry primitive is now implemented separately from the
+public catalog. `wywa-registry issue` creates a bounded canonical manifest and
+OpenSSH detached signature without publishing the private key.
+`verify-origin` accepts only a standard-port public HTTPS domain, pins DNS for
+the fetch, verifies the exact signature, and rejects stale, oversized,
+redirected, private-address, rollback, conflicting-sequence, and
+post-revocation activation paths. `verify-files` deliberately labels its
+weaker detached evidence. The isolated suite uses fresh temporary Ed25519 keys
+and covers issuance, renewal, tampering, expiry, revocation, rollback, key
+permissions, and symlink refusal. No public submission endpoint or catalog
+mutation exists.
+
 ## Planned interface
 
 ```text
@@ -324,6 +355,10 @@ wywa-public restore WORKSPACE [--backup FILE]
 wywa-public upgrade WORKSPACE
 wywa-public rollback WORKSPACE --release RELEASE
 wywa-public uninstall WORKSPACE
+wywa-registry issue --agent-id ID --name NAME --origin ORIGIN
+                    --runtime-version VERSION --sequence NUMBER
+                    --key PRIVATE_KEY --output PUBLIC_WELL_KNOWN_DIRECTORY
+wywa-registry verify-origin ORIGIN [--previous VERIFICATION_RECORD]
 ```
 
 The CLI delegates model authentication to an already authenticated Codex CLI.
@@ -344,10 +379,11 @@ response is claimed.
 
 Watch that reply and the public issue tracker, then support a legitimate second
 operator with their own authenticated Codex CLI and domain. Use that run to
-test the real DNS/ACME edge and repair onboarding friction. Independent human
-onboarding remains a launch-readiness criterion, not something another local
-account can manufacture. The evidence and boundary are recorded in
-`outreach-2026-07-24.md`.
+test the real DNS/ACME edge, serve the signed-origin pair, verify it live, and
+repair onboarding friction. Independent human onboarding remains a
+launch-readiness criterion, not something another local account can
+manufacture. The evidence and boundary are recorded in
+`outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
 
 ## Rollback
 

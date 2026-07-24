@@ -46,6 +46,8 @@ release_root=$(find \
   fail "release omitted the local-life lifecycle CLI"
 [[ -x "$release_root/bin/wywa-public" ]] ||
   fail "release omitted the public-host lifecycle CLI"
+[[ -x "$release_root/bin/wywa-registry" ]] ||
+  fail "release omitted the signed-origin proof CLI"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
@@ -58,6 +60,8 @@ release_root=$(find \
   fail "release omitted the launch pack"
 [[ -f "$release_root/outreach-2026-07-24.md" ]] ||
   fail "release omitted the documented outreach evidence"
+[[ -f "$release_root/REGISTRY.md" ]] ||
+  fail "release omitted the registry proof contract"
 [[ -f "$release_root/launch-assets/01-leave-the-tab.png" ]] ||
   fail "release omitted the launch gallery"
 [[ -f "$release_root/launch-assets/thumbnail-240.png" ]] ||
@@ -82,6 +86,7 @@ shellcheck \
 "$release_root/bin/wywa" --help >/dev/null
 "$release_root/bin/wywa-life" --help >/dev/null
 "$release_root/bin/wywa-public" --help >/dev/null
+"$release_root/bin/wywa-registry" --help >/dev/null
 "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"

@@ -12,6 +12,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 PUBLISH = PROJECT / "bin" / "publish-platform"
+REGISTRY = PROJECT / "bin" / "wywa-registry"
 INSTANTS = (
     "2026-07-24T17:40:00Z",
     "2026-07-24T17:41:00Z",
@@ -26,9 +27,51 @@ def main() -> None:
         logs = root / "logs"
         runtime = root / "runtime"
         workspace = root / "workspace"
+        proof = root / "proof"
+        key = root / "identity" / "agent_ed25519"
         logs.mkdir()
         runtime.mkdir()
         workspace.mkdir()
+        key.parent.mkdir(mode=0o700)
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(key),
+            ],
+            check=True,
+        )
+        key.chmod(0o600)
+        subprocess.run(
+            [
+                str(REGISTRY),
+                "issue",
+                "--agent-id",
+                "lumen",
+                "--name",
+                "Lumen",
+                "--origin",
+                "https://while-you-were-away.online/",
+                "--runtime-version",
+                "0.1.0-alpha.4",
+                "--sequence",
+                "1",
+                "--issued-at",
+                "2026-07-24T17:39:00Z",
+                "--key",
+                str(key),
+                "--output",
+                str(proof),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
         subprocess.run(["git", "-C", str(workspace), "init", "-q"], check=True)
         (workspace / "README").write_text("public test workspace\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(workspace), "add", "README"], check=True)
@@ -73,6 +116,8 @@ def main() -> None:
                     str(runtime),
                     "--workspace-root",
                     str(workspace),
+                    "--agent-proof-dir",
+                    str(proof),
                     "--as-of",
                     instant,
                     "--phase",
@@ -126,6 +171,16 @@ def main() -> None:
             "wss://nos.lol",
             "wss://relay.primal.net",
         ]
+        registry_manifest = (
+            current / ".well-known" / "wywa-agent.json"
+        )
+        registry_signature = current / ".well-known" / "wywa-agent.sig"
+        assert registry_manifest.read_bytes() == (
+            proof / "wywa-agent.json"
+        ).read_bytes()
+        assert registry_signature.read_bytes() == (
+            proof / "wywa-agent.sig"
+        ).read_bytes()
 
         for directory in (
             site,
@@ -142,6 +197,8 @@ def main() -> None:
             current / "robots.txt",
             current / "assets" / "site.css",
             current / ".well-known" / "nostr.json",
+            current / ".well-known" / "wywa-agent.json",
+            current / ".well-known" / "wywa-agent.sig",
         ):
             assert file_path.is_file()
             assert not file_path.is_symlink()

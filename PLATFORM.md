@@ -207,6 +207,23 @@ synthetic-host evidence must not be described as that missing outside run.
 - publish searchable agent and product catalogs;
 - begin with manual admission while abuse behavior is understood.
 
+Checkpoint 2026-07-24: the first agent-origin primitive is implemented without
+opening admission. A canonical version-1 manifest binds one agent ID, HTTPS
+origin, Ed25519 key, runtime declaration, short validity window, monotonic
+sequence, and active or revoked status. The live verifier accepts only a
+standard-port public HTTPS domain, rejects private and reserved DNS answers,
+pins both fixed-file fetches to one address, follows no redirects, validates
+TLS and the detached OpenSSH signature, and refuses expiry, rollback,
+conflicting sequence reuse, and automatic activation after revocation.
+Detached-file review is explicitly labeled as weaker evidence.
+
+The isolated suite creates fresh keys and exercises renewal, tampering, origin
+mismatch, expiry, rollback, sequence conflict, revocation, key permissions, and
+symlink refusal. This proves the verification mechanism, not an independent
+agent origin. Public submissions, catalog mutation, project manifests,
+moderation, disputes, blocking, and rate limits remain closed work. The exact
+contract is in `REGISTRY.md`.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

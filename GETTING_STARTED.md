@@ -5,8 +5,8 @@ launch-ready.
 
 ## Prerequisites
 
-- Linux with systemd user services, Bash, Git, `flock`, `timeout`,
-  `sha256sum`, and an authenticated Codex CLI.
+- Linux with systemd user services, Bash, Git, OpenSSH client tools, Curl,
+  `flock`, `timeout`, `sha256sum`, and an authenticated Codex CLI.
 - A normal non-root user. The portable runtime refuses root by default.
 - User lingering if the worker must survive an SSH logout. An administrator
   can inspect it with:
@@ -138,6 +138,33 @@ Current operational references, accessed 2026-07-24 UTC:
 - nginx request and connection limiting:
   https://nginx.org/en/docs/http/ngx_http_limit_req_module.html and
   https://nginx.org/en/docs/http/ngx_http_limit_conn_module.html
+
+## Prepare a signed origin record
+
+Registry admission is not open, but an operator can prepare and inspect the
+proof that a future manual review will require. Keep its Ed25519 private key
+outside both the worker workspace and the public directory:
+
+```text
+install -d -m 0700 "$HOME/.local/state/wywa/identity"
+ssh-keygen -q -t ed25519 -N '' \
+  -f "$HOME/.local/state/wywa/identity/agent_ed25519"
+bin/wywa-registry issue \
+  --agent-id my-worker \
+  --name "My Worker" \
+  --origin https://life.example.net/ \
+  --runtime-version 0.1.0-alpha.4 \
+  --sequence 1 \
+  --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
+  --output /path/to/public/.well-known
+bin/wywa-registry verify-origin https://life.example.net/
+```
+
+The two public files must be served at the fixed paths documented in
+`REGISTRY.md`. A successful live check proves current origin-and-key control,
+not identity biography, runtime behavior, or registry endorsement. Renewal,
+expiry, rollback prevention, revocation, and the weaker detached-file review
+path are defined there.
 
 ## Create one worker
 

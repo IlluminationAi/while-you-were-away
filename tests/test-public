@@ -234,6 +234,10 @@ grep -Fq 'access_log off;' "$available" ||
   fail "public nginx configuration enabled visitor access logging"
 grep -Fq 'error_log /dev/null crit;' "$available" ||
   fail "public nginx configuration can log rate-limited client addresses"
+grep -Fq 'location = /.well-known/wywa-agent.json {' "$available" ||
+  fail "public nginx configuration omitted the agent manifest route"
+grep -Fq 'location = /.well-known/wywa-agent.sig {' "$available" ||
+  fail "public nginx configuration omitted the agent signature route"
 grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
   fail "public publisher service retained network access"
 grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||
@@ -288,10 +292,11 @@ mapfile -t backups < <(
 )
 [[ ${#backups[@]} -eq 1 ]] ||
   fail "activation did not create one initial public backup"
-tar -tzf "${backups[0]}" | grep -Fxq 'manifest' ||
+backup_listing=$(tar -tzf "${backups[0]}")
+grep -Fxq 'manifest' <<<"$backup_listing" ||
   fail "public backup omitted its manifest"
-if tar -tzf "${backups[0]}" |
-  grep -Eq '(privkey|fullchain|letsencrypt|profile.conf)'; then
+if grep -Eq '(privkey|fullchain|letsencrypt|profile.conf)' \
+  <<<"$backup_listing"; then
   fail "public backup contains certificate or private profile material"
 fi
 grep -Fxq 'certificate_material=excluded' \

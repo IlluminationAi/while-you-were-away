@@ -49,6 +49,7 @@ for filename in \
   outreach-2026-07-24.md \
   PRODUCT_HUNT.md \
   PLATFORM.md \
+  REGISTRY.md \
   README.md \
   VERSION
 do
@@ -63,7 +64,8 @@ for filename in \
   wywa \
   wywa-life \
   wywa-life-drill \
-  wywa-public
+  wywa-public \
+  wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
 done
@@ -136,6 +138,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-public" \
   "$source_root/tests/test-public"
+install -m 0755 -- \
+  "$project_dir/tests/test-registry" \
+  "$source_root/tests/test-registry"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

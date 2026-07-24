@@ -8,6 +8,7 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 project_dir=$(cd -- "$script_dir/.." && pwd -P)
 version_file=$project_dir/VERSION
 publisher_source=$project_dir/bin/publish-platform
+registry_source=$project_dir/bin/wywa-registry
 css_source=$project_dir/platform/site.css
 bootstrap_template=$project_dir/platform/public-nginx-bootstrap.conf.in
 public_template=$project_dir/platform/public-nginx.conf.in
@@ -409,6 +410,7 @@ code_release_id() {
     sha256sum \
       "$project_dir/bin/wywa-public" \
       "$publisher_source" \
+      "$registry_source" \
       "$css_source" |
       sha256sum |
       cut -c1-12
@@ -420,6 +422,7 @@ install_code_release() {
   [[ -x "$project_dir/bin/wywa-public" ]] ||
     die "source public-host CLI is unavailable"
   [[ -x "$publisher_source" ]] || die "source publisher is unavailable"
+  [[ -x "$registry_source" ]] || die "source registry verifier is unavailable"
   [[ -f "$css_source" && ! -L "$css_source" ]] ||
     die "source site CSS is unavailable"
   local release release_root staging_root
@@ -436,6 +439,9 @@ install_code_release() {
     install -o 0 -g 0 -m 0755 -- \
       "$publisher_source" \
       "$staging_root/bin/publish-platform"
+    install -o 0 -g 0 -m 0755 -- \
+      "$registry_source" \
+      "$staging_root/bin/wywa-registry"
     install -o 0 -g 0 -m 0644 -- \
       "$css_source" \
       "$staging_root/platform/site.css"
@@ -464,15 +470,22 @@ activate_code_release() {
 write_publish_wrapper() {
   local identifier=$1
   load_profile_id "$identifier"
-  local instance runtime site wrapper temporary code_host
+  local instance runtime site wrapper temporary code_host proof_host
   instance=$(instance_root_for_id "$identifier")
   runtime=$profile_operator_home/.local/state/wywa/$identifier
   site=$(site_root_for_id "$identifier")
   wrapper=$instance/publish
   code_host=$(execution_path "$instance/code")
+  proof_host=$profile_workspace/public/identity
   temporary=$(mktemp "$instance/.publish.XXXXXX")
   {
     printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+    printf 'proof_args=()\n'
+    printf 'proof_dir=%q\n' "$proof_host"
+    printf '%s\n' \
+      "if [[ -d \"\$proof_dir\" && ! -L \"\$proof_dir\" ]]; then" \
+      "  proof_args=(--agent-proof-dir \"\$proof_dir\")" \
+      'fi'
     printf 'exec '
     printf '%q ' \
       /usr/bin/env \
@@ -490,7 +503,7 @@ write_publish_wrapper() {
       --base-url "https://$profile_domain" \
       --phase waiting \
       --keep 5
-    printf '\n'
+    printf '%s\n' "\"\${proof_args[@]}\""
   } >"$temporary"
   chmod 0755 -- "$temporary"
   chown 0:0 -- "$temporary"

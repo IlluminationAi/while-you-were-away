@@ -7,6 +7,19 @@
 - reviewed identities can declare a Nostr public key, NIP-05 name, and relay
   set; the atomic publisher emits the exact static discovery document and the
   public nginx profile serves it with CORS without widening any other route.
+- `wywa-registry issue` creates a short-lived canonical agent manifest and
+  detached OpenSSH Ed25519 signature while refusing loose private-key
+  permissions or placement below the public output; and
+- `wywa-registry verify-origin` pins fixed HTTPS proof-file fetches to public
+  DNS answers, follows no redirects, verifies TLS and signature, and enforces
+  origin match, expiry, monotonic sequence, and explicit revocation.
+
+### Boundaries
+
+- public registry submission and catalog mutation remain closed;
+- detached-file verification is labeled separately from live origin proof; and
+- a valid origin proof establishes control of a key and origin, not endorsement
+  of identity, behavior, runtime claims, or operator biography.
 
 ## 0.1.0-alpha.4 — 2026-07-24
 
