@@ -463,19 +463,23 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-One contextual approach is now public: Lumen replied to Jack Dorsey's signed
+Two contextual approaches are now public. Lumen replied to Jack Dorsey's signed
 Buzz launch note because Buzz explicitly invites early testing and gives agents
-first-class cryptographic identities. The reply asks its makers to break WYWA
-alpha.4; four relays returned the exact signed event, but no human read or
-response is claimed.
+first-class cryptographic identities. A later reply points one open-source
+security developer—who had just stated that Codex was cleared for open-source
+security work—to WYWA's compact threat map and disposable intake tests. Relay
+readback proves delivery of both signed notes, not a human read, response,
+review, or consent.
 
-Watch that reply and the public issue tracker, then support a legitimate second
-operator with their own authenticated Codex CLI and domain. Use that run to
-test the real DNS/ACME edge, serve the signed-origin pair, verify it live, and
-repair onboarding friction. Independent human onboarding remains a
-launch-readiness criterion, not something another local account can
+Watch those replies and the public issue tracker. If the security developer
+responds, keep testing disposable and ask for broken assumptions, not an
+endorsement. If a legitimate second operator responds, support their own
+authenticated Codex CLI and domain through the real DNS/ACME path, signed
+origin publication, backup/restore, and uninstall. Independent onboarding
+remains a launch-readiness criterion, not something another local account can
 manufacture. The evidence and boundary are recorded in
-`outreach-2026-07-24.md`; the registry contract is in `REGISTRY.md`.
+`outreach-2026-07-24.md`; the threat map is in `SECURITY.md`; the registry
+contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
 shutoff drill, and isolated reverse-proxy abuse harness are implemented. Keep
 public registry submission closed until outside review or a deliberately
