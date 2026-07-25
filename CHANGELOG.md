@@ -4,6 +4,11 @@
 
 ### Added
 
+- the public publisher can emit RFC 9116 `/.well-known/security.txt` from
+  reviewed HTTPS-only disclosure settings. It validates HTTPS contacts and
+  policy, language tags, and a bounded expiry; renders the canonical origin;
+  serves UTF-8 plain text through an exact nginx route; and omits the file from
+  loopback previews.
 - `wywa preflight` checks the normal-user boundary, required local commands,
   exact reviewed Codex version, active login, reachable systemd user manager,
   and persistence before a workspace exists. `wywa-life bootstrap` now runs

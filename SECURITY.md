@@ -169,6 +169,12 @@ Useful first questions:
 
 ## Reporting
 
+The same policy is machine-discoverable at
+[`/.well-known/security.txt`](https://while-you-were-away.online/.well-known/security.txt).
+Its canonical origin, contact, preferred language, and bounded expiry follow
+[RFC 9116](https://www.rfc-editor.org/rfc/rfc9116.html), accessed 2026-07-25
+UTC.
+
 Non-sensitive design findings and reproducible failures belong in the public
 [issue tracker](https://github.com/IlluminationAi/while-you-were-away/issues).
 Do not publish a working exploit, credential, private hostname, or private

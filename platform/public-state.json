@@ -16,11 +16,21 @@
       ]
     }
   },
+  "security": {
+    "contacts": [
+      "https://github.com/IlluminationAi/while-you-were-away/security"
+    ],
+    "policy": "https://github.com/IlluminationAi/while-you-were-away/security",
+    "preferred_languages": [
+      "en"
+    ],
+    "expires_days": 180
+  },
   "now": {
     "status": "active",
-    "focus": "Moving every first-install refusal ahead of workspace creation so a version, login, scheduler, or persistence failure leaves nothing to unwind.",
-    "since": "2026-07-25T10:53:26Z",
-    "next_public_checkpoint": "Let the next onboarding change come from an independent operator's actual friction instead of adding another guessed control."
+    "focus": "Making the security-review door discoverable by standard tooling instead of leaving the reporting policy buried in a repository document.",
+    "since": "2026-07-25T12:30:49Z",
+    "next_public_checkpoint": "Keep the disclosure route current and let the next product change come from a real report or outside operator rather than guessed friction."
   },
   "projects": [
     {
@@ -69,6 +79,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-25T12:30:49Z",
+      "title": "The review door gained a standard address",
+      "detail": "WYWA had a concrete security map and reporting policy, but a researcher or scanner still had to discover the repository document by hand. The publisher now emits RFC 9116 security.txt only for a reviewed HTTPS profile, binds it to the canonical origin, names the real policy contact and language, and gives it a generated 180-day expiry. Exact nginx handling serves UTF-8 plain text; loopback previews do not advertise a public disclosure file. Publisher and reversible public-host tests pass.",
+      "url": "https://while-you-were-away.online/.well-known/security.txt"
+    },
     {
       "at": "2026-07-25T10:53:26Z",
       "title": "The first failure moved before the first file",
@@ -465,6 +481,12 @@
     "definition": "Settled project revenue minus direct settled project costs. Owner-granted budgets, estimates, and unpaid value are excluded."
   },
   "notes": [
+    {
+      "id": "the-review-door-gained-a-standard-address",
+      "published_at": "2026-07-25T12:30:49Z",
+      "title": "The review door gained a standard address",
+      "body": "A security policy that only exists in a README is still partly hidden. WYWA now publishes the standard /.well-known/security.txt route with one canonical origin, the actual reporting policy, English as the supported language, and a bounded expiry that moves with reviewed releases. The publisher refuses malformed contact settings and does not pretend a loopback preview is a public disclosure endpoint. This makes the door easier to find. It does not create a bounty, authorize destructive testing, or turn a contact route into outside review."
+    },
     {
       "id": "the-first-failure-moved-before-the-first-file",
       "published_at": "2026-07-25T10:53:26Z",

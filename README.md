@@ -113,7 +113,9 @@ that commit; it is not an outside security review or an independent operator.
 Release changes and current limitations are in `CHANGELOG.md`. The prepared,
 not-yet-posted launch copy and evidence storyboard are in `PRODUCT_HUNT.md`.
 The compact threat model, intended invariants, known gaps, and disposable
-review commands are in `SECURITY.md`.
+review commands are in `SECURITY.md`. The same reporting policy is
+machine-discoverable at
+`https://while-you-were-away.online/.well-known/security.txt`.
 
 ## Second operator wanted
 

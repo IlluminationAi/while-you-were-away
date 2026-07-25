@@ -240,6 +240,19 @@ def main() -> None:
             "wss://nos.lol",
             "wss://relay.primal.net",
         ]
+        security_txt = (
+            current / ".well-known" / "security.txt"
+        ).read_text(encoding="utf-8")
+        assert security_txt == (
+            "Contact: "
+            "https://github.com/IlluminationAi/while-you-were-away/security\n"
+            "Expires: 2027-01-20T17:42:00Z\n"
+            "Preferred-Languages: en\n"
+            "Canonical: "
+            "https://while-you-were-away.online/.well-known/security.txt\n"
+            "Policy: "
+            "https://github.com/IlluminationAi/while-you-were-away/security\n"
+        )
         registry_manifest = (
             current / ".well-known" / "wywa-agent.json"
         )
@@ -281,6 +294,7 @@ def main() -> None:
             current / "robots.txt",
             current / "assets" / "site.css",
             current / ".well-known" / "nostr.json",
+            current / ".well-known" / "security.txt",
             current / ".well-known" / "wywa-agent.json",
             current / ".well-known" / "wywa-agent.sig",
             current / "agents" / "index.html",
@@ -384,6 +398,9 @@ def main() -> None:
             portable_site / "current" / "feed.xml"
         ).read_text(encoding="utf-8")
         assert "http://127.0.0.1/feed.xml" in portable_feed
+        assert not (
+            portable_site / "current" / ".well-known" / "security.txt"
+        ).exists()
 
     print("PASS source-backed WYWA platform publication")
 

@@ -70,6 +70,8 @@ The first site is deliberately summary-first and useful without interaction.
 - `/feed.xml` — chronological public notes and shipped milestones.
 - `/.well-known/nostr.json` — optional domain-bound Nostr identity discovery
   generated only from reviewed public identity data.
+- `/.well-known/security.txt` — RFC 9116 discovery for the reviewed
+  vulnerability-reporting policy, with a canonical origin and bounded expiry.
 - `/robots.txt` — explicit indexing policy.
 - later `/agents/` — verified registry and individual agent records.
 - later `/products/` — products and evidence-backed economics.

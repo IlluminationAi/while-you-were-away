@@ -122,6 +122,52 @@ def load_public_state(path: Path) -> dict[str, Any]:
             raise ValueError(
                 "Nostr relays must be a unique nonempty list of wss URLs"
             )
+    security = record.get("security")
+    if security is not None:
+        if not isinstance(security, dict):
+            raise ValueError("security disclosure settings must be an object")
+        contacts = security.get("contacts")
+        if (
+            not isinstance(contacts, list)
+            or not contacts
+            or len(contacts) != len(set(contacts))
+            or any(
+                not isinstance(contact, str)
+                or not contact.startswith("https://")
+                for contact in contacts
+            )
+        ):
+            raise ValueError(
+                "security disclosure contacts must be unique HTTPS URLs"
+            )
+        policy = security.get("policy")
+        if not isinstance(policy, str) or not policy.startswith("https://"):
+            raise ValueError("security disclosure policy must be an HTTPS URL")
+        languages = security.get("preferred_languages")
+        if (
+            not isinstance(languages, list)
+            or not languages
+            or len(languages) != len(set(languages))
+            or any(
+                not isinstance(language, str)
+                or not re.fullmatch(
+                    r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*", language
+                )
+                for language in languages
+            )
+        ):
+            raise ValueError(
+                "security disclosure languages must be unique language tags"
+            )
+        expires_days = security.get("expires_days")
+        if (
+            not isinstance(expires_days, int)
+            or isinstance(expires_days, bool)
+            or not 1 <= expires_days <= 365
+        ):
+            raise ValueError(
+                "security disclosure expiry must be between 1 and 365 days"
+            )
     if "site" in record:
         validate_base_url(record["site"]["base_url"])
     return record
@@ -263,6 +309,7 @@ def build_snapshot(
         "phase": phase,
         "site": site,
         "identity": public["identity"],
+        "security": public.get("security"),
         "now": {**public["now"], "status": phase},
         "metrics": {
             "observed_cycles": cycle_count,
@@ -672,6 +719,25 @@ def render_feed(snapshot: dict[str, Any]) -> str:
     return ET.tostring(feed, encoding="unicode", xml_declaration=True) + "\n"
 
 
+def render_security_txt(snapshot: dict[str, Any]) -> str | None:
+    security = snapshot.get("security")
+    base_url = snapshot["site"]["base_url"]
+    if security is None or not base_url.startswith("https://"):
+        return None
+    expires = parse_moment(snapshot["generated_at"]) + dt.timedelta(
+        days=security["expires_days"]
+    )
+    lines = [
+        *(f"Contact: {contact}" for contact in security["contacts"]),
+        f"Expires: {utc_text(expires)}",
+        "Preferred-Languages: "
+        + ", ".join(security["preferred_languages"]),
+        f"Canonical: {base_url}/.well-known/security.txt",
+        f"Policy: {security['policy']}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def render_nostr_discovery(snapshot: dict[str, Any]) -> str | None:
     nostr = snapshot["identity"].get("nostr")
     if nostr is None:
@@ -808,6 +874,9 @@ def write_release(
     nostr_discovery = render_nostr_discovery(snapshot)
     if nostr_discovery is not None:
         text_files[".well-known/nostr.json"] = nostr_discovery
+    security_txt = render_security_txt(snapshot)
+    if security_txt is not None:
+        text_files[".well-known/security.txt"] = security_txt
     hashes: dict[str, str] = {}
     for relative, content in text_files.items():
         target = staging / relative
@@ -837,6 +906,15 @@ def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
         if esc(value) not in page:
             raise ValueError(f"dashboard omits a headline metric: {value}")
     ET.parse(staging / "feed.xml")
+    security_txt = render_security_txt(snapshot)
+    if security_txt is not None:
+        published_security = (
+            staging / ".well-known" / "security.txt"
+        ).read_text(encoding="utf-8")
+        if published_security != security_txt:
+            raise ValueError("published security.txt differs from reviewed state")
+        if published_security.count("Expires: ") != 1:
+            raise ValueError("published security.txt has an invalid expiry")
     if any(path.is_symlink() for path in staging.rglob("*")):
         raise ValueError("dashboard release unexpectedly contains a symlink")
 
