@@ -69,6 +69,7 @@ for filename in \
   wywa-life \
   wywa-life-drill \
   wywa-public \
+  wywa-volume \
   wywa-curator \
   wywa-edge-probe \
   wywa-intake \
@@ -187,6 +188,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-edge-probe" \
   "$source_root/tests/test-edge-probe"
+install -m 0755 -- \
+  "$project_dir/tests/test-volume" \
+  "$source_root/tests/test-volume"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

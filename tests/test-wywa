@@ -265,6 +265,10 @@ grep -Fqx \
   'checkpoint acceptance: at most 134217728 logical bytes and 4096 workspace paths' \
   "$test_root/dry-run-output" ||
   fail "dry run omitted the aggregate checkpoint budget"
+grep -Fqx \
+  'live workspace storage: unbounded by WYWA; checkpoint gate is post-turn' \
+  "$test_root/dry-run-output" ||
+  fail "dry run hid the missing live workspace storage bound"
 grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
   fail "dry run omitted the runtime bound"
 
@@ -359,7 +363,7 @@ grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
   fail "successful receipt omitted the host checkpoint"
 receipt_commit=$(git -C "$workspace" rev-parse HEAD)
 receipt_tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
-grep -Fq "receipt=8" "$runtime_dir/last-run" ||
+grep -Fq "receipt=9" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its schema version"
 grep -Fq "local_network=disabled web_search=live" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its split network capabilities"
@@ -379,6 +383,10 @@ grep -Eq \
   'checkpoint_bytes_max=134217728 checkpoint_paths_max=4096 input_bytes=[0-9]+ input_paths=[0-9]+ tree_bytes=[0-9]+ tree_entries=[0-9]+' \
   "$runtime_dir/last-run" ||
   fail "successful receipt omitted its aggregate checkpoint evidence"
+grep -Fq \
+  'workspace_storage=unbounded storage_bytes_max=unverified storage_inodes_max=unverified' \
+  "$runtime_dir/last-run" ||
+  fail "successful receipt invented a live workspace storage bound"
 grep -Fq "commit=$receipt_commit" "$runtime_dir/last-run" ||
   fail "successful receipt omitted the exact commit"
 grep -Fq "tree=$receipt_tree" "$runtime_dir/last-run" ||
@@ -396,56 +404,72 @@ grep -Fq "receipt: verified commit=${receipt_commit:0:12}" \
   "$test_root/verify-receipt-output" ||
   fail "verify-receipt did not verify the successful checkpoint"
 
-cp -- "$runtime_dir/last-run" "$test_root/version-8-capabilities.saved"
+cp -- "$runtime_dir/last-run" "$test_root/version-9-capabilities.saved"
 sed \
   's/local_network=disabled/local_network=enabled/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected local network capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed local network capability"
 sed \
   's/web_search=live/web_search=disabled/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected hosted web search capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed hosted web search capability"
 sed \
   's/apps=disabled/apps=enabled/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected app capability' "$test_root/stderr" ||
   fail "verify-receipt accepted enabled apps"
 sed \
   's/approval=never/approval=on-request/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected approval posture' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed approval posture"
 sed \
   's/events=wywa-v1/events=unreviewed/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected event-audit policy' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed event-audit policy"
 sed \
   's/child_file_bytes_max=16777216/child_file_bytes_max=33554432/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected child file ceiling' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed child file ceiling"
 sed \
   's/checkpoint_bytes_max=134217728/checkpoint_bytes_max=268435456/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected checkpoint byte budget' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed checkpoint byte budget"
 sed \
   's/tree_bytes=[0-9]*/tree_bytes=0/' \
-  "$test_root/version-8-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'checkpoint tree bytes do not match' "$test_root/stderr" ||
   fail "verify-receipt accepted changed checkpoint tree usage"
-mv -- "$test_root/version-8-capabilities.saved" "$runtime_dir/last-run"
+sed \
+  's/workspace_storage=unbounded/workspace_storage=filesystem/' \
+  "$test_root/version-9-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'malformed filesystem bytes' "$test_root/stderr" ||
+  fail "verify-receipt accepted an invented live storage bound"
+mv -- "$test_root/version-9-capabilities.saved" "$runtime_dir/last-run"
+
+cp -- "$runtime_dir/last-run" "$test_root/version-9-receipt.saved"
+sed \
+  -e 's/receipt=9 /receipt=8 /' \
+  -e 's/ workspace_storage=[^ ]* storage_bytes_max=[^ ]* storage_inodes_max=[^ ]*//' \
+  "$test_root/version-9-receipt.saved" >"$runtime_dir/last-run"
+"$wywa" verify-receipt "$workspace" >"$test_root/version-8-receipt-output"
+grep -Fq 'workspace_storage=unrecorded storage_bytes_max=unrecorded' \
+  "$test_root/version-8-receipt-output" ||
+  fail "verify-receipt invented a storage bound for a version-8 receipt"
 
 cp -- "$runtime_dir/last-run" "$test_root/version-8-receipt.saved"
 sed \
@@ -507,7 +531,7 @@ sed \
 grep -Fq 'permissions=legacy-workspace-write' \
   "$test_root/legacy-receipt-output" ||
   fail "verify-receipt did not preserve version-2 compatibility"
-mv -- "$test_root/version-8-receipt.saved" "$runtime_dir/last-run"
+mv -- "$test_root/version-9-receipt.saved" "$runtime_dir/last-run"
 
 cp -- "$runtime_dir/last-message.txt" "$test_root/last-message.saved"
 printf '%s\n' "tampered result" >"$runtime_dir/last-message.txt"

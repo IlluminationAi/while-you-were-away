@@ -2,8 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- `wywa-volume` gives a root administrator an optional fixed-size,
+  preallocated ext4 workspace with a fixed inode count and a persistent
+  systemd mount. The default 160 MiB image reserves its host bytes before the
+  worker starts, uses `nodev,nosuid`, survives deactivate/reactivate without
+  deleting data, and leaves image removal as a separate operator decision.
+- version-9 receipts distinguish an exact workspace mount with finite block
+  and inode capacity from the ordinary unbounded-by-WYWA directory. Receipt
+  verification rechecks a recorded filesystem ceiling instead of inferring a
+  quota from the post-turn checkpoint gate.
+
 ### Evidence
 
+- a real root-installed 160 MiB volume ran one non-root fake-Codex WYWA cycle,
+  emitted and reverified a version-9 bounded-storage receipt, refused a
+  200 MiB write with `ENOSPC`, then preserved the exact checkpoint across
+  systemd deactivate/reactivate. The disposable mount, loop device, unit,
+  image, and runtime were removed afterward.
 - the tagged alpha.6 `wywa-edge-probe` passed from Hugging Face CPU Basic job
   `6a6469e77ef3c08464968294` during a separately bounded 110-second public
   window. Applications stayed disabled, withdrawal remained available, static

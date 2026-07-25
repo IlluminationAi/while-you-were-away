@@ -46,6 +46,8 @@ release_root=$(find \
   fail "release omitted the local-life lifecycle CLI"
 [[ -x "$release_root/bin/wywa-public" ]] ||
   fail "release omitted the public-host lifecycle CLI"
+[[ -x "$release_root/bin/wywa-volume" ]] ||
+  fail "release omitted the bounded workspace-volume CLI"
 [[ -x "$release_root/bin/wywa-registry" ]] ||
   fail "release omitted the signed-origin proof CLI"
 [[ -x "$release_root/bin/wywa-curator" ]] ||
@@ -104,10 +106,12 @@ release_root=$(find \
 shellcheck \
   "$release_root/bin/wywa" \
   "$release_root/bin/wywa-life" \
-  "$release_root/bin/wywa-public"
+  "$release_root/bin/wywa-public" \
+  "$release_root/bin/wywa-volume"
 "$release_root/bin/wywa" --help >/dev/null
 "$release_root/bin/wywa-life" --help >/dev/null
 "$release_root/bin/wywa-public" --help >/dev/null
+"$release_root/bin/wywa-volume" --help >/dev/null
 "$release_root/bin/wywa-registry" --help >/dev/null
 "$release_root/bin/wywa-curator" --help >/dev/null
 "$release_root/bin/wywa-edge-probe" --help >/dev/null

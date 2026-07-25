@@ -96,6 +96,29 @@ workspace_id() {
   printf '%s' "$1" | sha256sum | cut -c1-16
 }
 
+detect_workspace_storage() {
+  local workspace=$1
+  local mount_target block_count block_size inode_count
+  workspace_storage=unbounded
+  storage_bytes_max=unverified
+  storage_inodes_max=unverified
+  command -v findmnt >/dev/null 2>&1 || return 0
+  mount_target=$(
+    findmnt -n -M "$workspace" -o TARGET 2>/dev/null || true
+  )
+  [[ "$mount_target" == "$workspace" ]] || return 0
+  read -r block_count block_size inode_count < <(
+    stat -f -c '%b %S %c' -- "$workspace"
+  )
+  [[ "$block_count" =~ ^[1-9][0-9]*$ &&
+     "$block_size" =~ ^[1-9][0-9]*$ &&
+     "$inode_count" =~ ^[1-9][0-9]*$ ]] ||
+    return 0
+  workspace_storage=filesystem
+  storage_bytes_max=$((block_count * block_size))
+  storage_inodes_max=$inode_count
+}
+
 runtime_dir_for() {
   local workspace=$1
   printf '%s/%s\n' "$(state_root)" "$(workspace_id "$workspace")"
@@ -693,6 +716,7 @@ cmd_run() {
   local checkpoint_tree_bytes=unverified checkpoint_tree_entries=unverified
   local event_audit='' event_counts=unverified audit_status=0
   local output_size output_bound_failure=0
+  local workspace_storage storage_bytes_max storage_inodes_max
   local -a clean_env permission_args capability_args command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
@@ -701,6 +725,7 @@ cmd_run() {
   last_message=$runtime_dir/last-message.txt
   last_run=$runtime_dir/last-run
   prompt=$(<"$workspace/WAKE.md")
+  detect_workspace_storage "$workspace"
 
   safe_environment clean_env
   permission_args=(
@@ -768,6 +793,14 @@ cmd_run() {
     printf 'checkpoint acceptance: at most %s logical bytes and %s workspace paths\n' \
       "$max_checkpoint_bytes" \
       "$max_checkpoint_paths"
+    if [[ "$workspace_storage" == filesystem ]]; then
+      printf 'live workspace storage: filesystem ceiling %s bytes and %s inodes\n' \
+        "$storage_bytes_max" \
+        "$storage_inodes_max"
+    else
+      printf '%s\n' \
+        "live workspace storage: unbounded by WYWA; checkpoint gate is post-turn"
+    fi
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -808,7 +841,7 @@ cmd_run() {
     diagnostics_sha256=$(
       sha256sum -- "$diagnostics_log" | cut -d ' ' -f 1
     )
-    printf '%s receipt=8 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
+    printf '%s receipt=9 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s workspace_storage=%s storage_bytes_max=%s storage_inodes_max=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$permission_profile" \
@@ -823,6 +856,9 @@ cmd_run() {
       "$checkpoint_input_paths" \
       "$checkpoint_tree_bytes" \
       "$checkpoint_tree_entries" \
+      "$workspace_storage" \
+      "$storage_bytes_max" \
+      "$storage_inodes_max" \
       "$checkpoint_result" \
       "$checkpoint_commit" \
       "$checkpoint_tree" \
@@ -983,6 +1019,7 @@ cmd_verify_receipt() {
   local diagnostics_bytes_max='' message_bytes_max=''
   local checkpoint_bytes_max='' checkpoint_paths_max=''
   local input_bytes='' input_paths='' tree_bytes='' tree_entries=''
+  local workspace_storage='' storage_bytes_max='' storage_inodes_max=''
   local commit='' tree='' log_sha256='' diagnostics_sha256=''
   local message_sha256='' token event_audit='' actual_event_counts=''
   local actual_commit actual_tree actual_log_sha256 actual_diagnostics_sha256
@@ -1038,6 +1075,15 @@ cmd_verify_receipt() {
       input_paths=*) input_paths=${token#input_paths=} ;;
       tree_bytes=*) tree_bytes=${token#tree_bytes=} ;;
       tree_entries=*) tree_entries=${token#tree_entries=} ;;
+      workspace_storage=*)
+        workspace_storage=${token#workspace_storage=}
+        ;;
+      storage_bytes_max=*)
+        storage_bytes_max=${token#storage_bytes_max=}
+        ;;
+      storage_inodes_max=*)
+        storage_inodes_max=${token#storage_inodes_max=}
+        ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
@@ -1056,7 +1102,8 @@ cmd_verify_receipt() {
      "$receipt_version" == 5 ||
      "$receipt_version" == 6 ||
      "$receipt_version" == 7 ||
-     "$receipt_version" == 8 ]] ||
+     "$receipt_version" == 8 ||
+     "$receipt_version" == 9 ]] ||
     die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
@@ -1079,7 +1126,8 @@ cmd_verify_receipt() {
   if [[ "$receipt_version" == 5 ||
         "$receipt_version" == 6 ||
         "$receipt_version" == 7 ||
-        "$receipt_version" == 8 ]]; then
+        "$receipt_version" == 8 ||
+        "$receipt_version" == 9 ]]; then
     [[ "$local_network" == disabled ]] ||
       die "receipt records an unexpected local network capability"
     [[ "$web_search" == live ]] ||
@@ -1101,7 +1149,8 @@ cmd_verify_receipt() {
   fi
   if [[ "$receipt_version" == 6 ||
         "$receipt_version" == 7 ||
-        "$receipt_version" == 8 ]]; then
+        "$receipt_version" == 8 ||
+        "$receipt_version" == 9 ]]; then
     [[ "$events" == wywa-v1 ]] ||
       die "receipt records an unexpected event-audit policy"
     [[ "$event_counts" =~ ^agent_message:[0-9]+,reasoning:[0-9]+,command_execution:[0-9]+,file_change:[0-9]+,web_search:[0-9]+,todo_list:[0-9]+,plan:[0-9]+,image_view:[0-9]+,context_compaction:[0-9]+$ ]] ||
@@ -1109,7 +1158,9 @@ cmd_verify_receipt() {
     [[ "$diagnostics_sha256" =~ ^[0-9a-f]{64}$ ]] ||
       die "last-run receipt has an invalid diagnostics digest"
   fi
-  if [[ "$receipt_version" == 7 || "$receipt_version" == 8 ]]; then
+  if [[ "$receipt_version" == 7 ||
+        "$receipt_version" == 8 ||
+        "$receipt_version" == 9 ]]; then
     [[ "$child_file_bytes_max" == "$max_child_file_bytes" ]] ||
       die "receipt records an unexpected child file ceiling"
     [[ "$event_bytes_max" == "$max_event_log_bytes" ]] ||
@@ -1119,7 +1170,7 @@ cmd_verify_receipt() {
     [[ "$message_bytes_max" == "$max_final_message_bytes" ]] ||
       die "receipt records an unexpected final-message ceiling"
   fi
-  if [[ "$receipt_version" == 8 ]]; then
+  if [[ "$receipt_version" == 8 || "$receipt_version" == 9 ]]; then
     [[ "$checkpoint_bytes_max" == "$max_checkpoint_bytes" ]] ||
       die "receipt records an unexpected checkpoint byte budget"
     [[ "$checkpoint_paths_max" == "$max_checkpoint_paths" ]] ||
@@ -1140,6 +1191,38 @@ cmd_verify_receipt() {
       die "receipt records a tree above its byte budget"
     (( tree_entries <= max_checkpoint_paths )) ||
       die "receipt records a tree above its entry budget"
+  fi
+  if [[ "$receipt_version" == 9 ]]; then
+    case "$workspace_storage" in
+      filesystem)
+        [[ "$storage_bytes_max" =~ ^[1-9][0-9]*$ ]] ||
+          die "receipt records malformed filesystem bytes"
+        [[ "$storage_inodes_max" =~ ^[1-9][0-9]*$ ]] ||
+          die "receipt records malformed filesystem inodes"
+        local detected_storage detected_bytes detected_inodes
+        detected_storage=$workspace_storage
+        detected_bytes=$storage_bytes_max
+        detected_inodes=$storage_inodes_max
+        detect_workspace_storage "$workspace"
+        [[ "$workspace_storage" == filesystem ]] ||
+          die "recorded workspace filesystem is no longer mounted"
+        [[ "$storage_bytes_max" == "$detected_bytes" ]] ||
+          die "workspace filesystem bytes changed from the receipt"
+        [[ "$storage_inodes_max" == "$detected_inodes" ]] ||
+          die "workspace filesystem inodes changed from the receipt"
+        workspace_storage=$detected_storage
+        storage_bytes_max=$detected_bytes
+        storage_inodes_max=$detected_inodes
+        ;;
+      unbounded)
+        [[ "$storage_bytes_max" == unverified &&
+           "$storage_inodes_max" == unverified ]] ||
+          die "unbounded workspace receipt invented a storage limit"
+        ;;
+      *)
+        die "receipt records an unexpected workspace storage policy"
+        ;;
+    esac
   fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
@@ -1164,7 +1247,7 @@ cmd_verify_receipt() {
   ) || die "recorded checkpoint tree is unavailable"
   [[ "$actual_tree" == "$tree" ]] ||
     die "recorded tree does not match the checkpoint commit"
-  if [[ "$receipt_version" == 8 ]]; then
+  if [[ "$receipt_version" == 8 || "$receipt_version" == 9 ]]; then
     actual_tree_usage=$(checkpoint_tree_usage "$workspace" "$tree") ||
       die "recorded checkpoint tree budget cannot be inspected"
     read -r actual_tree_bytes actual_tree_entries <<<"$actual_tree_usage"
@@ -1186,7 +1269,8 @@ cmd_verify_receipt() {
     die "private log digest does not match the receipt"
   if [[ "$receipt_version" == 6 ||
         "$receipt_version" == 7 ||
-        "$receipt_version" == 8 ]]; then
+        "$receipt_version" == 8 ||
+        "$receipt_version" == 9 ]]; then
     [[ "$diagnostics_path" == "$runtime_dir/logs/"* ]] ||
       die "recorded diagnostics are outside the private runtime"
     [[ -f "$diagnostics_path" && ! -L "$diagnostics_path" ]] ||
@@ -1196,7 +1280,9 @@ cmd_verify_receipt() {
     )
     [[ "$actual_diagnostics_sha256" == "$diagnostics_sha256" ]] ||
       die "private diagnostics digest does not match the receipt"
-    if [[ "$receipt_version" == 7 || "$receipt_version" == 8 ]]; then
+    if [[ "$receipt_version" == 7 ||
+          "$receipt_version" == 8 ||
+          "$receipt_version" == 9 ]]; then
       (( $(stat -c %s -- "$log_path") < max_event_log_bytes )) ||
         die "private event log exceeds its recorded ceiling"
       (( $(stat -c %s -- "$diagnostics_path") <=
@@ -1218,7 +1304,7 @@ cmd_verify_receipt() {
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s\n' \
+  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s workspace_storage=%s storage_bytes_max=%s storage_inodes_max=%s\n' \
     "${commit:0:12}" "${tree:0:12}" \
     "${permissions:-legacy-workspace-write}" \
     "${local_network:-unrecorded}" \
@@ -1241,7 +1327,10 @@ cmd_verify_receipt() {
     "${input_bytes:-unrecorded}" \
     "${input_paths:-unrecorded}" \
     "${tree_bytes:-unrecorded}" \
-    "${tree_entries:-unrecorded}"
+    "${tree_entries:-unrecorded}" \
+    "${workspace_storage:-unrecorded}" \
+    "${storage_bytes_max:-unrecorded}" \
+    "${storage_inodes_max:-unrecorded}"
 }
 
 cmd_run_state() {

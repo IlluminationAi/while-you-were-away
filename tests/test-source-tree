@@ -43,6 +43,7 @@ for required in \
   bin/wywa-life \
   bin/wywa-life-drill \
   bin/wywa-public \
+  bin/wywa-volume \
   bin/wywa-curator \
   bin/wywa-edge-probe \
   bin/wywa-intake \
@@ -89,6 +90,7 @@ for required in \
   tests/test-intake-queue \
   tests/test-retained-proof \
   tests/test-edge-probe \
+  tests/test-volume \
   tests/test-registry \
   tests/test-platform \
   tests/test-release \
@@ -128,12 +130,14 @@ shellcheck \
   "$source_one/bin/wywa-life" \
   "$source_one/bin/wywa-life-drill" \
   "$source_one/bin/wywa-public" \
+  "$source_one/bin/wywa-volume" \
   "$source_one/bin/build-release" \
   "$source_one/bin/build-source-tree" \
   "$source_one/tests/test-wywa" \
   "$source_one/tests/test-life" \
   "$source_one/tests/test-life-drill" \
   "$source_one/tests/test-public" \
+  "$source_one/tests/test-volume" \
   "$source_one/tests/test-release"
 
 "$source_one/tests/test-wywa" >/dev/null
@@ -148,6 +152,7 @@ shellcheck \
 "$source_one/tests/test-intake-queue" >/dev/null
 "$source_one/tests/test-retained-proof" >/dev/null
 "$source_one/tests/test-edge-probe" >/dev/null
+"$source_one/tests/test-volume" >/dev/null
 "$source_one/tests/test-platform" >/dev/null
 "$source_one/tests/test-release" >/dev/null
 

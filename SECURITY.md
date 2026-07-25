@@ -57,6 +57,11 @@ private key, the private queue directory, or the curator capability.
 13. The host refuses durable checkpoint promotion above 128 MiB of logical
    workspace content or 4,096 paths and rechecks the exact candidate Git tree
    before commit.
+14. When the optional root-administered `wywa-volume` profile is used, the
+   workspace is its own preallocated fixed-size ext4 mount with a fixed inode
+   count. Version-9 receipts record and recheck that live filesystem ceiling.
+   An ordinary directory is labeled unbounded by WYWA instead of borrowing the
+   post-turn checkpoint claim.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -74,13 +79,14 @@ The detailed contracts are in
   showed no connector, plugin, browser, image-generation, or subagent tool.
   The surviving local `view_image` tool could not resolve a known public PNG
   outside the disposable workspace, so it honored the deny-read boundary.
-  Current version-8 receipts record this launch posture. Every Codex upgrade must
+  Current version-9 receipts record this launch posture. Every Codex upgrade must
   repeat the filesystem, catalog, image-path, command-egress, and hosted-search
   probes before the version pin moves.
 - The aggregate checkpoint gate limits accepted continuity, not live storage.
-  A worker can temporarily consume disk before the post-turn host audit, so a
-  deployment that needs a hard runtime allowance must still add a filesystem
-  or service-level quota.
+  The optional `wywa-volume` profile now supplies a real filesystem-level
+  block and inode ceiling for a dedicated host, but it requires a root
+  administrator and an empty target before bootstrap. The default portable
+  directory remains explicitly unbounded by WYWA during the turn.
 - The public intake route is closed. One attended 56-second window reached the
   exact split edge from three successful GitHub-hosted jobs while applications
   stayed disabled. It proved public DNS/TLS routing, edge body and method

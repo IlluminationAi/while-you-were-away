@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+volume=$repo_dir/bin/wywa-volume
+wywa=$repo_dir/bin/wywa
+test_root=$(mktemp -d)
+live_workspace=
+live_unit=
+live_identifier=
+
+cleanup() {
+  set +e
+  if [[ -n "$live_unit" ]]; then
+    systemctl disable --now "$live_unit" >/dev/null 2>&1 || true
+    if [[ -f "/etc/systemd/system/$live_unit" ]]; then
+      unlink "/etc/systemd/system/$live_unit"
+      systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+  fi
+  if [[ -n "$live_identifier" ]]; then
+    for retained in \
+      "/var/lib/wywa-volumes/$live_identifier.meta" \
+      "/var/lib/wywa-volumes/$live_identifier.ext4"
+    do
+      [[ ! -f "$retained" ]] || unlink "$retained"
+    done
+  fi
+  if [[ -n "$live_workspace" && -d "$live_workspace" ]]; then
+    rmdir "$live_workspace" 2>/dev/null || true
+  fi
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_status() {
+  local expected=$1
+  shift
+  set +e
+  "$@" >"$test_root/stdout" 2>"$test_root/stderr"
+  local actual=$?
+  set -e
+  [[ "$actual" -eq "$expected" ]] ||
+    fail "expected status $expected, got $actual: $*"
+}
+
+"$volume" --help >"$test_root/help"
+grep -q '^  wywa-volume install WORKSPACE' "$test_root/help" ||
+  fail "volume help omitted install"
+grep -q 'never deletes a volume image' "$test_root/help" ||
+  fail "volume help hid the non-destructive boundary"
+
+if (( EUID != 0 )); then
+  expect_status 2 \
+    "$volume" install "$test_root/worker" \
+    --operator "$(id -un)" \
+    --accept-storage-boundary \
+    --dry-run
+  grep -q 'requires root' "$test_root/stderr" ||
+    fail "non-root volume install did not fail closed"
+  printf '%s\n' "PASS: WYWA bounded-volume interface (live root drill skipped)"
+  exit 0
+fi
+
+operator=nobody
+if getent passwd agentlife >/dev/null 2>&1; then
+  operator=agentlife
+fi
+
+"$volume" install "$test_root/planned-worker" \
+  --operator "$operator" \
+  --size-mib 160 \
+  --accept-storage-boundary \
+  --dry-run >"$test_root/plan"
+grep -q '167772160 bytes, preallocated' "$test_root/plan" ||
+  fail "volume plan omitted the fixed preallocation"
+grep -q '^inodes: 8192$' "$test_root/plan" ||
+  fail "volume plan omitted the fixed inode limit"
+[[ ! -e "$test_root/planned-worker" ]] ||
+  fail "volume dry run changed the target"
+
+expect_status 2 \
+  "$volume" install "$test_root/too-small" \
+  --operator "$operator" \
+  --size-mib 159 \
+  --accept-storage-boundary \
+  --dry-run
+grep -q 'between 160 and 4096 MiB' "$test_root/stderr" ||
+  fail "volume accepted a size below the checkpoint headroom"
+
+if [[ "${WYWA_VOLUME_LIVE_TEST:-0}" != 1 ]]; then
+  printf '%s\n' "PASS: WYWA bounded-volume interface"
+  exit 0
+fi
+
+live_workspace=$test_root/live-worker
+live_identifier=$(
+  printf '%s' "$live_workspace" | sha256sum | cut -c1-16
+)
+live_unit=$(systemd-escape --path --suffix=mount "$live_workspace")
+chmod 0711 "$test_root"
+
+"$volume" install "$live_workspace" \
+  --operator "$operator" \
+  --size-mib 160 \
+  --accept-storage-boundary >"$test_root/install"
+"$volume" status "$live_workspace" >"$test_root/status"
+grep -q 'workspace filesystem: .* bytes, 8192 inodes' "$test_root/status" ||
+  fail "active volume status omitted its hard inode limit"
+grep -q 'backing image: 167772160 bytes, preallocated' "$test_root/status" ||
+  fail "active volume status omitted its reserved backing bytes"
+
+operator_home=$(getent passwd "$operator" | cut -d: -f6)
+fake_codex=$test_root/fake-codex
+cat >"$fake_codex" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == --version ]]; then
+  printf '%s\n' "codex-cli 0.145.0"
+  exit 0
+fi
+if [[ "${1:-}" == login && "${2:-}" == status ]]; then
+  exit 0
+fi
+workspace=
+message=
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cd)
+      workspace=$2
+      shift 2
+      ;;
+    --output-last-message)
+      message=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+printf '%s\n' "bounded live result" >"$workspace/bounded-result.txt"
+printf '%s\n' "bounded live result" >"$message"
+printf '%s\n' \
+  '{"type":"thread.started","thread_id":"volume-test"}' \
+  '{"type":"turn.started"}' \
+  '{"type":"item.completed","item":{"id":"message","type":"agent_message","text":"bounded live result"}}' \
+  '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
+EOF
+chmod 0755 "$fake_codex"
+runtime_root=$test_root/runtime
+install -d -m 0700 -o "$operator" -g "$operator" "$runtime_root"
+runuser -u "$operator" -- env \
+  HOME="$operator_home" \
+  PATH=/usr/local/bin:/usr/bin:/bin \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_STATE_ROOT="$runtime_root" \
+  "$wywa" init "$live_workspace" >/dev/null
+runuser -u "$operator" -- env \
+  HOME="$operator_home" \
+  PATH=/usr/local/bin:/usr/bin:/bin \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_STATE_ROOT="$runtime_root" \
+  "$wywa" run "$live_workspace" --max-runtime 2m >/dev/null
+receipt=$(find "$runtime_root" -mindepth 2 -maxdepth 2 -name last-run -print)
+grep -Eq \
+  'receipt=9 .*workspace_storage=filesystem storage_bytes_max=[0-9]+ storage_inodes_max=8192' \
+  "$receipt" ||
+  fail "bounded run receipt omitted its live filesystem limit"
+runuser -u "$operator" -- env \
+  HOME="$operator_home" \
+  PATH=/usr/local/bin:/usr/bin:/bin \
+  WYWA_CODEX_BIN="$fake_codex" \
+  WYWA_STATE_ROOT="$runtime_root" \
+  "$wywa" verify-receipt "$live_workspace" >/dev/null
+
+set +e
+runuser -u "$operator" -- \
+  dd if=/dev/zero of="$live_workspace/fill" bs=1M count=200 status=none \
+  2>"$test_root/dd-error"
+fill_status=$?
+set -e
+[[ "$fill_status" -ne 0 ]] ||
+  fail "bounded workspace accepted a write beyond its image"
+grep -Eq 'No space left on device|Disk quota exceeded' "$test_root/dd-error" ||
+  fail "bounded workspace failed without a storage-limit error"
+runuser -u "$operator" -- unlink "$live_workspace/fill"
+
+"$volume" deactivate "$live_workspace" >"$test_root/deactivate"
+[[ -f "/var/lib/wywa-volumes/$live_identifier.ext4" ]] ||
+  fail "deactivation deleted the volume image"
+mountpoint -q "$live_workspace" &&
+  fail "deactivation left the workspace mounted"
+"$volume" activate "$live_workspace" >"$test_root/activate"
+runuser -u "$operator" -- test -f "$live_workspace/bounded-result.txt" ||
+  fail "reactivation lost the durable workspace"
+"$volume" deactivate "$live_workspace" >/dev/null
+
+printf '%s\n' "PASS: WYWA bounded-volume live filesystem drill"

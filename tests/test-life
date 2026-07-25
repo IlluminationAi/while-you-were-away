@@ -257,7 +257,7 @@ report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert report["schema_version"] == 1
 assert report["profile"] == "local"
 assert report["result"] == "pass"
-assert report["receipt"]["version"] == 8
+assert report["receipt"]["version"] == 9
 assert report["receipt"]["verified"] is True
 assert report["workspace"]["clean"] is True
 assert report["snapshot"]["script_free"] is True

@@ -33,6 +33,42 @@ Install and authentication documentation:
 - https://developers.openai.com/codex/cli/
 - https://developers.openai.com/codex/auth/
 
+## Optional hard workspace limit
+
+The portable runtime's normal 128 MiB / 4,096-path checkpoint gate runs after
+the model turn. It can refuse oversized durable state, but it cannot prevent a
+worker from temporarily consuming free space before that audit.
+
+On a dedicated Linux host, a root administrator can close that narrower gap
+before bootstrap by putting the empty workspace on a fixed-size,
+preallocated ext4 image:
+
+```text
+sudo bin/wywa-volume install "$HOME/my-worker" \
+  --operator "$USER" \
+  --size-mib 160 \
+  --accept-storage-boundary
+sudo bin/wywa-volume status "$HOME/my-worker"
+```
+
+The default reserves 160 MiB on the host and fixes the filesystem at 8,192
+inodes. It includes the worker files, `.git`, and filesystem metadata, so it
+is intentionally larger than the checkpoint budget. `nodev` and `nosuid` are
+set; execution remains available because a worker may test scripts inside its
+workspace.
+
+Deactivate and reactivate without deleting any bytes:
+
+```text
+sudo bin/wywa-volume deactivate "$HOME/my-worker"
+sudo bin/wywa-volume activate "$HOME/my-worker"
+```
+
+There is deliberately no image-deletion command. Copy or recover the workspace
+before an administrator removes the retained image manually. This profile
+needs root only for volume administration; the worker still runs as the named
+non-root operator.
+
 ## One-command local life
 
 Use this path when the generated conservative mandate matches what you want:
@@ -281,17 +317,19 @@ budgets. A zero-change cycle records status 72; an unsafe checkpoint records
 status 73; an aggregate-budget refusal records status 77 and preserves the
 uncommitted evidence. None publishes a new final message. The aggregate gate
 limits accepted continuity but does not stop temporary disk use while Codex is
-running; use a filesystem or service quota when that live bound is required.
+running. Use the optional `wywa-volume` profile above when that live bound is
+required on a dedicated host.
 Inspect `git log`, `git status`, and the private result receipt before enabling
 unattended work.
 
-The version-8 receipt records the enforced permission profile, disabled
+The version-9 receipt records the enforced permission profile, disabled
 local-command network, live hosted search, disabled extension surfaces,
 workspace-local config absence, no-approval posture, ephemeral session,
 event-audit policy and counts, full host-created commit, exact tree, and
 SHA-256 digests of the JSONL log, separate diagnostics, and published final
 message, plus the output ceilings, aggregate checkpoint budgets, inspected
-input totals, and exact tree totals. Version 2–7 receipts remain
+input totals, exact tree totals, and either the mounted filesystem capacity or
+the explicit absence of a WYWA live-storage bound. Version 2–8 receipts remain
 mechanically verifiable as legacy evidence, but their unrecorded capabilities
 are not inferred.
 `verify-receipt` checks that mechanical chain without trusting the worker.

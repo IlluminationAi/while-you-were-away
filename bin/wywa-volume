@@ -1,0 +1,442 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+program=${0##*/}
+state_root=/var/lib/wywa-volumes
+unit_root=/etc/systemd/system
+minimum_size_mib=160
+maximum_size_mib=4096
+inode_limit=8192
+
+usage() {
+  cat <<EOF
+Usage:
+  $program install WORKSPACE --operator USER [--size-mib NUMBER]
+                   --accept-storage-boundary [--dry-run]
+  $program status WORKSPACE
+  $program activate WORKSPACE
+  $program deactivate WORKSPACE
+
+Commands:
+  install     Create and mount one fixed-size, preallocated ext4 workspace.
+  status      Verify the image, mount, capacity, inode limit, and ownership.
+  activate    Enable and mount a previously installed workspace volume.
+  deactivate  Unmount and disable it without deleting the image or workspace.
+
+The default 160 MiB image bounds live workspace growth below the host
+filesystem. It includes Git history and filesystem metadata. The portable
+checkpoint gate remains a separate 128 MiB / 4,096-path acceptance policy.
+
+This command requires root. It never deletes a volume image.
+EOF
+}
+
+die() {
+  printf '%s: %s\n' "$program" "$*" >&2
+  exit 2
+}
+
+require_root() {
+  (( EUID == 0 )) || die "this command requires root"
+}
+
+require_commands() {
+  local command_name
+  for command_name in \
+    fallocate \
+    findmnt \
+    getent \
+    losetup \
+    mkfs.ext4 \
+    mountpoint \
+    sha256sum \
+    stat \
+    systemctl \
+    systemd-escape
+  do
+    command -v "$command_name" >/dev/null 2>&1 ||
+      die "required command is unavailable: $command_name"
+  done
+}
+
+canonical_workspace() {
+  local raw=$1
+  local parent base canonical_parent target
+  [[ "$raw" == /* ]] || die "workspace must be an absolute path"
+  [[ "$raw" != *[[:space:]]* ]] ||
+    die "workspace must not contain whitespace"
+  [[ "$raw" != / ]] || die "refusing to use the filesystem root"
+  [[ ! -L "$raw" ]] || die "workspace must not be a symbolic link"
+  parent=$(dirname -- "$raw")
+  base=$(basename -- "$raw")
+  canonical_parent=$(realpath -e -- "$parent") ||
+    die "workspace parent does not exist: $parent"
+  target=$canonical_parent/$base
+  [[ "$target" == "$raw" ]] ||
+    die "workspace path must already be canonical: $target"
+  [[ "$target" != "$state_root" && "$target" != "$state_root/"* ]] ||
+    die "workspace cannot be inside the private volume state"
+  printf '%s\n' "$target"
+}
+
+volume_id() {
+  printf '%s' "$1" | sha256sum | cut -c1-16
+}
+
+paths_for_workspace() {
+  local workspace=$1
+  volume_identifier=$(volume_id "$workspace")
+  volume_image=$state_root/$volume_identifier.ext4
+  volume_metadata=$state_root/$volume_identifier.meta
+  volume_unit=$(
+    systemd-escape --path --suffix=mount "$workspace"
+  )
+  volume_unit_file=$unit_root/$volume_unit
+}
+
+read_metadata() {
+  local workspace=$1
+  local key value
+  metadata_version=
+  metadata_workspace=
+  metadata_operator=
+  metadata_uid=
+  metadata_gid=
+  metadata_image=
+  metadata_image_bytes=
+  metadata_inode_limit=
+  metadata_unit=
+
+  [[ -f "$volume_metadata" && ! -L "$volume_metadata" ]] ||
+    die "volume metadata is missing or unsafe: $volume_metadata"
+  [[ "$(stat -c %U:%G:%a -- "$volume_metadata")" == root:root:600 ]] ||
+    die "volume metadata custody is unsafe"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      version) metadata_version=$value ;;
+      workspace) metadata_workspace=$value ;;
+      operator) metadata_operator=$value ;;
+      uid) metadata_uid=$value ;;
+      gid) metadata_gid=$value ;;
+      image) metadata_image=$value ;;
+      image_bytes) metadata_image_bytes=$value ;;
+      inode_limit) metadata_inode_limit=$value ;;
+      unit) metadata_unit=$value ;;
+      *) die "volume metadata contains an unknown field: $key" ;;
+    esac
+  done <"$volume_metadata"
+
+  [[ "$metadata_version" == 1 ]] ||
+    die "volume metadata has an unsupported version"
+  [[ "$metadata_workspace" == "$workspace" ]] ||
+    die "volume metadata names another workspace"
+  [[ "$metadata_image" == "$volume_image" ]] ||
+    die "volume metadata names another image"
+  [[ "$metadata_unit" == "$volume_unit" ]] ||
+    die "volume metadata names another mount unit"
+  [[ "$metadata_uid" =~ ^[1-9][0-9]*$ ]] ||
+    die "volume metadata has an unsafe operator uid"
+  [[ "$metadata_gid" =~ ^[0-9]+$ ]] ||
+    die "volume metadata has an invalid operator gid"
+  [[ "$metadata_image_bytes" =~ ^[1-9][0-9]*$ ]] ||
+    die "volume metadata has an invalid image size"
+  [[ "$metadata_inode_limit" == "$inode_limit" ]] ||
+    die "volume metadata has an unexpected inode limit"
+  [[ -n "$metadata_operator" ]] ||
+    die "volume metadata omits the operator"
+}
+
+mounted_capacity() {
+  local workspace=$1
+  local mount_target block_count block_size inode_count
+  mount_target=$(findmnt -n -M "$workspace" -o TARGET 2>/dev/null || true)
+  [[ "$mount_target" == "$workspace" ]] ||
+    die "workspace is not its own mount point"
+  read -r block_count block_size inode_count < <(
+    stat -f -c '%b %S %c' -- "$workspace"
+  )
+  mounted_bytes=$((block_count * block_size))
+  mounted_inodes=$inode_count
+}
+
+verify_active_volume() {
+  local workspace=$1
+  local image_size loop_devices
+  [[ -f "$volume_image" && ! -L "$volume_image" ]] ||
+    die "volume image is missing or unsafe"
+  [[ "$(stat -c %U:%G:%a -- "$volume_image")" == root:root:600 ]] ||
+    die "volume image custody is unsafe"
+  image_size=$(stat -c %s -- "$volume_image")
+  [[ "$image_size" == "$metadata_image_bytes" ]] ||
+    die "volume image size does not match its metadata"
+  loop_devices=$(losetup -j "$volume_image" | cut -d: -f1)
+  [[ -n "$loop_devices" ]] ||
+    die "volume image is not attached to a loop device"
+  mounted_capacity "$workspace"
+  (( mounted_bytes <= metadata_image_bytes )) ||
+    die "mounted filesystem exceeds its backing image"
+  [[ "$mounted_inodes" == "$metadata_inode_limit" ]] ||
+    die "mounted inode count does not match its fixed limit"
+  [[ "$(stat -c %u:%g:%a -- "$workspace")" == \
+     "$metadata_uid:$metadata_gid:700" ]] ||
+    die "workspace mount ownership or mode is unsafe"
+}
+
+write_metadata() {
+  local temporary=$1
+  cat >"$temporary" <<EOF
+version=1
+workspace=$workspace
+operator=$operator
+uid=$operator_uid
+gid=$operator_gid
+image=$volume_image
+image_bytes=$image_bytes
+inode_limit=$inode_limit
+unit=$volume_unit
+EOF
+  chmod 0600 -- "$temporary"
+  chown root:root -- "$temporary"
+}
+
+write_mount_unit() {
+  local temporary=$1
+  cat >"$temporary" <<EOF
+[Unit]
+Description=While You Were Away bounded workspace $volume_identifier
+Before=local-fs.target
+
+[Mount]
+What=$volume_image
+Where=$workspace
+Type=ext4
+Options=loop,nodev,nosuid,noatime,errors=remount-ro
+
+[Install]
+WantedBy=local-fs.target
+EOF
+  chmod 0644 -- "$temporary"
+  chown root:root -- "$temporary"
+}
+
+cmd_install() {
+  [[ $# -ge 1 ]] || die "install requires WORKSPACE"
+  local workspace_arg=$1
+  shift
+  local operator='' size_mib=$minimum_size_mib
+  local accepted=0 dry_run=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --operator)
+        [[ $# -ge 2 ]] || die "--operator requires a user"
+        operator=$2
+        shift 2
+        ;;
+      --size-mib)
+        [[ $# -ge 2 ]] || die "--size-mib requires a number"
+        size_mib=$2
+        shift 2
+        ;;
+      --accept-storage-boundary)
+        accepted=1
+        shift
+        ;;
+      --dry-run)
+        dry_run=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown install option: $1"
+        ;;
+    esac
+  done
+  [[ -n "$operator" ]] || die "--operator is required"
+  [[ "$operator" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] ||
+    die "operator name is invalid"
+  [[ "$size_mib" =~ ^[0-9]+$ ]] ||
+    die "size must be an integer number of MiB"
+  (( size_mib >= minimum_size_mib && size_mib <= maximum_size_mib )) ||
+    die "size must be between $minimum_size_mib and $maximum_size_mib MiB"
+  (( accepted == 1 )) ||
+    die "--accept-storage-boundary is required"
+
+  workspace=$(canonical_workspace "$workspace_arg")
+  paths_for_workspace "$workspace"
+  local passwd_record
+  passwd_record=$(getent passwd "$operator") ||
+    die "operator account does not exist: $operator"
+  IFS=: read -r _ _ operator_uid operator_gid _ _ _ <<<"$passwd_record"
+  [[ "$operator_uid" =~ ^[1-9][0-9]*$ ]] ||
+    die "operator must be a non-root local account"
+  image_bytes=$((size_mib * 1024 * 1024))
+
+  if (( dry_run == 1 )); then
+    printf 'workspace: %s\n' "$workspace"
+    printf 'operator: %s (%s:%s)\n' \
+      "$operator" "$operator_uid" "$operator_gid"
+    printf 'image: %s (%s bytes, preallocated)\n' \
+      "$volume_image" "$image_bytes"
+    printf 'inodes: %s\n' "$inode_limit"
+    printf 'mount unit: %s\n' "$volume_unit"
+    printf '%s\n' "mount options: loop,nodev,nosuid,noatime,errors=remount-ro"
+    printf '%s\n' "deactivation preserves the image and workspace bytes"
+    return 0
+  fi
+
+  [[ ! -e "$volume_image" && ! -e "$volume_metadata" ]] ||
+    die "a volume record already exists for this workspace"
+  [[ ! -e "$volume_unit_file" ]] ||
+    die "mount unit already exists: $volume_unit_file"
+  if [[ -e "$workspace" ]]; then
+    [[ -d "$workspace" && ! -L "$workspace" ]] ||
+      die "workspace target is not a safe directory"
+    [[ -z "$(find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)" ]] ||
+      die "workspace target must be empty"
+  fi
+  mountpoint -q "$workspace" &&
+    die "workspace target is already a mount point"
+
+  install -d -m 0700 -o root -g root -- "$state_root"
+  install -d -m 0750 -o root -g "$operator_gid" -- "$workspace"
+  local image_temporary metadata_temporary unit_temporary
+  image_temporary=$state_root/.$volume_identifier.ext4.$$.tmp
+  metadata_temporary=$(mktemp "$state_root/.metadata.XXXXXX")
+  unit_temporary=$(mktemp "$unit_root/.${volume_unit}.XXXXXX")
+  local image_installed=0 unit_installed=0 activated=0
+
+  cleanup_failed_install() {
+    local cleanup_status=$?
+    set +e
+    if (( cleanup_status != 0 )); then
+      if (( activated == 1 || unit_installed == 1 )); then
+        systemctl disable --now "$volume_unit" >/dev/null 2>&1 || true
+      fi
+      if (( unit_installed == 1 )) && [[ -f "$volume_unit_file" ]]; then
+        unlink "$volume_unit_file"
+        systemctl daemon-reload >/dev/null 2>&1 || true
+      fi
+      if (( image_installed == 1 )) && [[ -f "$volume_image" ]]; then
+        unlink "$volume_image"
+      fi
+    fi
+    [[ ! -e "$image_temporary" ]] || unlink "$image_temporary"
+    [[ ! -e "$metadata_temporary" ]] || unlink "$metadata_temporary"
+    [[ ! -e "$unit_temporary" ]] || unlink "$unit_temporary"
+    return "$cleanup_status"
+  }
+  trap cleanup_failed_install EXIT
+
+  fallocate -l "$image_bytes" "$image_temporary"
+  chmod 0600 -- "$image_temporary"
+  chown root:root -- "$image_temporary"
+  mkfs.ext4 \
+    -q \
+    -F \
+    -m 0 \
+    -N "$inode_limit" \
+    -L "wywa-${volume_identifier:0:11}" \
+    "$image_temporary"
+  mv -- "$image_temporary" "$volume_image"
+  image_installed=1
+
+  write_mount_unit "$unit_temporary"
+  mv -- "$unit_temporary" "$volume_unit_file"
+  unit_installed=1
+  systemctl daemon-reload
+  systemctl enable --now "$volume_unit"
+  activated=1
+  if [[ -e "$workspace/lost+found" || -L "$workspace/lost+found" ]]; then
+    [[ -d "$workspace/lost+found" && ! -L "$workspace/lost+found" ]] ||
+      die "new filesystem contains an unsafe lost+found entry"
+    rmdir -- "$workspace/lost+found"
+  fi
+  chown "$operator_uid:$operator_gid" -- "$workspace"
+  chmod 0700 -- "$workspace"
+
+  write_metadata "$metadata_temporary"
+  mv -- "$metadata_temporary" "$volume_metadata"
+  read_metadata "$workspace"
+  verify_active_volume "$workspace"
+  trap - EXIT
+
+  printf 'installed: %s\n' "$workspace"
+  printf 'workspace filesystem: %s bytes, %s inodes\n' \
+    "$mounted_bytes" "$mounted_inodes"
+  printf 'backing image: %s bytes, preallocated\n' "$image_bytes"
+  printf 'mount unit: %s (enabled and active)\n' "$volume_unit"
+}
+
+cmd_status() {
+  [[ $# -eq 1 ]] || die "status requires exactly one WORKSPACE"
+  local workspace
+  workspace=$(canonical_workspace "$1")
+  paths_for_workspace "$workspace"
+  read_metadata "$workspace"
+  verify_active_volume "$workspace"
+  printf 'workspace: %s\n' "$workspace"
+  printf 'operator: %s (%s:%s)\n' \
+    "$metadata_operator" "$metadata_uid" "$metadata_gid"
+  printf 'workspace filesystem: %s bytes, %s inodes\n' \
+    "$mounted_bytes" "$mounted_inodes"
+  printf 'backing image: %s bytes, preallocated\n' "$metadata_image_bytes"
+  printf 'mount unit: %s (active)\n' "$metadata_unit"
+}
+
+cmd_activate() {
+  [[ $# -eq 1 ]] || die "activate requires exactly one WORKSPACE"
+  local workspace
+  workspace=$(canonical_workspace "$1")
+  paths_for_workspace "$workspace"
+  read_metadata "$workspace"
+  [[ -f "$volume_unit_file" && ! -L "$volume_unit_file" ]] ||
+    die "mount unit is missing or unsafe"
+  systemctl enable --now "$volume_unit"
+  chown "$metadata_uid:$metadata_gid" -- "$workspace"
+  chmod 0700 -- "$workspace"
+  verify_active_volume "$workspace"
+  printf 'activated: %s\n' "$workspace"
+}
+
+cmd_deactivate() {
+  [[ $# -eq 1 ]] || die "deactivate requires exactly one WORKSPACE"
+  local workspace
+  workspace=$(canonical_workspace "$1")
+  paths_for_workspace "$workspace"
+  read_metadata "$workspace"
+  systemctl disable --now "$volume_unit"
+  mountpoint -q "$workspace" &&
+    die "workspace remained mounted after deactivation"
+  printf 'deactivated: %s\n' "$workspace"
+  printf 'preserved image: %s (%s bytes)\n' \
+    "$metadata_image" "$metadata_image_bytes"
+}
+
+main() {
+  [[ $# -ge 1 ]] || {
+    usage
+    exit 2
+  }
+  local command_name=$1
+  shift
+  if [[ "$command_name" == -h ||
+        "$command_name" == --help ||
+        "$command_name" == help ]]; then
+    usage
+    return 0
+  fi
+  require_root
+  require_commands
+  case "$command_name" in
+    install) cmd_install "$@" ;;
+    status) cmd_status "$@" ;;
+    activate) cmd_activate "$@" ;;
+    deactivate) cmd_deactivate "$@" ;;
+    *) die "unknown command: $command_name" ;;
+  esac
+}
+
+main "$@"

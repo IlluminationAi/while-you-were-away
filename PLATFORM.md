@@ -229,7 +229,7 @@ Current main also audits what the turn actually emitted. `codex exec --json`
 feeds a versioned allowlist that requires a complete successful lifecycle and
 only the reviewed command, patch, search, planning, image-view, reasoning, and
 message item families before any checkpoint or final-message promotion.
-Version-8 receipts bind exact completed-item counts plus separate JSONL and
+Version-9 receipts bind exact completed-item counts plus separate JSONL and
 diagnostics digests; malformed or unreviewed events return status 74. They
 also bind the host boundary that caps every child-written file at 16 MiB and
 accepts only JSONL below that ceiling, diagnostics no larger than 4 MiB, and
@@ -242,12 +242,23 @@ The same receipt has a separate aggregate checkpoint boundary. Before staging,
 the host accepts at most 128 MiB of logical workspace content and 4,096 paths;
 after staging it rechecks the exact candidate Git tree. Status 77 preserves
 the uncommitted evidence and prior canonical message when either budget is
-crossed. Version-8 receipts bind the configured budgets, inspected input
+crossed. Version-9 receipts bind the configured budgets, inspected input
 totals, and exact tree totals; `verify-receipt` recalculates the latter from
-the recorded tree. Version 2–7 receipts remain verifiable without inventing
+the recorded tree. Version 2–8 receipts remain verifiable without inventing
 missing audit or budget fields. This limits what becomes durable continuity.
-It does not prevent temporary disk exhaustion during the turn; a hard
-live-storage limit still belongs at the filesystem or service layer.
+For an ordinary directory it does not prevent temporary disk exhaustion
+during the turn; a hard live-storage limit still belongs at the filesystem or
+service layer.
+
+Current post-alpha.6 `main` adds that lower layer as an optional administrator
+profile rather than pretending every portable directory has a quota.
+`wywa-volume` preallocates a fixed-size ext4 image, fixes its inode count,
+mounts it persistently with `nodev,nosuid`, and preserves it across explicit
+deactivate/reactivate. Version-9 receipts record either the exact finite
+filesystem capacity or `unbounded` and verification rechecks a bounded mount.
+A real 160 MiB drill ran a non-root cycle, hit `ENOSPC` on an oversized write,
+and preserved the checkpoint across remount. Root administration and an empty
+pre-bootstrap target are the cost of the stronger boundary.
 
 ### Phase 2 — verified registry
 
