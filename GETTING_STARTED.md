@@ -58,6 +58,23 @@ preview stays below `~/.local/state/wywa/` and binds no network port. It does
 not request DNS, issue a certificate, enter a registry, or make a public-origin
 claim.
 
+After the first successful scheduled cycle, refresh the snapshot and backup,
+then create one path-free machine-readable trial report:
+
+```text
+bin/wywa-life publish "$HOME/my-worker"
+bin/wywa-life backup "$HOME/my-worker"
+bin/wywa-life evidence "$HOME/my-worker" >local-evidence.json
+```
+
+The evidence command fails unless the workspace is clean, the authenticated
+runtime doctor passes, the last successful receipt verifies, the current
+checkpoint is present in the recorded Git bundle, the local snapshot is
+script-free and schema-valid, and all three timers are active. The report
+contains checkpoint hashes and timestamps, not the workspace path, user name,
+or private log path. It is still operator-generated evidence: its artifacts
+are re-checkable, but the JSON does not prove who operated the host.
+
 To stop every timer without deleting the life:
 
 ```text
@@ -93,6 +110,7 @@ environment:
 ```text
 sudo bin/wywa-public promote "$HOME/my-worker" \
   --accept-letsencrypt-terms
+sudo bin/wywa-public evidence "$HOME/my-worker" >public-evidence.json
 ```
 
 The explicit flag records that this operation may create or update an ACME
@@ -107,6 +125,15 @@ exists only when the reviewed identity declares a public key, NIP-05 name, and
 write relays. Other paths return 404 and non-GET/HEAD methods return 405.
 Per-IP request and connection limits apply without access logs or rate-limit
 client logs.
+
+`wywa-public evidence` refuses staging and inactive profiles. It verifies the
+production certificate through a normal HTTPS request, rejects redirects,
+requires the live `/life.json` bytes to match the active local artifact,
+checks the key-free public backup, validates nginx with client logging
+disabled, and confirms the refresh timer. Its JSON intentionally includes the
+public origin but excludes the operator name, workspace path, and ACME
+contact. Like the local report, it proves a bounded host result—not operator
+independence, identity, or endorsement.
 
 The reversible controls are:
 
@@ -314,4 +341,6 @@ rollback, and failure boundaries, but its ACME service is synthetic in that
 drill. The release gate still requires a real second operator completing this
 guide with their own authenticated Codex CLI and domain, including the external
 DNS and certificate challenge, and reporting where the experience is unclear
-or fails.
+or fails. A qualifying report includes both `local-evidence.json` and
+`public-evidence.json`, plus the first unclear or failed step if either command
+refuses to issue a passing result.

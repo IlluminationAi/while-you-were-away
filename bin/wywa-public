@@ -21,6 +21,7 @@ Usage:
   $program install WORKSPACE --operator USER --domain DOMAIN --email EMAIL
                   --accept-letsencrypt-terms [--staging] [--dry-run]
   $program status WORKSPACE
+  $program evidence WORKSPACE
   $program publish WORKSPACE
   $program backup WORKSPACE
   $program restore WORKSPACE [--backup FILE]
@@ -33,7 +34,8 @@ The public-host profile is explicit and root-administered. It publishes the
 existing local-life snapshot as the non-root operator, configures a static
 nginx origin, obtains a webroot ACME certificate, installs bounded traffic
 controls, and preserves workspace, site releases, backups, and certificates
-on uninstall or partial activation failure.
+on uninstall or partial activation failure. The evidence command performs a
+read-only production-origin, backup, timer, and local-artifact comparison.
 EOF
 }
 
@@ -1134,6 +1136,235 @@ cmd_status() {
   fi
 }
 
+cmd_evidence() {
+  [[ $# -eq 1 ]] || die "evidence requires exactly one WORKSPACE"
+  require_admin
+  load_profile_workspace "$1"
+  (( profile_active == 1 )) ||
+    die "evidence requires an active public-host profile"
+  (( profile_staging == 0 )) ||
+    die "evidence requires production TLS; promote the staging profile first"
+  [[ -z "$(git -C "$profile_workspace" status --porcelain)" ]] ||
+    die "evidence requires a clean workspace"
+
+  local identifier instance site current current_real commit tree
+  local archive checksum expected actual staging backup_commit
+  local nginx_bin systemctl_bin curl_bin readback metrics
+  local snapshot_generated required
+  identifier=$(workspace_id "$profile_workspace")
+  commit=$(git -C "$profile_workspace" rev-parse HEAD)
+  tree=$(git -C "$profile_workspace" rev-parse 'HEAD^{tree}')
+  [[ "$commit" =~ ^[0-9a-f]{40}$ && "$tree" =~ ^[0-9a-f]{40}$ ]] ||
+    die "workspace checkpoint identifiers are invalid"
+  instance=$(instance_root_for_id "$identifier")
+  site=$(site_root_for_id "$identifier")
+  current=$site/current
+  [[ -L "$current" ]] || die "public snapshot pointer is missing or unsafe"
+  current_real=$(realpath -e -- "$current")
+  [[ "$current_real" == "$site/releases/"* ]] ||
+    die "public snapshot pointer escapes its release directory"
+  for required in index.html life.json feed.xml robots.txt assets/site.css; do
+    [[ -f "$current_real/$required" && ! -L "$current_real/$required" ]] ||
+      die "public snapshot is incomplete or unsafe"
+  done
+  ! grep -Eiq '<[[:space:]]*script([[:space:]>]|$)' \
+    "$current_real/index.html" ||
+    die "public snapshot unexpectedly contains a script"
+  snapshot_generated=$(
+    python3 - "$current_real/life.json" "https://$profile_domain" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if record.get("schema_version") != 1:
+    raise SystemExit("unsupported life snapshot schema")
+if record.get("site", {}).get("base_url") != sys.argv[2]:
+    raise SystemExit("snapshot origin does not match its public profile")
+if record.get("site", {}).get("local_preview") is not False:
+    raise SystemExit("snapshot still claims a local preview")
+generated = record.get("generated_at")
+if not isinstance(generated, str) or not generated.endswith("Z"):
+    raise SystemExit("snapshot timestamp is invalid")
+print(generated)
+PY
+  ) || die "public snapshot JSON failed validation"
+
+  archive=$(latest_backup "$identifier")
+  [[ -n "$archive" && -f "$archive" && ! -L "$archive" ]] ||
+    die "public backup is missing or unsafe"
+  checksum=$archive.sha256
+  [[ -f "$checksum" && ! -L "$checksum" ]] ||
+    die "public backup checksum is missing or unsafe"
+  (
+    cd -- "${archive%/*}"
+    sha256sum -c -- "${checksum##*/}" >/dev/null
+  ) || die "public backup archive checksum failed"
+  expected=$'SHA256SUMS\nmanifest\nsite/\nsite/assets/\nsite/assets/site.css\nsite/feed.xml\nsite/index.html\nsite/life.json\nsite/robots.txt'
+  actual=$(tar -tzf "$archive" | sort)
+  [[ "$actual" == "$expected" ]] ||
+    die "public backup contains an unexpected path set"
+  tar -tvzf "$archive" |
+    awk '$1 !~ /^[-d]/ {exit 1}' ||
+    die "public backup contains a non-regular archive member"
+  staging=$(mktemp -d "$instance/.evidence.XXXXXX")
+  if ! tar -xzf "$archive" -C "$staging" \
+    --no-same-owner --no-same-permissions; then
+    rm -rf -- "$staging"
+    die "public backup extraction failed"
+  fi
+  for required in \
+    SHA256SUMS \
+    manifest \
+    site/index.html \
+    site/life.json \
+    site/feed.xml \
+    site/robots.txt \
+    site/assets/site.css
+  do
+    [[ -f "$staging/$required" && ! -L "$staging/$required" ]] || {
+      rm -rf -- "$staging"
+      die "public backup extracted an unsafe required file"
+    }
+  done
+  (
+    cd -- "$staging"
+    sha256sum -c SHA256SUMS >/dev/null
+  ) || {
+    rm -rf -- "$staging"
+    die "public backup content checksum failed"
+  }
+  grep -Fxq "workspace_id=$identifier" "$staging/manifest" || {
+    rm -rf -- "$staging"
+    die "public backup belongs to a different workspace"
+  }
+  grep -Fxq "domain=$profile_domain" "$staging/manifest" || {
+    rm -rf -- "$staging"
+    die "public backup belongs to a different domain"
+  }
+  grep -Fxq 'certificate_material=excluded' "$staging/manifest" || {
+    rm -rf -- "$staging"
+    die "public backup does not declare its key-exclusion boundary"
+  }
+  backup_commit=$(sed -n 's/^workspace_commit=//p' "$staging/manifest")
+  [[ "$backup_commit" =~ ^[0-9a-f]{12}$ ]] || {
+    rm -rf -- "$staging"
+    die "public backup commit is invalid"
+  }
+  [[ "$backup_commit" == "${commit:0:12}" ]] || {
+    rm -rf -- "$staging"
+    die "public backup does not cover the current workspace checkpoint"
+  }
+  rm -rf -- "$staging"
+
+  certificate_ready "$profile_domain" ||
+    die "production certificate files are missing or unsafe"
+  nginx_paths "$identifier"
+  [[ -L "$nginx_enabled" && -f "$nginx_available" &&
+    ! -L "$nginx_available" ]] ||
+    die "public nginx activation is missing or unsafe"
+  grep -Fq 'access_log off;' "$nginx_available" ||
+    die "public nginx profile does not disable access logging"
+  grep -Fq 'error_log /dev/null crit;' "$nginx_available" ||
+    die "public nginx profile can retain client addresses in its error log"
+  nginx_bin=$(resolve_binary WYWA_PUBLIC_NGINX_BIN nginx)
+  "$nginx_bin" -t >/dev/null 2>&1 ||
+    die "active nginx configuration failed validation"
+
+  systemctl_bin=$(resolve_binary WYWA_PUBLIC_SYSTEMCTL_BIN systemctl)
+  "$systemctl_bin" is-enabled --quiet "wywa-public-$identifier.timer" ||
+    die "public refresh timer is not enabled"
+  "$systemctl_bin" is-active --quiet "wywa-public-$identifier.timer" ||
+    die "public refresh timer is not active"
+
+  curl_bin=$(resolve_binary WYWA_PUBLIC_CURL_BIN curl)
+  readback=$(mktemp "$instance/.life-readback.XXXXXX")
+  metrics=$(
+    "$curl_bin" \
+      --silent \
+      --show-error \
+      --fail \
+      --output "$readback" \
+      --write-out '%{http_code} %{num_redirects} %{url_effective}' \
+      --max-time 20 \
+      --proto '=https' \
+      --tlsv1.2 \
+      "https://$profile_domain/life.json"
+  ) || {
+    rm -f -- "$readback"
+    die "public HTTPS readback failed"
+  }
+  [[ "$metrics" == "200 0 https://$profile_domain/life.json" ]] || {
+    rm -f -- "$readback"
+    die "public HTTPS readback redirected or returned a non-exact route"
+  }
+  cmp -s -- "$current_real/life.json" "$readback" || {
+    rm -f -- "$readback"
+    die "public HTTPS life snapshot differs from the active local artifact"
+  }
+  rm -f -- "$readback"
+
+  python3 - \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$profile_release" \
+    "https://$profile_domain" \
+    "$commit" \
+    "$tree" \
+    "$backup_commit" \
+    "$snapshot_generated" <<'PY'
+import json
+import sys
+
+(
+    _,
+    generated_at,
+    release,
+    origin,
+    commit,
+    tree,
+    backup_commit,
+    snapshot_generated,
+) = sys.argv
+report = {
+    "schema_version": 1,
+    "profile": "public-host",
+    "result": "pass",
+    "generated_at": generated_at,
+    "release": release,
+    "origin": origin,
+    "production_tls": True,
+    "workspace": {
+        "commit": commit,
+        "tree": tree,
+    },
+    "backup": {
+        "workspace_commit_short": backup_commit,
+        "certificate_material_excluded": True,
+        "verified": True,
+    },
+    "snapshot": {
+        "generated_at": snapshot_generated,
+        "script_free": True,
+        "live_artifact_match": True,
+    },
+    "checks": [
+        "active-production-profile",
+        "certificate-present-and-live-https-valid",
+        "exact-no-redirect-origin-readback",
+        "live-snapshot-matches-active-artifact",
+        "checksum-verified-key-free-backup",
+        "nginx-valid-with-client-logging-disabled",
+        "public-refresh-timer-active",
+    ],
+    "boundary": (
+        "Operator-generated evidence verifies this origin and host lifecycle; "
+        "it does not prove operator independence, identity, or endorsement."
+    ),
+}
+print(json.dumps(report, indent=2, sort_keys=True))
+PY
+}
+
 cmd_publish() {
   [[ $# -eq 1 ]] || die "publish requires exactly one WORKSPACE"
   require_admin
@@ -1381,6 +1612,7 @@ main() {
   case "$command" in
     install) cmd_install "$@" ;;
     status) cmd_status "$@" ;;
+    evidence) cmd_evidence "$@" ;;
     publish) cmd_publish "$@" ;;
     backup) cmd_backup "$@" ;;
     restore) cmd_restore "$@" ;;

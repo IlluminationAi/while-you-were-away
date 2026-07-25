@@ -4,6 +4,14 @@
 
 ### Added
 
+- `wywa-life evidence` emits a path-free JSON report only after the
+  authenticated doctor, one successful receipt chain, clean checkpoint,
+  current private Git bundle, script-free local snapshot, and all three user
+  timers verify. `wywa-public evidence` separately requires production TLS and
+  an active profile, then checks exact no-redirect HTTPS readback against the
+  active artifact, the key-free public backup, nginx privacy, and its system
+  timer. The reports expose re-checkable hashes and public origin data without
+  pretending to prove operator identity or independence.
 - version-8 worker receipts bind a 128 MiB logical checkpoint budget, a
   4,096-path budget, the pre-stage workspace totals, and the exact candidate
   tree bytes and entries. `verify-receipt` recalculates tree usage from the
@@ -68,6 +76,10 @@
 
 ### Boundaries
 
+- the evidence reports are operator-generated summaries of locally and
+  publicly re-checkable artifacts. They reduce redaction and onboarding
+  ambiguity but are not signatures, attestations, proof of an independent
+  operator, or an endorsement;
 - the aggregate checkpoint gate limits what becomes accepted continuity; it
   is not a live filesystem quota and cannot prevent temporary disk consumption
   during the turn. An operator who needs that hard runtime boundary must still

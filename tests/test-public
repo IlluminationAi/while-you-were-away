@@ -131,6 +131,49 @@ EOF
 chmod 0755 -- "$fake_certbot"
 export WYWA_PUBLIC_CERTBOT_BIN=$fake_certbot
 
+fake_curl=$test_root/fake-curl
+cat >"$fake_curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output=
+url=
+while (( $# > 0 )); do
+  case "$1" in
+    --output)
+      output=$2
+      shift 2
+      ;;
+    https://*)
+      url=$1
+      shift
+      ;;
+    --write-out|--max-time|--proto)
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+[[ -n "$output" && -n "$url" ]]
+life=$(
+  find -L "$WYWA_PUBLIC_ROOT/var/www" \
+    -mindepth 3 \
+    -maxdepth 3 \
+    -path '*/current/life.json' \
+    -type f \
+    -print -quit
+)
+[[ -n "$life" ]]
+cp -- "$life" "$output"
+if [[ -f "$HOME/fake/readback-drift" ]]; then
+  printf '%s\n' "drift" >>"$output"
+fi
+printf '200 0 %s' "$url"
+EOF
+chmod 0755 -- "$fake_curl"
+export WYWA_PUBLIC_CURL_BIN=$fake_curl
+
 workspace=$test_root/nova-worker
 "$life" bootstrap "$workspace" --name "Nova" --accept-bounded-defaults \
   >/dev/null
@@ -323,6 +366,10 @@ grep -q '^certificate: present$' "$test_root/status-output" ||
 grep -q '^last public backup: ' "$test_root/status-output" ||
   fail "public status omitted backup state"
 
+expect_status 2 "$public" evidence "$workspace"
+grep -q 'evidence requires production TLS' "$test_root/stderr" ||
+  fail "public evidence accepted a staging certificate"
+
 old_release=$(sed -n 's/^release=//p' "$profile")
 upgrade_source=$test_root/upgrade-source
 cp -a -- "$repo_dir" "$upgrade_source"
@@ -353,6 +400,43 @@ grep -Fq -- '--force-renewal' "$HOME/fake/certbot-arguments" ||
 grep -q '^production TLS promoted: https://nova.example.test/$' \
   "$test_root/promote-output" ||
   fail "production promotion omitted its exact origin"
+
+"$public" evidence "$workspace" >"$test_root/public-evidence.json"
+python3 - "$test_root/public-evidence.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["schema_version"] == 1
+assert report["profile"] == "public-host"
+assert report["result"] == "pass"
+assert report["origin"] == "https://nova.example.test"
+assert report["production_tls"] is True
+assert report["backup"]["certificate_material_excluded"] is True
+assert report["snapshot"]["script_free"] is True
+assert report["snapshot"]["live_artifact_match"] is True
+assert "operator independence" in report["boundary"]
+PY
+if rg -q "$test_root|$workspace|$HOME|ops@example.test" \
+  "$test_root/public-evidence.json"; then
+  fail "public evidence exposed a private path or ACME contact"
+fi
+touch "$HOME/fake/readback-drift"
+expect_status 2 "$public" evidence "$workspace"
+rm -f -- "$HOME/fake/readback-drift"
+grep -q 'differs from the active local artifact' "$test_root/stderr" ||
+  fail "public evidence accepted a drifting live snapshot"
+git \
+  -C "$workspace" \
+  -c user.name="WYWA Test" \
+  -c user.email="wywa-test@localhost" \
+  commit -q --allow-empty -m "Advance trial checkpoint"
+expect_status 2 "$public" evidence "$workspace"
+grep -q 'public backup does not cover the current workspace checkpoint' \
+  "$test_root/stderr" ||
+  fail "public evidence accepted a stale public backup"
+"$public" backup "$workspace" >/dev/null
 
 failed_workspace=$test_root/failure-worker
 "$life" bootstrap \

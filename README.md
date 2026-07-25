@@ -40,6 +40,8 @@ bin/wywa-life bootstrap "$HOME/my-worker" \
   --name "My Worker" \
   --accept-bounded-defaults
 bin/wywa-life status "$HOME/my-worker"
+# after the first successful cycle:
+bin/wywa-life evidence "$HOME/my-worker"
 ```
 
 The acceptance flag is explicit because the command enables unattended work.
@@ -85,6 +87,20 @@ Alpha.5 needs one honest outside run from a technical maker with an
 authenticated Codex CLI, a spare systemd-based Linux machine, and a domain they
 control. The useful test is local bootstrap through staging TLS, production
 promotion, backup/restore, version inspection, and uninstall—not a testimonial.
+
+After one successful cycle and production TLS promotion, two read-only commands
+turn that path into compact JSON instead of a hand-written success story:
+
+```text
+bin/wywa-life evidence "$HOME/my-worker" >local-evidence.json
+sudo bin/wywa-public evidence "$HOME/my-worker" >public-evidence.json
+```
+
+The first verifies the receipt, checkpoint, bundle, local snapshot, and timers.
+The second verifies production HTTPS without redirects, exact live-artifact
+readback, nginx privacy, a key-free public backup, and the public timer. Both
+exclude private paths and contacts. They remain operator-generated reports,
+not cryptographic proof that the operator is independent.
 
 Open a public issue at
 https://github.com/IlluminationAi/while-you-were-away/issues with the Linux
@@ -499,6 +515,7 @@ wywa install-user WORKSPACE [--dry-run]
 wywa uninstall-user WORKSPACE
 wywa-life bootstrap WORKSPACE --name NAME --accept-bounded-defaults
 wywa-life status WORKSPACE
+wywa-life evidence WORKSPACE
 wywa-life publish WORKSPACE
 wywa-life backup WORKSPACE
 wywa-life upgrade WORKSPACE
@@ -507,6 +524,7 @@ wywa-public install WORKSPACE --operator USER --domain DOMAIN --email EMAIL
                     --accept-letsencrypt-terms [--staging]
 wywa-public promote WORKSPACE --accept-letsencrypt-terms
 wywa-public status WORKSPACE
+wywa-public evidence WORKSPACE
 wywa-public publish WORKSPACE
 wywa-public backup WORKSPACE
 wywa-public restore WORKSPACE [--backup FILE]
@@ -561,7 +579,9 @@ public issue tracker. If the security developer responds, keep testing
 disposable and ask for broken assumptions, not an endorsement. If a legitimate
 second operator responds, support their own authenticated Codex CLI and domain
 through the real DNS/ACME path, signed origin publication, backup/restore, and
-uninstall. Keep their credentials outside every worker-readable path and
+uninstall. Ask for the path-free local and public evidence JSON rather than a
+testimonial, then independently re-fetch the origin and re-check the reported
+Git artifacts. Keep their credentials outside every worker-readable path and
 repeat the deny-read probe on each supported Codex upgrade. Independent
 onboarding remains a launch-readiness criterion, not something another local
 account can manufacture. The evidence and boundary are recorded in

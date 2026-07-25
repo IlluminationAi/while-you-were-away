@@ -16,6 +16,7 @@ Usage:
                      [--session-only] [--dry-run]
   $program install WORKSPACE [--name NAME] [--session-only] [--dry-run]
   $program status WORKSPACE
+  $program evidence WORKSPACE
   $program publish WORKSPACE
   $program backup WORKSPACE
   $program upgrade WORKSPACE [--session-only] [--dry-run]
@@ -25,6 +26,7 @@ Commands:
   bootstrap  Initialize one worker and install its reversible local-life profile.
   install    Add scheduling, a reviewed local snapshot, and verified Git backups.
   status     Show the worker receipt, local snapshot, backup, and lifecycle state.
+  evidence   Verify one completed cycle and emit a path-free JSON trial report.
   publish    Refresh the static local-life snapshot now.
   backup     Create and verify a private Git bundle now.
   upgrade    Refresh installed code and units without replacing reviewed state.
@@ -593,6 +595,182 @@ cmd_status() {
   fi
 }
 
+cmd_evidence() {
+  [[ $# -eq 1 ]] || die "evidence requires exactly one WORKSPACE"
+  local workspace runtime profile identifier version commit tree
+  local worker_cli current current_real snapshot_generated
+  local receipt_line receipt_version receipt_commit
+  local backup_receipt backup_name backup_path systemctl_bin unit_dir name
+  workspace=$(absolute_path "$1")
+  validate_workspace "$workspace"
+  [[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
+    die "evidence requires a clean workspace"
+  runtime=$(runtime_for "$workspace")
+  profile=$runtime/life.conf
+  identifier=$(workspace_id "$workspace")
+  [[ -f "$profile" && ! -L "$profile" ]] ||
+    die "local-life profile is missing or unsafe"
+  [[ "$(wc -l <"$profile")" -eq 4 ]] ||
+    die "local-life profile has an unexpected field set"
+  grep -Fxq 'schema=1' "$profile" ||
+    die "local-life profile schema is unsupported"
+  grep -Fxq 'profile=local' "$profile" ||
+    die "local-life profile type is invalid"
+  grep -Fxq "workspace_id=$identifier" "$profile" ||
+    die "local-life profile belongs to a different workspace"
+  version=$(sed -n 's/^version=//p' "$profile")
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+$ ]] ||
+    die "local-life profile version is invalid"
+
+  worker_cli=$(installed_worker_cli)
+  "$worker_cli" doctor "$workspace" >/dev/null
+  "$worker_cli" verify-receipt "$workspace" >/dev/null
+  IFS= read -r receipt_line <"$runtime/last-run" ||
+    die "last-run receipt is empty"
+  receipt_version=
+  receipt_commit=
+  local token
+  for token in ${receipt_line% log=*}; do
+    case "$token" in
+      receipt=*) receipt_version=${token#receipt=} ;;
+      commit=*) receipt_commit=${token#commit=} ;;
+    esac
+  done
+  [[ "$receipt_version" =~ ^[0-9]+$ &&
+    "$receipt_commit" =~ ^[0-9a-f]{40}$ ]] ||
+    die "verified receipt omitted its version or checkpoint"
+
+  commit=$(git -C "$workspace" rev-parse HEAD)
+  tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
+  [[ "$commit" =~ ^[0-9a-f]{40}$ && "$tree" =~ ^[0-9a-f]{40}$ ]] ||
+    die "workspace checkpoint identifiers are invalid"
+
+  backup_receipt=$runtime/backup.last
+  [[ -f "$backup_receipt" && ! -L "$backup_receipt" ]] ||
+    die "backup receipt is missing or unsafe"
+  backup_name=
+  for token in $(<"$backup_receipt"); do
+    case "$token" in
+      bundle=*) backup_name=${token#bundle=} ;;
+    esac
+  done
+  [[ "$backup_name" =~ ^workspace-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}\.bundle$ ]] ||
+    die "backup receipt contains an invalid bundle name"
+  backup_path=$runtime/backups/$backup_name
+  [[ -f "$backup_path" && ! -L "$backup_path" ]] ||
+    die "recorded Git bundle is missing or unsafe"
+  git -C "$workspace" bundle verify "$backup_path" >/dev/null 2>&1 ||
+    die "recorded Git bundle failed verification"
+  git bundle list-heads "$backup_path" |
+    grep -Fq "$commit " ||
+    die "recorded Git bundle does not contain the current checkpoint"
+
+  current=$runtime/site/current
+  [[ -L "$current" ]] || die "local snapshot pointer is missing or unsafe"
+  current_real=$(realpath -e -- "$current")
+  [[ "$current_real" == "$runtime/site/releases/"* ]] ||
+    die "local snapshot pointer escapes its release directory"
+  local required
+  for required in index.html life.json feed.xml robots.txt assets/site.css; do
+    [[ -f "$current_real/$required" && ! -L "$current_real/$required" ]] ||
+      die "local snapshot is incomplete or unsafe"
+  done
+  ! grep -Eiq '<[[:space:]]*script([[:space:]>]|$)' \
+    "$current_real/index.html" ||
+    die "local snapshot unexpectedly contains a script"
+  snapshot_generated=$(
+    python3 - "$current_real/life.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if record.get("schema_version") != 1:
+    raise SystemExit("unsupported life snapshot schema")
+if record.get("site", {}).get("local_preview") is not True:
+    raise SystemExit("snapshot is not a local preview")
+generated = record.get("generated_at")
+if not isinstance(generated, str) or not generated.endswith("Z"):
+    raise SystemExit("snapshot timestamp is invalid")
+print(generated)
+PY
+  ) || die "local snapshot JSON failed validation"
+
+  systemctl_bin=$(resolve_systemctl)
+  unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+  for name in \
+    "wywa-$identifier.timer" \
+    "wywa-life-$identifier-publish.timer" \
+    "wywa-life-$identifier-backup.timer"
+  do
+    [[ -f "$unit_dir/$name" && ! -L "$unit_dir/$name" &&
+      "$(stat -c %a "$unit_dir/$name")" == 600 ]] ||
+      die "required private timer source is missing or unsafe: $name"
+    "$systemctl_bin" --user is-enabled --quiet "$name" ||
+      die "required timer is not enabled: $name"
+    "$systemctl_bin" --user is-active --quiet "$name" ||
+      die "required timer is not active: $name"
+  done
+
+  python3 - \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    "$version" \
+    "$commit" \
+    "$tree" \
+    "$receipt_version" \
+    "$receipt_commit" \
+    "$snapshot_generated" <<'PY'
+import json
+import sys
+
+(
+    _,
+    generated_at,
+    version,
+    commit,
+    tree,
+    receipt_version,
+    receipt_commit,
+    snapshot_generated,
+) = sys.argv
+report = {
+    "schema_version": 1,
+    "profile": "local",
+    "result": "pass",
+    "generated_at": generated_at,
+    "version": version,
+    "workspace": {
+        "commit": commit,
+        "tree": tree,
+        "clean": True,
+    },
+    "receipt": {
+        "version": int(receipt_version),
+        "checkpoint": receipt_commit,
+        "verified": True,
+    },
+    "snapshot": {
+        "generated_at": snapshot_generated,
+        "script_free": True,
+        "verified": True,
+    },
+    "checks": [
+        "authenticated-runtime-doctor",
+        "successful-receipt-chain",
+        "clean-git-checkpoint",
+        "current-checkpoint-in-private-bundle",
+        "local-snapshot-schema-and-script-boundary",
+        "three-active-completion-relative-timers",
+    ],
+    "boundary": (
+        "Operator-generated evidence; the commit, tree, and receipt remain "
+        "independently re-checkable artifacts, not proof of operator identity."
+    ),
+}
+print(json.dumps(report, indent=2, sort_keys=True))
+PY
+}
+
 cmd_upgrade() {
   parse_install_options "$@"
   local workspace runtime
@@ -670,6 +848,9 @@ main() {
       ;;
     status)
       cmd_status "$@"
+      ;;
+    evidence)
+      cmd_evidence "$@"
       ;;
     publish)
       cmd_publish "$@"

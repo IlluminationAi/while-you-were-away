@@ -54,6 +54,11 @@ onboarding friction and the checkpoint boundary.
 - A separate disposable non-root account used a real systemd user manager to
   bootstrap, activate all three timers, upgrade, and uninstall while preserving
   its snapshot and backup.
+- Path-free local and public evidence commands now refuse partial success: the
+  local report needs a verified cycle, bundle, snapshot, and timers; the public
+  report needs production TLS, exact live-artifact readback, a key-free backup,
+  nginx privacy, and its timer. These reports reduce review friction but do not
+  manufacture an independent operator.
 
 ## Gallery storyboard
 
@@ -85,6 +90,8 @@ bin/wywa-life bootstrap "$HOME/my-worker" \
   --name "My Worker" \
   --accept-bounded-defaults
 bin/wywa-life status "$HOME/my-worker"
+# after the first successful cycle:
+bin/wywa-life evidence "$HOME/my-worker"
 ```
 
 Then show the private static preview, `git log -2 --oneline`, the backup

@@ -44,7 +44,28 @@ fi
 if [[ "${1:-}" == login && "${2:-}" == status ]]; then
   exit 0
 fi
-exit 90
+
+workspace=
+output_file=
+arguments=("$@")
+for ((index = 0; index < ${#arguments[@]}; index++)); do
+  case "${arguments[$index]}" in
+    --cd)
+      workspace=${arguments[$((index + 1))]}
+      ;;
+    --output-last-message)
+      output_file=${arguments[$((index + 1))]}
+      ;;
+  esac
+done
+[[ -n "$workspace" && -n "$output_file" ]] || exit 90
+printf '%s\n' "independent-trial fixture" >"$workspace/trial-artifact.txt"
+printf '%s\n' "trial cycle complete" >"$output_file"
+printf '%s\n' \
+  '{"type":"thread.started","thread_id":"trial-thread"}' \
+  '{"type":"turn.started"}' \
+  '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"trial complete"}}' \
+  '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
 EOF
 chmod 0755 -- "$fake_codex"
 export WYWA_CODEX_BIN=$fake_codex
@@ -218,6 +239,39 @@ grep -q '^snapshot generated: ' "$test_root/status-output" ||
 grep -q '^last backup: ' "$test_root/status-output" ||
   fail "status omitted the backup receipt"
 
+expect_status 2 "$life" evidence "$workspace"
+grep -q 'last-run receipt is missing' "$test_root/stderr" ||
+  fail "evidence accepted a lifecycle without one completed worker cycle"
+
+"$HOME/.local/lib/wywa/bin/wywa" run "$workspace" --max-runtime 1m \
+  >/dev/null
+"$life" publish "$workspace" >/dev/null
+"$life" backup "$workspace" >/dev/null
+"$life" evidence "$workspace" >"$test_root/evidence.json"
+python3 - "$test_root/evidence.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert report["schema_version"] == 1
+assert report["profile"] == "local"
+assert report["result"] == "pass"
+assert report["receipt"]["version"] == 8
+assert report["receipt"]["verified"] is True
+assert report["workspace"]["clean"] is True
+assert report["snapshot"]["script_free"] is True
+assert "operator identity" in report["boundary"]
+PY
+if rg -q "$test_root|$workspace|$HOME" "$test_root/evidence.json"; then
+  fail "local evidence exposed a private path"
+fi
+printf '%s\n' "unaccepted trial state" >"$workspace/uncommitted.txt"
+expect_status 2 "$life" evidence "$workspace"
+grep -q 'evidence requires a clean workspace' "$test_root/stderr" ||
+  fail "local evidence accepted uncommitted state"
+rm -f -- "$workspace/uncommitted.txt"
+
 python3 - "$workspace/public/state.json" <<'PY'
 import json
 import sys
@@ -242,16 +296,16 @@ from pathlib import Path
 
 life = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 assert life["now"]["focus"] == "Testing a reviewed state refresh."
-assert life["metrics"]["workspace_commits"] == 3
+assert life["metrics"]["workspace_commits"] == 4
 PY
 
 "$life" backup "$workspace" >/dev/null
 mapfile -t bundles < <(
   find "$backup_dir" -mindepth 1 -maxdepth 1 -type f -name '*.bundle' -print
 )
-[[ ${#bundles[@]} -eq 2 ]] ||
-  fail "manual backup did not add a second bundle"
-git -C "$workspace" bundle verify "${bundles[1]}" >/dev/null ||
+[[ ${#bundles[@]} -eq 3 ]] ||
+  fail "manual backup did not add a third bundle"
+git -C "$workspace" bundle verify "${bundles[2]}" >/dev/null ||
   fail "manual Git bundle did not verify"
 
 state_hash=$(sha256sum "$workspace/public/state.json")
