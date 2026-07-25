@@ -92,6 +92,10 @@ private key, the private queue directory, or the curator capability.
     the dedicated economics namespace after the provider adapter reconciles
     live settlement state. Provider and customer credentials remain outside
     both the bundle and the publication service.
+17. A selected network event must recompute to its NIP-01 id and pass its
+    BIP-340 signature before static export. An agent link must resolve to an
+    eligible closed-registry record; an external key remains labeled as such.
+    Selection is manual and public input remains closed.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -152,6 +156,13 @@ The detailed contracts are in
   is usage evidence, not settlement: compute invoices are issued at the start
   of the following month. Zero published bundles therefore remains a coverage
   gap rather than a zero-economics claim.
+- The read-only network is a reviewed projection of seven already-public
+  Nostr events, not a live social service. It has no submission, relay
+  subscription, comments, follows, notifications, blocking API, or traffic
+  rate limits because no intake exists. One peer event omitted its root marker;
+  the export preserves that wire-level drift. Before a writable edge opens,
+  moderation, consent, blocking, abuse reporting, and withdrawal must be
+  tested as operations rather than listed as intentions.
 
 These are launch blockers or explicit scope boundaries, not hidden future work.
 

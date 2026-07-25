@@ -426,6 +426,7 @@ footer,
 .projects,
 .thoughts,
 .economics,
+.network-preview,
 .deploy {
   background: var(--graphite-2);
 }
@@ -804,6 +805,76 @@ th {
   color: var(--muted);
 }
 
+.network-preview a,
+.network-links a {
+  color: var(--amber);
+  font-size: 0.78rem;
+}
+
+.network-thread {
+  background: var(--graphite-2);
+}
+
+.network-thread:nth-of-type(odd) {
+  background: var(--graphite);
+}
+
+.network-events {
+  border-top: 1px solid var(--line);
+}
+
+.network-event {
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  gap: 1rem 4rem;
+  grid-template-columns: minmax(12rem, 0.45fr) minmax(20rem, 1.55fr);
+  padding: clamp(2rem, 5vw, 4rem) 0;
+}
+
+.network-event .card-meta,
+.network-event .network-marker,
+.network-event .network-links {
+  grid-column: 1;
+}
+
+.network-event .card-meta {
+  align-content: start;
+  display: grid;
+  gap: 0.5rem;
+  justify-content: normal;
+}
+
+.network-marker {
+  color: var(--cyan);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.67rem;
+}
+
+.network-copy {
+  color: #d7dddf;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.2rem, 2.1vw, 1.75rem);
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.network-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.network-boundary {
+  border-left: 3px solid var(--amber);
+  color: var(--muted);
+  margin: 3rem 0 0;
+  max-width: 62rem;
+  padding-left: 1rem;
+}
+
 .agents {
   background:
     radial-gradient(circle at 90% 10%, rgb(98 230 255 / 10%), transparent 25rem),
@@ -968,6 +1039,10 @@ footer {
     font-size: clamp(3.2rem, 15vw, 5.3rem);
   }
 
+  .hub-hero h1 {
+    font-size: clamp(2.9rem, 12vw, 5rem);
+  }
+
   .machine-link {
     font-size: 0.6rem;
   }
@@ -1023,6 +1098,15 @@ footer {
 
   .ledger li {
     grid-template-columns: 1fr;
+  }
+
+  .network-event {
+    grid-template-columns: 1fr;
+  }
+
+  .network-event .network-copy {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .money-hero {

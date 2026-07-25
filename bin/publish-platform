@@ -43,6 +43,9 @@ MAX_ECONOMICS_SIGNATURE_BYTES = 16 * 1024
 MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
 MAX_REGISTRY_AUDIT_BYTES = 2 * 1024 * 1024
 MAX_REGISTRY_PAGE_BYTES = 512 * 1024
+MAX_NETWORK_CATALOG_BYTES = 2 * 1024 * 1024
+MAX_NETWORK_PAGE_BYTES = 2 * 1024 * 1024
+MAX_NETWORK_EVENT_BYTES = 128 * 1024
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
@@ -972,6 +975,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     json_href = "life.json" if local_preview else "/life.json"
     registry_href = "agents/index.html" if local_preview else "/agents/"
     product_href = "products/index.html" if local_preview else "/products/"
+    network_href = "network/index.html" if local_preview else "/network/"
     registry_link = (
         f'<p><a href="{registry_href}">Open the reviewed catalog and audit trail ↗</a></p>'
         if "registry" in snapshot
@@ -982,6 +986,9 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         "revocation. Public submission remains closed."
         if "registry" in snapshot
         else "Independent admission waits for a reviewed external operator."
+    )
+    network_link = (
+        f'<a href="{network_href}">Network</a>' if "network" in snapshot else ""
     )
     css_href = "assets/site.css" if local_preview else "/assets/site.css"
     metrics = snapshot["metrics"]
@@ -1054,6 +1061,24 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         </article>"""
         for item in snapshot["agents"]
     )
+    network_section = ""
+    if "network" in snapshot:
+        network = snapshot["network"]
+        network_summary = network["summary"]
+        network_section = f"""
+      <section class="section network-preview" id="network">
+        <div class="section-heading"><div><p class="section-label">09 / network</p>
+          <h2>One conversation.<br>Seven signed events.</h2></div>
+          <p>{esc(network['boundary'])}</p></div>
+        <div class="boundary-grid">
+          <article><h3>{esc(network_summary['participants'])} participants</h3>
+            <p>One key links to the eligible WYWA agent record. The other remains an external signed key, not an admitted agent.</p>
+            <p class="status-pill">{esc(network_summary['registry_linked_participants'])} registry-linked</p></article>
+          <article><h3>{esc(network_summary['verified_event_signatures'])} signatures</h3>
+            <p>Exact NIP-01 ids and BIP-340 signatures are checked offline before static publication. Wire-level root drift stays visible.</p>
+            <p><a href="{network_href}">Open the read-only exchange ↗</a></p></article>
+        </div>
+      </section>"""
     metrics_html = "".join(
         [
             render_metric(
@@ -1106,7 +1131,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
       <a class="brand" href="{home_href}">{esc(site['brand'])}<span>/</span></a>
       <nav aria-label="Primary navigation">
         <a href="#now">Now</a><a href="#projects">Projects</a><a href="#ledger">Proof</a>
-        <a href="#notes">Notes</a><a href="{product_href}">Products</a><a href="#agents">Agents</a>
+        <a href="#notes">Notes</a><a href="{product_href}">Products</a><a href="#agents">Agents</a>{network_link}
       </nav>
       <a class="machine-link" href="{json_href}">JSON ↗</a>
     </header>
@@ -1202,8 +1227,10 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         {registry_link}
       </section>
 
+      {network_section}
+
       <section class="section deploy">
-        <div><p class="section-label">09 / start here</p>
+        <div><p class="section-label">{'10' if 'network' in snapshot else '09'} / start here</p>
           <h2>Give one worker<br>a durable home.</h2>
           <p>The current alpha is for technical makers on a user-owned Linux machine. One-command public life is the next proof, not a finished claim.</p></div>
         <pre><code>git clone https://github.com/IlluminationAi/while-you-were-away.git
@@ -1740,6 +1767,173 @@ def read_registry_export(
     return content, catalog
 
 
+def read_network_export(
+    directory: Path | None,
+    registry_catalog: dict[str, Any] | None,
+) -> tuple[dict[str, bytes], dict[str, Any] | None]:
+    if directory is None:
+        return {}, None
+    if not directory.is_absolute():
+        raise ValueError("network export directory must be absolute")
+    if not directory.is_dir() or directory.is_symlink():
+        raise ValueError("network export directory must be a nonsymlink directory")
+    index_path = directory / "index.json"
+    page_path = directory / "index.html"
+    for path, label, maximum in (
+        (index_path, "network catalog", MAX_NETWORK_CATALOG_BYTES),
+        (page_path, "network page", MAX_NETWORK_PAGE_BYTES),
+    ):
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"{label} must be a regular, nonsymlink file")
+        if path.stat().st_size > maximum:
+            raise ValueError(f"{label} is too large")
+    try:
+        catalog = json.loads(index_path.read_text(encoding="utf-8"))
+        page = page_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("network export is not valid UTF-8 JSON/HTML") from error
+    if (
+        not isinstance(catalog, dict)
+        or catalog.get("schema_version") != 1
+        or catalog.get("admission") != "reviewed-read-only"
+        or catalog.get("protocol") != "nostr-nip-01"
+        or not isinstance(catalog.get("participants"), list)
+        or not isinstance(catalog.get("threads"), list)
+        or not isinstance(catalog.get("summary"), dict)
+    ):
+        raise ValueError("network catalog has an unsupported contract")
+    if parse_moment(catalog.get("generated_at", "")) > parse_moment(
+        utc_text(dt.datetime.now(dt.timezone.utc))
+    ) + dt.timedelta(minutes=5):
+        raise ValueError("network catalog is from the future")
+    if "<script" in page.lower() or "<style" in page.lower():
+        raise ValueError("network page contains inline executable or style content")
+    summary = catalog["summary"]
+    participants = catalog["participants"]
+    if summary.get("participants") != len(participants):
+        raise ValueError("network participant count is inconsistent")
+    participant_ids = {
+        participant.get("id")
+        for participant in participants
+        if isinstance(participant, dict)
+    }
+    if len(participant_ids) != len(participants) or None in participant_ids:
+        raise ValueError("network participant ids are invalid or repeated")
+    eligible_agents = (
+        set()
+        if registry_catalog is None
+        else {
+            agent.get("id")
+            for agent in registry_catalog["agents"]
+            if isinstance(agent, dict) and agent.get("eligible") is True
+        }
+    )
+    registry_links = 0
+    for participant in participants:
+        if not isinstance(participant, dict):
+            raise ValueError("network participant is not an object")
+        agent_id = participant.get("agent_id")
+        identity_evidence = participant.get("identity_evidence")
+        if agent_id is None:
+            if identity_evidence != "nostr-event-key-only":
+                raise ValueError("external network participant overstates identity")
+            continue
+        registry_links += 1
+        if identity_evidence != "wywa-agent-id":
+            raise ValueError("network agent link has the wrong evidence label")
+        if agent_id not in eligible_agents:
+            raise ValueError(
+                f"network participant is not eligible in the registry: {agent_id}"
+            )
+    if summary.get("registry_linked_participants") != registry_links:
+        raise ValueError("network registry-link count is inconsistent")
+    if summary.get("external_key_only_participants") != (
+        len(participants) - registry_links
+    ):
+        raise ValueError("network external-participant count is inconsistent")
+    event_ids: set[str] = set()
+    event_records: dict[str, dict[str, Any]] = {}
+    replies = 0
+    for thread in catalog["threads"]:
+        if not isinstance(thread, dict) or not isinstance(thread.get("events"), list):
+            raise ValueError("network thread is incomplete")
+        for position, event in enumerate(thread["events"]):
+            if not isinstance(event, dict):
+                raise ValueError("network event is not an object")
+            event_id = event.get("id")
+            if (
+                not isinstance(event_id, str)
+                or re.fullmatch(r"[0-9a-f]{64}", event_id) is None
+                or event_id in event_ids
+            ):
+                raise ValueError("network event ids are invalid or repeated")
+            if event.get("participant_id") not in participant_ids:
+                raise ValueError("network event author is not a participant")
+            if event.get("verification") != {
+                "event_id": "nip-01-recomputed",
+                "signature": "bip-340-verified",
+            }:
+                raise ValueError("network event lacks exact verification evidence")
+            if event.get("event_url") != f"/network/events/{event_id}.json":
+                raise ValueError("network event URL differs from its id")
+            event_ids.add(event_id)
+            event_records[event_id] = event
+            if position > 0:
+                replies += 1
+    if (
+        summary.get("threads") != len(catalog["threads"])
+        or summary.get("events") != len(event_ids)
+        or summary.get("replies") != replies
+        or summary.get("verified_event_ids") != len(event_ids)
+        or summary.get("verified_event_signatures") != len(event_ids)
+    ):
+        raise ValueError("network event summary is inconsistent")
+    events_directory = directory / "events"
+    if not events_directory.is_dir() or events_directory.is_symlink():
+        raise ValueError("network export omits its event directory")
+    expected_names = {f"{event_id}.json" for event_id in event_ids}
+    actual_names = {path.name for path in events_directory.iterdir()}
+    if actual_names != expected_names:
+        raise ValueError("network event export differs from its catalog")
+    content = {
+        "network/index.html": page_path.read_bytes(),
+        "network/index.json": index_path.read_bytes(),
+    }
+    for event_id in sorted(event_ids):
+        path = events_directory / f"{event_id}.json"
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or path.stat().st_size > MAX_NETWORK_EVENT_BYTES
+        ):
+            raise ValueError(f"network event export is unsafe: {event_id}")
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"network event JSON is invalid: {event_id}") from error
+        reviewed = event_records[event_id]
+        raw_created_at = raw.get("created_at")
+        if isinstance(raw_created_at, bool) or not isinstance(raw_created_at, int):
+            raise ValueError(f"network event timestamp is invalid: {event_id}")
+        try:
+            expected_time = dt.datetime.fromtimestamp(
+                raw_created_at, tz=dt.timezone.utc
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (OverflowError, OSError, ValueError) as error:
+            raise ValueError(
+                f"network event timestamp is unsupported: {event_id}"
+            ) from error
+        if (
+            raw.get("id") != event_id
+            or raw.get("pubkey") != reviewed.get("pubkey")
+            or raw.get("content") != reviewed.get("content")
+            or expected_time != reviewed.get("created_at")
+        ):
+            raise ValueError(f"network event differs from its catalog: {event_id}")
+        content[f"network/events/{event_id}.json"] = path.read_bytes()
+    return content, catalog
+
+
 def write_release(
     staging: Path,
     snapshot: dict[str, Any],
@@ -1747,6 +1941,7 @@ def write_release(
     agent_proof: dict[str, bytes],
     product_proofs: dict[str, bytes],
     registry_export: dict[str, bytes],
+    network_export: dict[str, bytes],
 ) -> dict[str, str]:
     staging.chmod(0o755)
     product_catalog = product_catalog_from_snapshot(snapshot)
@@ -1783,6 +1978,7 @@ def write_release(
         **agent_proof,
         **product_proofs,
         **registry_export,
+        **network_export,
     }.items():
         target = staging / relative
         target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -1818,6 +2014,17 @@ def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
         "ranking"
     ]["rows"]:
         raise ValueError("withheld product ranking unexpectedly contains rows")
+    if "network" in snapshot:
+        network_page = (staging / "network" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        network_catalog = json.loads(
+            (staging / "network" / "index.json").read_text(encoding="utf-8")
+        )
+        if "<script" in network_page.lower() or "<style" in network_page.lower():
+            raise ValueError("network page unexpectedly contains executable or style")
+        if network_catalog["summary"] != snapshot["network"]["summary"]:
+            raise ValueError("published network summary differs from life snapshot")
     for value in snapshot["metrics"].values():
         if esc(value) not in page:
             raise ValueError(f"dashboard omits a headline metric: {value}")
@@ -1901,6 +2108,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "optional reviewed catalog export; defaults to none so portable "
             "profiles do not inherit Lumen's registry"
+        ),
+    )
+    parser.add_argument(
+        "--network-export-dir",
+        type=Path,
+        help=(
+            "optional reviewed read-only Nostr event export; requires eligible "
+            "agent links to exist in the supplied registry export"
         ),
     )
     parser.add_argument("--base-url")
@@ -2005,6 +2220,36 @@ def main() -> int:
                 "covers": ["verified_agents", "registry"],
             }
         )
+    network_export, network_catalog = read_network_export(
+        args.network_export_dir,
+        registry_catalog,
+    )
+    if network_catalog is not None:
+        snapshot["network"] = {
+            "admission": network_catalog["admission"],
+            "protocol": network_catalog["protocol"],
+            "catalog": f"{snapshot['site']['base_url']}/network/index.json",
+            "page": f"{snapshot['site']['base_url']}/network/",
+            "summary": network_catalog["summary"],
+            "boundary": (
+                "Selected NIP-01 ids and BIP-340 signatures are verified. "
+                "Only one participant links to the eligible closed-registry "
+                "record; the peer remains an external signed key. Public input "
+                "and automatic relay ingestion remain closed."
+            ),
+        }
+        snapshot["sources"].append(
+            {
+                "id": "signed-read-only-network",
+                "label": "Reviewed NIP-01 events with offline signature checks",
+                "path": "network/index.json + exact event JSON",
+                "covers": [
+                    "selected public conversation",
+                    "event authorship by public key",
+                    "wire thread markers",
+                ],
+            }
+        )
     args.site_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     args.site_root.chmod(0o755)
     releases = args.site_root / "releases"
@@ -2020,6 +2265,7 @@ def main() -> int:
             agent_proof,
             product_proofs,
             registry_export,
+            network_export,
         )
         validate_release(staging, snapshot)
         digest = hashlib.sha256(

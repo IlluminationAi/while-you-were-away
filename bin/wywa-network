@@ -1,0 +1,838 @@
+#!/usr/bin/env python3
+"""Compile a reviewed, read-only WYWA network view from signed Nostr events."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import html
+import json
+import os
+import re
+import shutil
+import stat
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+
+PROGRAM = Path(__file__).name
+MAX_EVENT_BYTES = 128 * 1024
+MAX_REVIEW_BYTES = 256 * 1024
+MAX_CONTENT_CHARS = 100_000
+MAX_PARTICIPANTS = 64
+MAX_THREADS = 128
+MAX_EVENTS = 1_024
+HEX_32 = re.compile(r"^[0-9a-f]{64}$")
+HEX_64 = re.compile(r"^[0-9a-f]{128}$")
+PUBLIC_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+CLOCK_SKEW = dt.timedelta(minutes=5)
+
+# secp256k1 and BIP-340 verification constants. The deliberately small
+# verifier follows BIP-340's verification algorithm and is used only for
+# bounded public events, never for signing or secret-key operations.
+FIELD_P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
+GROUP_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+GENERATOR = (
+    0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798,
+    0x483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8,
+)
+Point = tuple[int, int] | None
+
+
+class NetworkError(Exception):
+    """A bounded, user-facing network compilation error."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def visible_time(value: int) -> str:
+    return dt.datetime.fromtimestamp(
+        value, tz=dt.timezone.utc
+    ).strftime("%d %b %Y · %H:%M UTC")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise NetworkError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise NetworkError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise NetworkError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise NetworkError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise NetworkError(f"JSON repeats key: {key}")
+        record[key] = value
+    return record
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise NetworkError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise NetworkError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_nlink != 1:
+        raise NetworkError(f"{label} must have exactly one hard link")
+    if metadata.st_size == 0 or metadata.st_size > maximum:
+        raise NetworkError(f"{label} must contain between 1 and {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def load_json(path: Path, label: str, maximum: int) -> dict[str, Any]:
+    data = read_regular(path, label, maximum)
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise NetworkError(f"{label} is not UTF-8") from error
+    try:
+        record = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise NetworkError(f"{label} is not valid JSON") from error
+    if not isinstance(record, dict):
+        raise NetworkError(f"{label} must be a JSON object")
+    return record
+
+
+def exact_keys(record: dict[str, Any], expected: set[str], label: str) -> None:
+    actual = set(record)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    details = []
+    if missing:
+        details.append(f"missing {', '.join(missing)}")
+    if extra:
+        details.append(f"unknown {', '.join(extra)}")
+    raise NetworkError(f"{label} has {'; '.join(details)}")
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    allow_newlines: bool = False,
+) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= maximum:
+        raise NetworkError(f"{label} must contain between 1 and {maximum} characters")
+    for character in value:
+        codepoint = ord(character)
+        if codepoint == 127 or (
+            codepoint < 32 and not (allow_newlines and character in "\n\t")
+        ):
+            raise NetworkError(f"{label} contains a control character")
+    return value
+
+
+def https_url(value: object, label: str) -> str:
+    url = bounded_text(value, label, 2_048)
+    if not url.startswith("https://"):
+        raise NetworkError(f"{label} must use HTTPS")
+    return url
+
+
+def point_add(first: Point, second: Point) -> Point:
+    if first is None:
+        return second
+    if second is None:
+        return first
+    x1, y1 = first
+    x2, y2 = second
+    if x1 == x2 and (y1 != y2 or y1 == 0):
+        return None
+    if x1 == x2:
+        slope = (3 * x1 * x1) * pow(2 * y1, FIELD_P - 2, FIELD_P)
+    else:
+        slope = (y2 - y1) * pow((x2 - x1) % FIELD_P, FIELD_P - 2, FIELD_P)
+    slope %= FIELD_P
+    x3 = (slope * slope - x1 - x2) % FIELD_P
+    y3 = (slope * (x1 - x3) - y1) % FIELD_P
+    return x3, y3
+
+
+def point_multiply(point: Point, scalar: int) -> Point:
+    result: Point = None
+    current = point
+    value = scalar
+    while value:
+        if value & 1:
+            result = point_add(result, current)
+        current = point_add(current, current)
+        value >>= 1
+    return result
+
+
+def lift_x(value: int) -> Point:
+    if value >= FIELD_P:
+        return None
+    square = (pow(value, 3, FIELD_P) + 7) % FIELD_P
+    y_value = pow(square, (FIELD_P + 1) // 4, FIELD_P)
+    if pow(y_value, 2, FIELD_P) != square:
+        return None
+    if y_value & 1:
+        y_value = FIELD_P - y_value
+    return value, y_value
+
+
+def tagged_hash(tag: str, message: bytes) -> bytes:
+    tag_hash = hashlib.sha256(tag.encode("utf-8")).digest()
+    return hashlib.sha256(tag_hash + tag_hash + message).digest()
+
+
+def verify_bip340(public_key: bytes, message: bytes, signature: bytes) -> bool:
+    if len(public_key) != 32 or len(message) != 32 or len(signature) != 64:
+        return False
+    point = lift_x(int.from_bytes(public_key, "big"))
+    if point is None:
+        return False
+    r_value = int.from_bytes(signature[:32], "big")
+    s_value = int.from_bytes(signature[32:], "big")
+    if r_value >= FIELD_P or s_value >= GROUP_N:
+        return False
+    challenge = int.from_bytes(
+        tagged_hash(
+            "BIP0340/challenge",
+            signature[:32] + public_key + message,
+        ),
+        "big",
+    ) % GROUP_N
+    candidate = point_add(
+        point_multiply(GENERATOR, s_value),
+        point_multiply(point, GROUP_N - challenge),
+    )
+    return (
+        candidate is not None
+        and candidate[1] % 2 == 0
+        and candidate[0] == r_value
+    )
+
+
+def event_identifier(event: dict[str, Any]) -> str:
+    serialized = json.dumps(
+        [
+            0,
+            event["pubkey"],
+            event["created_at"],
+            event["kind"],
+            event["tags"],
+            event["content"],
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def validate_event(
+    event: dict[str, Any],
+    expected_id: str,
+    *,
+    as_of: dt.datetime,
+) -> dict[str, Any]:
+    exact_keys(
+        event,
+        {"id", "pubkey", "created_at", "kind", "tags", "content", "sig"},
+        f"event {expected_id}",
+    )
+    if event["id"] != expected_id or HEX_32.fullmatch(event["id"]) is None:
+        raise NetworkError(f"event filename and id differ: {expected_id}")
+    if HEX_32.fullmatch(event["pubkey"]) is None:
+        raise NetworkError(f"event {expected_id} has an invalid public key")
+    if HEX_64.fullmatch(event["sig"]) is None:
+        raise NetworkError(f"event {expected_id} has an invalid signature encoding")
+    if event["kind"] != 1:
+        raise NetworkError(f"event {expected_id} is not a public text note")
+    created_at = event["created_at"]
+    if (
+        isinstance(created_at, bool)
+        or not isinstance(created_at, int)
+        or created_at < 0
+    ):
+        raise NetworkError(f"event {expected_id} has an invalid timestamp")
+    try:
+        event_time = dt.datetime.fromtimestamp(
+            created_at, tz=dt.timezone.utc
+        )
+    except (OverflowError, OSError, ValueError) as error:
+        raise NetworkError(
+            f"event {expected_id} has an unsupported timestamp"
+        ) from error
+    if event_time > as_of + CLOCK_SKEW:
+        raise NetworkError(f"event {expected_id} is from the future")
+    bounded_text(
+        event["content"],
+        f"event {expected_id} content",
+        MAX_CONTENT_CHARS,
+        allow_newlines=True,
+    )
+    tags = event["tags"]
+    if not isinstance(tags, list) or len(tags) > 1_024:
+        raise NetworkError(f"event {expected_id} has invalid tags")
+    for tag in tags:
+        if (
+            not isinstance(tag, list)
+            or not tag
+            or len(tag) > 16
+            or any(not isinstance(value, str) for value in tag)
+        ):
+            raise NetworkError(f"event {expected_id} has an invalid tag")
+    calculated = event_identifier(event)
+    if calculated != expected_id:
+        raise NetworkError(f"event {expected_id} fails NIP-01 id verification")
+    if not verify_bip340(
+        bytes.fromhex(event["pubkey"]),
+        bytes.fromhex(expected_id),
+        bytes.fromhex(event["sig"]),
+    ):
+        raise NetworkError(f"event {expected_id} fails BIP-340 signature verification")
+    return event
+
+
+def load_review(path: Path) -> dict[str, Any]:
+    review = load_json(path, "network review", MAX_REVIEW_BYTES)
+    exact_keys(
+        review,
+        {
+            "schema_version",
+            "title",
+            "description",
+            "admission",
+            "protocol",
+            "participants",
+            "threads",
+            "policy",
+            "boundaries",
+        },
+        "network review",
+    )
+    if review["schema_version"] != 1:
+        raise NetworkError("network review has an unsupported schema")
+    if review["admission"] != "reviewed-read-only":
+        raise NetworkError("network admission must remain reviewed-read-only")
+    if review["protocol"] != "nostr-nip-01":
+        raise NetworkError("network protocol must be nostr-nip-01")
+    bounded_text(review["title"], "network title", 160)
+    bounded_text(review["description"], "network description", 1_000)
+    participants = review["participants"]
+    if (
+        not isinstance(participants, list)
+        or not 1 <= len(participants) <= MAX_PARTICIPANTS
+    ):
+        raise NetworkError("network participants are missing or excessive")
+    participant_ids: set[str] = set()
+    participant_keys: set[str] = set()
+    for participant in participants:
+        if not isinstance(participant, dict):
+            raise NetworkError("network participant must be an object")
+        exact_keys(
+            participant,
+            {
+                "id",
+                "name",
+                "pubkey",
+                "agent_id",
+                "identity_evidence",
+                "url",
+                "boundary",
+            },
+            "network participant",
+        )
+        participant_id = participant["id"]
+        if (
+            not isinstance(participant_id, str)
+            or PUBLIC_ID.fullmatch(participant_id) is None
+            or participant_id in participant_ids
+        ):
+            raise NetworkError("network participant ids must be unique public ids")
+        participant_ids.add(participant_id)
+        if (
+            not isinstance(participant["pubkey"], str)
+            or HEX_32.fullmatch(participant["pubkey"]) is None
+            or participant["pubkey"] in participant_keys
+        ):
+            raise NetworkError("network participant public keys must be unique")
+        participant_keys.add(participant["pubkey"])
+        agent_id = participant["agent_id"]
+        if agent_id is not None and (
+            not isinstance(agent_id, str)
+            or PUBLIC_ID.fullmatch(agent_id) is None
+        ):
+            raise NetworkError("network participant agent_id is invalid")
+        if participant["identity_evidence"] not in {
+            "wywa-agent-id",
+            "nostr-event-key-only",
+        }:
+            raise NetworkError("network participant identity evidence is invalid")
+        if (agent_id is None) != (
+            participant["identity_evidence"] == "nostr-event-key-only"
+        ):
+            raise NetworkError(
+                "network participant agent link and identity evidence disagree"
+            )
+        bounded_text(participant["name"], "network participant name", 120)
+        https_url(participant["url"], "network participant URL")
+        bounded_text(participant["boundary"], "network participant boundary", 800)
+    threads = review["threads"]
+    if (
+        not isinstance(threads, list)
+        or not 1 <= len(threads) <= MAX_THREADS
+    ):
+        raise NetworkError("network threads are missing or excessive")
+    thread_ids: set[str] = set()
+    event_ids: set[str] = set()
+    for thread in threads:
+        if not isinstance(thread, dict):
+            raise NetworkError("network thread must be an object")
+        exact_keys(
+            thread,
+            {"id", "title", "summary", "event_ids", "boundary"},
+            "network thread",
+        )
+        thread_id = thread["id"]
+        if (
+            not isinstance(thread_id, str)
+            or PUBLIC_ID.fullmatch(thread_id) is None
+            or thread_id in thread_ids
+        ):
+            raise NetworkError("network thread ids must be unique public ids")
+        thread_ids.add(thread_id)
+        bounded_text(thread["title"], "network thread title", 180)
+        bounded_text(thread["summary"], "network thread summary", 1_500)
+        bounded_text(thread["boundary"], "network thread boundary", 1_500)
+        selected = thread["event_ids"]
+        if not isinstance(selected, list) or not selected:
+            raise NetworkError(f"network thread {thread_id} has no events")
+        for event_id in selected:
+            if (
+                not isinstance(event_id, str)
+                or HEX_32.fullmatch(event_id) is None
+                or event_id in event_ids
+            ):
+                raise NetworkError("network event ids must be unique 32-byte hex")
+            event_ids.add(event_id)
+    if len(event_ids) > MAX_EVENTS:
+        raise NetworkError("network review selects too many events")
+    policy = review["policy"]
+    if not isinstance(policy, dict):
+        raise NetworkError("network policy must be an object")
+    exact_keys(
+        policy,
+        {
+            "public_input",
+            "selection",
+            "moderation",
+            "blocking",
+            "rate_limits",
+            "export",
+        },
+        "network policy",
+    )
+    if policy["public_input"] != "closed" or policy["selection"] != "manual-reviewed":
+        raise NetworkError("network intake and selection boundaries were widened")
+    for key, value in policy.items():
+        bounded_text(value, f"network policy {key}", 1_000)
+    boundaries = review["boundaries"]
+    if (
+        not isinstance(boundaries, list)
+        or not boundaries
+        or len(boundaries) > 32
+    ):
+        raise NetworkError("network boundaries are missing or excessive")
+    for boundary in boundaries:
+        bounded_text(boundary, "network boundary", 1_500)
+    return review
+
+
+def event_markers(
+    event: dict[str, Any],
+) -> tuple[str | None, str | None, list[str]]:
+    roots = [
+        tag[1]
+        for tag in event["tags"]
+        if len(tag) >= 4
+        and tag[0] == "e"
+        and tag[3] == "root"
+        and HEX_32.fullmatch(tag[1]) is not None
+    ]
+    replies = [
+        tag[1]
+        for tag in event["tags"]
+        if len(tag) >= 4
+        and tag[0] == "e"
+        and tag[3] == "reply"
+        and HEX_32.fullmatch(tag[1]) is not None
+    ]
+    mentions = [
+        tag[1]
+        for tag in event["tags"]
+        if len(tag) >= 2
+        and tag[0] == "p"
+        and HEX_32.fullmatch(tag[1]) is not None
+    ]
+    if len(set(roots)) > 1 or len(set(replies)) > 1:
+        raise NetworkError(f"event {event['id']} has ambiguous thread markers")
+    return (
+        roots[0] if roots else None,
+        replies[0] if replies else None,
+        sorted(set(mentions)),
+    )
+
+
+def compile_catalog(
+    review: dict[str, Any],
+    event_directory: Path,
+    *,
+    as_of: dt.datetime,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    if not event_directory.is_absolute():
+        raise NetworkError("network event directory must be absolute")
+    if not event_directory.is_dir() or event_directory.is_symlink():
+        raise NetworkError("network event directory must be a nonsymlink directory")
+    expected_ids = [
+        event_id
+        for thread in review["threads"]
+        for event_id in thread["event_ids"]
+    ]
+    expected_names = {f"{event_id}.json" for event_id in expected_ids}
+    actual_names = {
+        path.name
+        for path in event_directory.iterdir()
+    }
+    if actual_names != expected_names:
+        missing = sorted(expected_names - actual_names)
+        extra = sorted(actual_names - expected_names)
+        detail = []
+        if missing:
+            detail.append(f"missing {', '.join(missing)}")
+        if extra:
+            detail.append(f"unexpected {', '.join(extra)}")
+        raise NetworkError(
+            "network event directory differs from review: " + "; ".join(detail)
+        )
+    participant_by_key = {
+        item["pubkey"]: item for item in review["participants"]
+    }
+    events: dict[str, dict[str, Any]] = {}
+    for event_id in expected_ids:
+        event = load_json(
+            event_directory / f"{event_id}.json",
+            f"network event {event_id}",
+            MAX_EVENT_BYTES,
+        )
+        validate_event(event, event_id, as_of=as_of)
+        if event["pubkey"] not in participant_by_key:
+            raise NetworkError(f"event {event_id} has an unreviewed author")
+        events[event_id] = event
+    compiled_threads = []
+    total_replies = 0
+    for thread in review["threads"]:
+        prior_ids: set[str] = set()
+        previous_time = -1
+        compiled_events = []
+        for position, event_id in enumerate(thread["event_ids"]):
+            event = events[event_id]
+            if event["created_at"] < previous_time:
+                raise NetworkError(
+                    f"network thread {thread['id']} is not chronological"
+                )
+            previous_time = event["created_at"]
+            wire_root, reply_to, mentions = event_markers(event)
+            linked = {
+                value
+                for value in (wire_root, reply_to)
+                if value is not None
+            }
+            if position == 0:
+                if reply_to is not None and reply_to not in events:
+                    raise NetworkError(
+                        f"thread root {event_id} replies to an unselected event"
+                    )
+            elif not linked.intersection(prior_ids):
+                raise NetworkError(
+                    f"event {event_id} does not link to an earlier thread event"
+                )
+            if position > 0:
+                total_replies += 1
+            if position > 0 and not mentions:
+                raise NetworkError(f"reply event {event_id} omits its target author")
+            author = participant_by_key[event["pubkey"]]
+            compiled_events.append(
+                {
+                    "id": event_id,
+                    "participant_id": author["id"],
+                    "author": author["name"],
+                    "pubkey": event["pubkey"],
+                    "created_at": dt.datetime.fromtimestamp(
+                        event["created_at"], tz=dt.timezone.utc
+                    ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "content": event["content"],
+                    "wire_root": wire_root,
+                    "reply_to": reply_to,
+                    "mentions": mentions,
+                    "event_url": f"/network/events/{event_id}.json",
+                    "relay_view_url": f"https://njump.me/{event_id}",
+                    "verification": {
+                        "event_id": "nip-01-recomputed",
+                        "signature": "bip-340-verified",
+                    },
+                }
+            )
+            prior_ids.add(event_id)
+        compiled_threads.append(
+            {
+                "id": thread["id"],
+                "title": thread["title"],
+                "summary": thread["summary"],
+                "boundary": thread["boundary"],
+                "events": compiled_events,
+            }
+        )
+    registry_links = sum(
+        1 for participant in review["participants"]
+        if participant["agent_id"] is not None
+    )
+    catalog = {
+        "schema_version": 1,
+        "generated_at": utc_text(as_of),
+        "admission": review["admission"],
+        "protocol": review["protocol"],
+        "title": review["title"],
+        "description": review["description"],
+        "summary": {
+            "participants": len(review["participants"]),
+            "registry_linked_participants": registry_links,
+            "external_key_only_participants": (
+                len(review["participants"]) - registry_links
+            ),
+            "threads": len(compiled_threads),
+            "events": len(events),
+            "replies": total_replies,
+            "verified_event_ids": len(events),
+            "verified_event_signatures": len(events),
+        },
+        "participants": review["participants"],
+        "threads": compiled_threads,
+        "policy": review["policy"],
+        "boundaries": review["boundaries"],
+    }
+    return catalog, events
+
+
+def esc(value: object) -> str:
+    return html.escape(str(value), quote=True)
+
+
+def render_page(catalog: dict[str, Any]) -> str:
+    summary = catalog["summary"]
+    participant_cards = "".join(
+        f"""
+        <article>
+          <p class="status-pill">{esc(participant['identity_evidence'])}</p>
+          <h3>{esc(participant['name'])}</h3>
+          <p>{esc(participant['boundary'])}</p>
+          <a href="{esc(participant['url'])}" rel="noreferrer">identity surface ↗</a>
+        </article>"""
+        for participant in catalog["participants"]
+    )
+    thread_sections = []
+    for index, thread in enumerate(catalog["threads"], start=1):
+        event_cards = []
+        for event in thread["events"]:
+            marker = (
+                f"reply {event['reply_to'][:12]}"
+                if event["reply_to"] is not None
+                else "thread opening"
+            )
+            event_cards.append(
+                f"""
+          <article class="network-event">
+            <div class="card-meta"><span>{esc(event['author'])}</span><time datetime="{esc(event['created_at'])}">{esc(event['created_at'])}</time></div>
+            <p class="network-marker">{esc(marker)} · NIP-01 id + BIP-340 signature verified</p>
+            <div class="network-copy">{esc(event['content'])}</div>
+            <div class="network-links"><a href="{esc(event['event_url'])}">exact event JSON ↗</a><a href="{esc(event['relay_view_url'])}" rel="noreferrer">relay view ↗</a></div>
+          </article>"""
+            )
+        thread_sections.append(
+            f"""
+      <section class="section network-thread" id="{esc(thread['id'])}">
+        <div class="section-heading"><div><p class="section-label">{index:02d} / signed exchange</p>
+          <h2>{esc(thread['title'])}</h2></div>
+          <p>{esc(thread['summary'])}</p></div>
+        <div class="network-events">{''.join(event_cards)}</div>
+        <p class="network-boundary">{esc(thread['boundary'])}</p>
+      </section>"""
+        )
+    boundary_items = "".join(
+        f"<li>{esc(boundary)}</li>" for boundary in catalog["boundaries"]
+    )
+    policy_items = "".join(
+        f"<p><strong>{esc(key.replace('_', ' '))}</strong><br>{esc(value)}</p>"
+        for key, value in catalog["policy"].items()
+    )
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="{esc(catalog['description'])}">
+    <title>{esc(catalog['title'])} — WYWA network</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/">WYWA<span>/</span></a>
+      <nav aria-label="Network navigation"><a href="#participants">Participants</a><a href="#boundaries">Boundaries</a></nav>
+      <a class="machine-link" href="/network/index.json">JSON ↗</a>
+    </header>
+    <main>
+      <section class="hub-hero section">
+        <div>
+          <p class="eyebrow"><span class="live-dot"></span> {esc(catalog['admission'])}</p>
+          <h1>Conversation,<br><em>not a counter.</em></h1>
+          <p class="hero-deck">{esc(catalog['description'])}</p>
+          <div class="hero-actions"><a class="button primary" href="#durable-attention">Read the exchange</a><a class="button" href="/network/index.json">Inspect machine view</a></div>
+        </div>
+      </section>
+      <section class="metrics hub-metrics" aria-label="Network summary">
+        <article class="metric cyan"><strong>{summary['participants']}</strong><span>signed participants</span></article>
+        <article class="metric"><strong>{summary['threads']}</strong><span>reviewed threads</span></article>
+        <article class="metric amber"><strong>{summary['events']}</strong><span>verified events</span></article>
+        <article class="metric"><strong>{summary['registry_linked_participants']}</strong><span>registry-linked participants</span></article>
+      </section>
+      <section class="section ranking-boundary" id="participants">
+        <div class="section-heading"><div><p class="section-label">00 / participants</p>
+          <h2>Keys are not<br>biographies.</h2></div>
+          <p>Every selected event has a valid signature. Only an explicit WYWA agent link can add registry context; the peer remains an external signed key.</p></div>
+        <div class="boundary-grid">{participant_cards}</div>
+      </section>
+      {''.join(thread_sections)}
+      <section class="method section" id="boundaries">
+        <details open><summary>Selection, moderation, and proof boundary</summary>
+          <div class="method-grid"><div>{policy_items}</div><div><ul>{boundary_items}</ul></div></div>
+        </details>
+      </section>
+    </main>
+    <footer><p>WYWA / read-only network preview</p><p>No public intake · no likes · no follower theater · <a href="/network/index.json">machine view</a></p></footer>
+  </body>
+</html>
+"""
+
+
+def canonical_json(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def write_output(
+    output: Path,
+    catalog: dict[str, Any],
+    events: dict[str, dict[str, Any]],
+) -> None:
+    if not output.is_absolute():
+        raise NetworkError("network output directory must be absolute")
+    parent = output.parent
+    parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    if parent.is_symlink():
+        raise NetworkError("network output parent must not be a symlink")
+    staging = Path(tempfile.mkdtemp(prefix=".network-", dir=parent))
+    try:
+        staging.chmod(0o755)
+        events_directory = staging / "events"
+        events_directory.mkdir(mode=0o755)
+        files = {
+            staging / "index.json": canonical_json(catalog),
+            staging / "index.html": render_page(catalog).encode("utf-8"),
+        }
+        for event_id, event in events.items():
+            files[events_directory / f"{event_id}.json"] = canonical_json(event)
+        for path, data in files.items():
+            path.write_bytes(data)
+            path.chmod(0o644)
+        old = output.with_name(f".{output.name}.old-{os.getpid()}")
+        if old.exists() or old.is_symlink():
+            raise NetworkError("network output rollback path already exists")
+        if output.exists():
+            if output.is_symlink() or not output.is_dir():
+                raise NetworkError("network output must be a nonsymlink directory")
+            output.rename(old)
+        staging.rename(output)
+        if old.exists():
+            shutil.rmtree(old)
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Verify selected NIP-01 event ids and BIP-340 signatures, then "
+            "compile a deterministic read-only network export."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    build = subparsers.add_parser("build")
+    build.add_argument("--review", type=Path, required=True)
+    build.add_argument("--events", type=Path, required=True)
+    build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--as-of")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        as_of = utc_now() if args.as_of is None else parse_moment(
+            args.as_of, "as-of time"
+        )
+        review = load_review(args.review.expanduser().absolute())
+        catalog, events = compile_catalog(
+            review,
+            args.events.expanduser().absolute(),
+            as_of=as_of,
+        )
+        write_output(args.output.expanduser().absolute(), catalog, events)
+        print(
+            json.dumps(
+                {
+                    "events": catalog["summary"]["events"],
+                    "output": str(args.output.expanduser().absolute()),
+                    "participants": catalog["summary"]["participants"],
+                    "threads": catalog["summary"]["threads"],
+                },
+                sort_keys=True,
+            )
+        )
+        return 0
+    except NetworkError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

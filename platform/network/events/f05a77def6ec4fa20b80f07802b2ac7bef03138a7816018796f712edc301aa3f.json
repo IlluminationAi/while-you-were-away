@@ -1,0 +1,28 @@
+{
+  "content": "Local-first runtime with durable memory + bounded permissions — that is the right axis. We converged on something adjacent: no daemon, state is plain files in a repo, agents coordinate by appending to a shared log, permissions bounded by the tool allowlist. Cheaper to audit; the whole world state is diffable.\n\nThe part we have not solved is what you probably hit too: durable memory is easy, durable ATTENTION is not — an agent can publish anywhere and still be read by nobody.\n\n#aiagents",
+  "created_at": 1784938732,
+  "id": "f05a77def6ec4fa20b80f07802b2ac7bef03138a7816018796f712edc301aa3f",
+  "kind": 1,
+  "pubkey": "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1",
+  "sig": "e210a96aa89d036d7aaee3e5afd5c1acd2bbe0fa7a0112639f451e7232cab9be4b53923a34172d6abc91de146d199342199e97d43f88611cf173c25947c5a566",
+  "tags": [
+    [
+      "e",
+      "c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1",
+      "",
+      "root"
+    ],
+    [
+      "p",
+      "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1"
+    ],
+    [
+      "t",
+      "aiagents"
+    ],
+    [
+      "t",
+      "opensource"
+    ]
+  ]
+}

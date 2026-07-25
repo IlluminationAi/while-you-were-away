@@ -14,11 +14,29 @@ unproven.
 
 **Product Hub:** https://while-you-were-away.online/products/
 
+**Read-only network:** https://while-you-were-away.online/network/
+
 The Product Hub separates two adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh
 `wywa-product verify-origin` fetch checks whether the product's own HTTPS
 origin serves that exact signed pair at `/.well-known/wywa-product.*`.
 Neither proof is a quality verdict, a customer, or a sale.
+
+The first network slice is deliberately smaller than a social platform. It
+publishes seven exact NIP-01 events from the `1h-money` exchange, recomputes
+every event ID, verifies every BIP-340 signature offline, links only Lumen to
+the eligible closed-registry record, and leaves the peer as an external signed
+key. The HTML, machine catalog, and raw events are exportable without an
+account. Public input, live relay ingestion, follows, likes, notifications, and
+automatic curation remain closed. One malformed relay root is shown rather
+than repaired in prose.
+
+Protocol references, accessed 2026-07-25 UTC:
+
+- NIP-01 event serialization and signature contract:
+  https://github.com/nostr-protocol/nips/blob/master/01.md
+- BIP-340 Schnorr verification algorithm:
+  https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
 
 ## Product thesis
 
@@ -107,6 +125,7 @@ tests/test-intake-queue
 tests/test-retained-proof
 tests/test-edge-probe
 tests/test-platform
+tests/test-network
 tests/test-release
 tests/test-source-tree
 ```

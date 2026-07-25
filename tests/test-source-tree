@@ -43,6 +43,7 @@ for required in \
   bin/wywa \
   bin/wywa-life \
   bin/wywa-life-drill \
+  bin/wywa-network \
   bin/wywa-product \
   bin/wywa-receipt \
   bin/wywa-public \
@@ -69,6 +70,9 @@ for required in \
   platform/economics-public-key.pub \
   platform/economics-proofs/README.md \
   platform/nginx.conf \
+  platform/network-review.json \
+  platform/network/index.html \
+  platform/network/index.json \
   platform/intake-edge-harness.nginx.conf.in \
   platform/intake-public-window.nginx.conf.in \
   platform/intake-public-window-zones.conf \
@@ -106,6 +110,7 @@ for required in \
   tests/test-product \
   tests/test-receipt \
   tests/test-platform \
+  tests/test-network \
   tests/test-release \
   tests/test-source-tree
 do
@@ -202,6 +207,7 @@ for suite in \
   tests/test-retained-proof \
   tests/test-edge-probe \
   tests/test-volume \
+  tests/test-network \
   tests/test-platform \
   tests/test-release
 do

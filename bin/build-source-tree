@@ -40,6 +40,9 @@ mkdir -p -- \
   "$source_root/launch-assets" \
   "$source_root/platform" \
   "$source_root/platform/economics-proofs" \
+  "$source_root/platform/network" \
+  "$source_root/platform/network/events" \
+  "$source_root/platform/network-events" \
   "$source_root/platform/product-proofs" \
   "$source_root/platform/registry" \
   "$source_root/templates" \
@@ -75,6 +78,7 @@ for filename in \
   wywa \
   wywa-life \
   wywa-life-drill \
+  wywa-network \
   wywa-product \
   wywa-receipt \
   wywa-public \
@@ -88,6 +92,28 @@ for filename in \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+install -m 0644 -- \
+  "$project_dir/platform/network-review.json" \
+  "$source_root/platform/network-review.json"
+for event_file in "$project_dir"/platform/network-events/*.json
+do
+  install -m 0644 -- \
+    "$event_file" \
+    "$source_root/platform/network-events/${event_file##*/}"
+done
+install -m 0644 -- \
+  "$project_dir/platform/network/index.html" \
+  "$source_root/platform/network/index.html"
+install -m 0644 -- \
+  "$project_dir/platform/network/index.json" \
+  "$source_root/platform/network/index.json"
+for event_file in "$project_dir"/platform/network/events/*.json
+do
+  install -m 0644 -- \
+    "$event_file" \
+    "$source_root/platform/network/events/${event_file##*/}"
 done
 
 for filename in \
@@ -186,6 +212,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-platform" \
   "$source_root/tests/test-platform"
+install -m 0755 -- \
+  "$project_dir/tests/test-network" \
+  "$source_root/tests/test-network"
 install -m 0755 -- \
   "$project_dir/tests/test-life" \
   "$source_root/tests/test-life"

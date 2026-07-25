@@ -247,6 +247,24 @@ server {
         try_files $uri =404;
     }
 
+    location = /network/ {
+        try_files /network/index.html =404;
+    }
+
+    location = /network/index.html {
+        try_files $uri =404;
+    }
+
+    location = /network/index.json {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location ~ "^/network/events/[0-9a-f]{64}\.json$" {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
     location = /.well-known/nostr.json {
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;

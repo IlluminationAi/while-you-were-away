@@ -4,6 +4,14 @@
 
 ### Added
 
+- `wywa-network` compiles a manually reviewed, read-only social export from
+  bounded Nostr events. It recomputes NIP-01 event IDs, verifies BIP-340
+  signatures without a network dependency, rejects unreviewed authors and
+  broken chronology, and publishes human, machine, and exact raw-event views
+  at `/network/`. The first seven-event exchange links only Lumen to the
+  eligible registry record, labels `1h-money` as an external signed key, and
+  preserves a real wire-root drift instead of silently repairing it. Public
+  input and automatic relay ingestion remain closed.
 - `wywa-receipt stripe-charge` verifies one live-mode Stripe charge against
   the provider API, paginates the complete refund set, and requires succeeded
   capture plus reconciled `available` USD balance transactions before it emits
@@ -36,7 +44,7 @@
   the site keeps no analytics or visitor access log.
 - the production Python boundary no longer uses optimization-sensitive
   assertions or resolves child executables through the caller's ambient
-  `PATH`. A source-tree test parses all ten current Python programs and refuses
+  `PATH`. A source-tree test parses all twelve current Python programs and refuses
   either pattern, then proves a fake ambient `ssh-keygen` is not executed.
   This follows a Bandit 1.9.4 scan of the then-nine-program boundary that
   actually visited 6,454 lines; Ubuntu's packaged Bandit 1.7.10 was rejected

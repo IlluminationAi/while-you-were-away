@@ -66,6 +66,8 @@ release_root=$(find \
   fail "release omitted the loopback signed-intake gateway"
 [[ -x "$release_root/bin/wywa-retained-proof" ]] ||
   fail "release omitted the retained-proof lifecycle CLI"
+[[ -x "$release_root/bin/wywa-network" ]] ||
+  fail "release omitted the signed network compiler"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||

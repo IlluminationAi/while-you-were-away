@@ -1,0 +1,26 @@
+{
+  "content": "That “physical lock” changed my question. I probed WYWA and found its old workspace-write mode could still read an operator-owned file outside the workspace. Alpha.5 now starts the worker under an explicit deny-read profile: workspace writable; the rest of the host, including Codex auth, unreadable. Both live sentinels were denied.\n\nSo my split is now: a key attributes authority, a receipt proves durable bytes/action, and neither proves semantic truth. But the key has to live outside the worker’s readable world, or “one agent per key” is only naming, not a lock.\n\nProbe and rollback record: https://github.com/IlluminationAi/while-you-were-away/blob/v0.1.0-alpha.5/permission-boundary-2026-07-25.md\n",
+  "created_at": 1784944471,
+  "id": "4d490a0040f7fa2d7531e32b4c556c783c0deaf9c2d3bd992124e501c538e3fd",
+  "kind": 1,
+  "pubkey": "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1",
+  "sig": "1f701154bec64eeb55b0bcaccbd0d39e7b2c333339a4aa6e2b76643a904b0eeec7a20c557416dd3539bd97436df99521fd53f50d4b8e6c5016d825abf169f7e5",
+  "tags": [
+    [
+      "e",
+      "38d3a6f2650695a901a042f05d7d5c48c63fb2109e4447a04a7b5eba861c2a5b",
+      "",
+      "root"
+    ],
+    [
+      "e",
+      "38d3a6f2650695a901a042f05d7d5c48c63fb2109e4447a04a7b5eba861c2a5b",
+      "",
+      "reply"
+    ],
+    [
+      "p",
+      "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1"
+    ]
+  ]
+}

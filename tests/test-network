@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Exercise the deterministic, read-only WYWA network compiler."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+NETWORK = PROJECT / "bin" / "wywa-network"
+REVIEW = PROJECT / "platform" / "network-review.json"
+EVENTS = PROJECT / "platform" / "network-events"
+AS_OF = "2026-07-25T17:30:00Z"
+
+
+def run_build(
+    review: Path,
+    events: Path,
+    output: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            str(NETWORK),
+            "build",
+            "--review",
+            str(review),
+            "--events",
+            str(events),
+            "--output",
+            str(output),
+            "--as-of",
+            AS_OF,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        first = root / "first"
+        second = root / "second"
+        result = run_build(REVIEW, EVENTS, first)
+        if result.returncode != 0:
+            raise AssertionError(
+                f"network build failed\nstdout: {result.stdout}\nstderr: {result.stderr}"
+            )
+        result = run_build(REVIEW, EVENTS, second)
+        assert result.returncode == 0, result.stderr
+        assert not list(first.rglob("*~"))
+        first_files = sorted(
+            path.relative_to(first) for path in first.rglob("*") if path.is_file()
+        )
+        second_files = sorted(
+            path.relative_to(second) for path in second.rglob("*") if path.is_file()
+        )
+        assert first_files == second_files
+        for relative in first_files:
+            assert (first / relative).read_bytes() == (second / relative).read_bytes()
+
+        catalog = json.loads((first / "index.json").read_text(encoding="utf-8"))
+        assert catalog["schema_version"] == 1
+        assert catalog["admission"] == "reviewed-read-only"
+        assert catalog["protocol"] == "nostr-nip-01"
+        assert catalog["summary"] == {
+            "events": 7,
+            "external_key_only_participants": 1,
+            "participants": 2,
+            "registry_linked_participants": 1,
+            "replies": 5,
+            "threads": 2,
+            "verified_event_ids": 7,
+            "verified_event_signatures": 7,
+        }
+        assert [thread["id"] for thread in catalog["threads"]] == [
+            "durable-attention",
+            "credential-custody",
+        ]
+        custody = catalog["threads"][1]
+        assert custody["events"][0]["wire_root"] is None
+        assert custody["events"][0]["reply_to"].startswith("d0cd2e6b")
+        assert custody["events"][1]["wire_root"].startswith("38d3a6f2")
+        page = (first / "index.html").read_text(encoding="utf-8")
+        assert "<script" not in page.lower()
+        assert "<style" not in page.lower()
+        assert "Conversation," in page
+        assert "root drift" in page
+        assert len(list((first / "events").glob("*.json"))) == 7
+
+        tampered_events = root / "tampered-events"
+        shutil.copytree(EVENTS, tampered_events)
+        target = tampered_events / (
+            "f05a77def6ec4fa20b80f07802b2ac7bef03138a7816018796f712edc301aa3f.json"
+        )
+        record = json.loads(target.read_text(encoding="utf-8"))
+        record["content"] += " tampered"
+        target.write_text(json.dumps(record), encoding="utf-8")
+        tampered = run_build(REVIEW, tampered_events, root / "tampered-output")
+        assert tampered.returncode != 0
+        assert "NIP-01 id verification" in tampered.stderr
+
+        bad_signature_events = root / "bad-signature-events"
+        shutil.copytree(EVENTS, bad_signature_events)
+        target = bad_signature_events / (
+            "834262352635d72806ec0afa5e044e6aba1f5b570ade8e09b913beca6fe2c205.json"
+        )
+        record = json.loads(target.read_text(encoding="utf-8"))
+        record["sig"] = "00" * 64
+        target.write_text(json.dumps(record), encoding="utf-8")
+        bad_signature = run_build(
+            REVIEW, bad_signature_events, root / "bad-signature-output"
+        )
+        assert bad_signature.returncode != 0
+        assert "BIP-340 signature verification" in bad_signature.stderr
+
+        extra_events = root / "extra-events"
+        shutil.copytree(EVENTS, extra_events)
+        (extra_events / "extra.json").write_text("{}\n", encoding="utf-8")
+        extra = run_build(REVIEW, extra_events, root / "extra-output")
+        assert extra.returncode != 0
+        assert "unexpected extra.json" in extra.stderr
+
+        reordered_review = root / "reordered-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["threads"][0]["event_ids"][1:3] = reversed(
+            record["threads"][0]["event_ids"][1:3]
+        )
+        reordered_review.write_text(json.dumps(record), encoding="utf-8")
+        reordered = run_build(
+            reordered_review, EVENTS, root / "reordered-output"
+        )
+        assert reordered.returncode != 0
+        assert "not chronological" in reordered.stderr
+
+    print("PASS read-only signed WYWA network")
+
+
+if __name__ == "__main__":
+    main()

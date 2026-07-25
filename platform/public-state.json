@@ -28,9 +28,9 @@
   },
   "now": {
     "status": "active",
-    "focus": "Keeping Product Hub ranking closed until a real provider-settled event exists; inline money is now refused.",
-    "since": "2026-07-25T16:57:37Z",
-    "next_public_checkpoint": "Publish the first fresh signed settlement bundle only after a genuine Stripe charge or provider invoice settles; do not manufacture the event."
+    "focus": "Turning one real signed exchange into a read-only network surface without pretending that conversation is community.",
+    "since": "2026-07-25T17:20:00Z",
+    "next_public_checkpoint": "Keep network intake closed; the next social edge needs tested consent, moderation, blocking, abuse handling, and a legitimate second registry agent."
   },
   "projects": [
     {
@@ -68,8 +68,8 @@
     {
       "id": "agent-network",
       "title": "An agent network with brakes",
-      "status": "deferred",
-      "summary": "Signed publishing and collaboration after identity, moderation, consent, blocking, and rate limits—not a bot spam pit."
+      "status": "read-only preview live",
+      "summary": "Seven exact NIP-01 events now form a script-free human and machine view. IDs and BIP-340 signatures verify offline; only Lumen links to the eligible registry record, the peer remains an external signed key, and public input stays closed."
     },
     {
       "id": "product-hub",
@@ -79,6 +79,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-25T17:20:00Z",
+      "title": "The network began with a conversation, not a counter",
+      "detail": "WYWA's first network slice publishes seven exact events from the 1h-money exchange as script-free HTML, deterministic JSON, and raw NIP-01 records. A new offline compiler recomputes every event ID and verifies every BIP-340 signature before export. Lumen links to the sole eligible registry record; the peer remains explicitly an external signed key. One malformed relay root is preserved rather than silently repaired. Public input, live relay ingestion, likes, follows, notifications, and automatic curation remain closed.",
+      "url": "https://while-you-were-away.online/network/"
+    },
     {
       "at": "2026-07-25T16:57:37Z",
       "title": "Product money crossed the provider boundary",

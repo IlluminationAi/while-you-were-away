@@ -316,6 +316,12 @@ grep -Fq 'location ~ ^/products/receipts/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {' \
 grep -Fq 'location ~ ^/products/receipts/[a-z0-9]+(?:-[a-z0-9]+)*\.sig$ {' \
   "$available" ||
   fail "public nginx configuration omitted economics signatures"
+grep -Fq 'location = /network/ {' "$available" ||
+  fail "public nginx configuration omitted the network route"
+grep -Fq 'location = /network/index.json {' "$available" ||
+  fail "public nginx configuration omitted the network catalog"
+grep -Fq 'location ~ "^/network/events/[0-9a-f]{64}\.json$" {' "$available" ||
+  fail "public nginx configuration omitted exact signed network events"
 grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
   fail "public publisher service retained network access"
 grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||

@@ -16,9 +16,9 @@ REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
 CURATOR = PROJECT / "bin" / "wywa-curator"
 INSTANTS = (
-    "2026-07-24T17:40:00Z",
-    "2026-07-24T17:41:00Z",
-    "2026-07-24T17:42:00Z",
+    "2026-07-25T17:40:00Z",
+    "2026-07-25T17:41:00Z",
+    "2026-07-25T17:42:00Z",
 )
 
 
@@ -226,9 +226,9 @@ def main() -> None:
             check=True,
         )
         for name in (
-            "cycle-20260724T160000Z.log",
-            "cycle-20260724T170000Z.log",
-            "cycle-20260724T173000Z.log",
+            "cycle-20260725T160000Z.log",
+            "cycle-20260725T170000Z.log",
+            "cycle-20260725T173000Z.log",
         ):
             (logs / name).touch()
         (runtime / "last-run").write_text(
@@ -260,6 +260,8 @@ def main() -> None:
                     str(economics_public_key),
                     "--registry-export-dir",
                     str(registry_export),
+                    "--network-export-dir",
+                    str(PROJECT / "platform" / "network"),
                     "--as-of",
                     instant,
                     "--phase",
@@ -267,10 +269,15 @@ def main() -> None:
                     "--keep",
                     "2",
                 ],
-                check=True,
                 capture_output=True,
                 text=True,
             )
+            if result.returncode != 0:
+                raise AssertionError(
+                    "platform publication failed\n"
+                    f"stdout: {result.stdout}\n"
+                    f"stderr: {result.stderr}"
+                )
             releases.append(json.loads(result.stdout)["release"])
 
         current = site / "current"
@@ -295,6 +302,11 @@ def main() -> None:
         assert life["metrics"]["verified_agents"] == 1
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1
+        assert life["network"]["admission"] == "reviewed-read-only"
+        assert life["network"]["protocol"] == "nostr-nip-01"
+        assert life["network"]["summary"]["participants"] == 2
+        assert life["network"]["summary"]["events"] == 7
+        assert life["network"]["summary"]["verified_event_signatures"] == 7
         assert life["metrics"]["verified_revenue_usd"] == "0.00"
         assert life["product_hub"]["admission"] == "reviewed-closed"
         assert life["product_hub"]["ranking"]["status"] == "withheld"
@@ -339,6 +351,8 @@ def main() -> None:
         assert "Inline amounts and receipt URLs" in product_page
         assert "public operating system" in page
         assert "/products/" in page
+        assert "/network/" in page
+        assert "Seven signed events" in page
         assert "$0.00" in page
         assert len(life["activity_24h"]) == 24
         assert sum(row["count"] for row in life["activity_24h"]) == 3
@@ -361,7 +375,7 @@ def main() -> None:
         assert security_txt == (
             "Contact: "
             "https://github.com/IlluminationAi/while-you-were-away/security\n"
-            "Expires: 2027-01-20T17:42:00Z\n"
+            "Expires: 2027-01-21T17:42:00Z\n"
             "Preferred-Languages: en\n"
             "Canonical: "
             "https://while-you-were-away.online/.well-known/security.txt\n"
@@ -398,6 +412,16 @@ def main() -> None:
         assert "<script" not in (
             current / "agents" / "index.html"
         ).read_text(encoding="utf-8").lower()
+        network_catalog = json.loads(
+            (current / "network" / "index.json").read_text(encoding="utf-8")
+        )
+        assert network_catalog["summary"] == life["network"]["summary"]
+        network_page = (
+            current / "network" / "index.html"
+        ).read_text(encoding="utf-8")
+        assert "<script" not in network_page.lower()
+        assert "Conversation," in network_page
+        assert len(list((current / "network" / "events").glob("*.json"))) == 7
 
         for directory in (
             site,
@@ -406,6 +430,8 @@ def main() -> None:
             current / "assets",
             current / ".well-known",
             current / "agents",
+            current / "network",
+            current / "network" / "events",
             current / "products",
             current / "products" / "claims",
             current / "products" / "receipts",
@@ -426,6 +452,8 @@ def main() -> None:
             current / "agents" / "index.html",
             current / "agents" / "index.json",
             current / "agents" / "audit.json",
+            current / "network" / "index.html",
+            current / "network" / "index.json",
             current / "products" / "index.html",
             current / "products" / "index.json",
             current / "products" / "claims" / "wywa.json",
@@ -437,6 +465,10 @@ def main() -> None:
             assert file_path.is_file()
             assert not file_path.is_symlink()
             assert file_path.stat().st_mode & 0o777 == 0o644
+        for event_path in (current / "network" / "events").glob("*.json"):
+            assert event_path.is_file()
+            assert not event_path.is_symlink()
+            assert event_path.stat().st_mode & 0o777 == 0o644
 
         bundle_id = "stripe-charge-fixture"
         settled_state = json.loads(
@@ -772,7 +804,9 @@ def main() -> None:
             "status": 0,
         }
         assert "registry" not in portable_life
+        assert "network" not in portable_life
         assert not (portable_site / "current" / "agents").exists()
+        assert not (portable_site / "current" / "network").exists()
         assert (portable_site / "current" / "products" / "index.html").is_file()
         assert (portable_site / "current" / "products" / "index.json").is_file()
         assert all(

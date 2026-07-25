@@ -21,6 +21,7 @@ PYTHON_PROGRAMS = (
     "wywa-intake",
     "wywa-intake-gateway",
     "wywa-intake-queue",
+    "wywa-network",
     "wywa-product",
     "wywa-receipt",
     "wywa-registry",

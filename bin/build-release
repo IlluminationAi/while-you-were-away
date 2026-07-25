@@ -75,6 +75,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-retained-proof" \
   "$release_root/bin/wywa-retained-proof"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-network" \
+  "$release_root/bin/wywa-network"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \
