@@ -16,6 +16,7 @@ Usage:
                      [--session-only] [--dry-run]
   $program install WORKSPACE [--name NAME] [--session-only] [--dry-run]
   $program status WORKSPACE
+  $program trial WORKSPACE [--max-runtime DURATION]
   $program evidence WORKSPACE
   $program publish WORKSPACE
   $program backup WORKSPACE
@@ -26,6 +27,7 @@ Commands:
   bootstrap  Initialize one worker and install its reversible local-life profile.
   install    Add scheduling, a reviewed local snapshot, and verified Git backups.
   status     Show the worker receipt, local snapshot, backup, and lifecycle state.
+  trial      Run once now, refresh and back up the result, then emit evidence JSON.
   evidence   Verify one completed cycle and emit a path-free JSON trial report.
   publish    Refresh the static local-life snapshot now.
   backup     Create and verify a private Git bundle now.
@@ -595,6 +597,64 @@ cmd_status() {
   fi
 }
 
+cmd_trial() {
+  [[ $# -ge 1 ]] || die "trial requires a WORKSPACE"
+  local workspace runtime profile version worker_cli max_runtime=
+  workspace=$(absolute_path "$1")
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max-runtime)
+        [[ $# -ge 2 ]] || die "--max-runtime requires a value"
+        max_runtime=$2
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        die "unknown option: $1"
+        ;;
+    esac
+  done
+
+  validate_workspace "$workspace"
+  runtime=$(runtime_for "$workspace")
+  profile=$runtime/life.conf
+  [[ -d "$runtime" && ! -L "$runtime" ]] ||
+    die "trial requires a safe local-life runtime"
+  [[ -f "$profile" && ! -L "$profile" ]] ||
+    die "trial requires an installed local-life profile"
+  version=$(sed -n 's/^version=//p' "$profile")
+  if [[ "$(wc -l <"$profile")" -ne 4 ]] ||
+    ! grep -Fxq 'schema=1' "$profile" ||
+    ! grep -Fxq 'profile=local' "$profile" ||
+    ! grep -Fxq "workspace_id=$(workspace_id "$workspace")" "$profile" ||
+    [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.]+$ ]]; then
+    die "trial profile does not match this workspace"
+  fi
+  [[ -f "$workspace/public/state.json" &&
+    ! -L "$workspace/public/state.json" ]] ||
+    die "trial requires reviewed public state"
+
+  worker_cli=$(installed_worker_cli)
+  local -a run_args
+  run_args=("$workspace")
+  if [[ -n "$max_runtime" ]]; then
+    run_args+=(--max-runtime "$max_runtime")
+  fi
+
+  printf '%s\n' "trial: running one attended worker cycle" >&2
+  "$worker_cli" run "${run_args[@]}" >&2
+  printf '%s\n' "trial: refreshing the reviewed snapshot" >&2
+  publish_workspace "$workspace" >/dev/null
+  printf '%s\n' "trial: creating and verifying the current Git bundle" >&2
+  backup_workspace "$workspace" >/dev/null
+  printf '%s\n' "trial: verifying the complete local-life evidence chain" >&2
+  cmd_evidence "$workspace"
+}
+
 cmd_evidence() {
   [[ $# -eq 1 ]] || die "evidence requires exactly one WORKSPACE"
   local workspace runtime profile identifier version commit tree
@@ -848,6 +908,9 @@ main() {
       ;;
     status)
       cmd_status "$@"
+      ;;
+    trial)
+      cmd_trial "$@"
       ;;
     evidence)
       cmd_evidence "$@"

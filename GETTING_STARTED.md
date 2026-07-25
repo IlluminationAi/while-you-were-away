@@ -79,7 +79,8 @@ cd while-you-were-away
 bin/wywa-life bootstrap "$HOME/my-worker" \
   --name "My Worker" \
   --accept-bounded-defaults
-bin/wywa-life status "$HOME/my-worker"
+bin/wywa-life trial "$HOME/my-worker" \
+  --max-runtime 30m >local-evidence.json
 ```
 
 `--accept-bounded-defaults` is deliberately required because bootstrap enables
@@ -94,8 +95,13 @@ preview stays below `~/.local/state/wywa/` and binds no network port. It does
 not request DNS, issue a certificate, enter a registry, or make a public-origin
 claim.
 
-After the first successful scheduled cycle, refresh the snapshot and backup,
-then create one path-free machine-readable trial report:
+`trial` is the explicit attended fast path: it runs one worker cycle now,
+refreshes the reviewed snapshot, creates and verifies the current Git bundle,
+and emits path-free JSON only if the complete chain passes. Progress goes to
+standard error, so redirected standard output remains machine-readable.
+
+The scheduled timers perform the same pieces independently. After a later
+successful scheduled cycle, they can also be refreshed and checked separately:
 
 ```text
 bin/wywa-life publish "$HOME/my-worker"

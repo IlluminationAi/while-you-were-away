@@ -61,6 +61,9 @@ for ((index = 0; index < ${#arguments[@]}; index++)); do
   esac
 done
 [[ -n "$workspace" && -n "$output_file" ]] || exit 90
+if [[ -f "$HOME/fake/fail-codex" ]]; then
+  exit 31
+fi
 printf '%s\n' "independent-trial fixture" >"$workspace/trial-artifact.txt"
 printf '%s\n' "trial cycle complete" >"$output_file"
 printf '%s\n' \
@@ -245,11 +248,30 @@ expect_status 2 "$life" evidence "$workspace"
 grep -q 'last-run receipt is missing' "$test_root/stderr" ||
   fail "evidence accepted a lifecycle without one completed worker cycle"
 
-"$HOME/.local/lib/wywa/bin/wywa" run "$workspace" --max-runtime 1m \
-  >/dev/null
-"$life" publish "$workspace" >/dev/null
-"$life" backup "$workspace" >/dev/null
-"$life" evidence "$workspace" >"$test_root/evidence.json"
+backup_before_failure=$(<"$runtime/backup.last")
+snapshot_before_failure=$(readlink -- "$site")
+touch "$HOME/fake/fail-codex"
+expect_status 31 "$life" trial "$workspace" --max-runtime 1m
+rm -f -- "$HOME/fake/fail-codex"
+[[ "$(<"$runtime/backup.last")" == "$backup_before_failure" ]] ||
+  fail "failed trial advanced the verified backup"
+[[ "$(readlink -- "$site")" == "$snapshot_before_failure" ]] ||
+  fail "failed trial advanced the reviewed snapshot"
+
+"$life" trial "$workspace" --max-runtime 1m \
+  >"$test_root/evidence.json" 2>"$test_root/trial-progress"
+grep -Fxq 'trial: running one attended worker cycle' \
+  "$test_root/trial-progress" ||
+  fail "trial omitted the explicit attended-run boundary"
+grep -Fxq 'trial: verifying the complete local-life evidence chain' \
+  "$test_root/trial-progress" ||
+  fail "trial omitted final evidence verification"
+[[ -s "$test_root/evidence.json" ]] ||
+  fail "trial emitted no evidence JSON: $(tr '\n' ';' <"$test_root/trial-progress")"
+if ! jq -e 'type == "object"' "$test_root/evidence.json" >/dev/null; then
+  sed -n '1,20p' "$test_root/evidence.json" >&2
+  fail "trial standard output was not one evidence JSON object"
+fi
 python3 - "$test_root/evidence.json" <<'PY'
 import json
 import sys
@@ -268,6 +290,11 @@ PY
 if rg -q "$test_root|$workspace|$HOME" "$test_root/evidence.json"; then
   fail "local evidence exposed a private path"
 fi
+[[ -f "$workspace/trial-artifact.txt" ]] ||
+  fail "trial did not preserve the worker artifact"
+expect_status 2 "$life" trial "$workspace" --max-runtime
+grep -q -- '--max-runtime requires a value' "$test_root/stderr" ||
+  fail "trial accepted an empty runtime bound"
 printf '%s\n' "unaccepted trial state" >"$workspace/uncommitted.txt"
 expect_status 2 "$life" evidence "$workspace"
 grep -q 'evidence requires a clean workspace' "$test_root/stderr" ||

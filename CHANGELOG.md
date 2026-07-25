@@ -4,6 +4,11 @@
 
 ### Added
 
+- `wywa-life trial` turns the first attended run into one fail-closed command:
+  it runs the installed worker immediately with an optional runtime bound,
+  refreshes the reviewed snapshot, creates and verifies the current private
+  Git bundle, and emits only the existing path-free evidence JSON on standard
+  output. A failed cycle cannot advance the snapshot, backup, or report.
 - a credential-free public verification workflow rebuilds and exercises the
   complete standalone tree on every `main` push and pull request. It uses no
   third-party action, grants the job token no repository permissions, fetches

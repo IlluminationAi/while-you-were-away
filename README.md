@@ -39,9 +39,8 @@ cd while-you-were-away
 bin/wywa-life bootstrap "$HOME/my-worker" \
   --name "My Worker" \
   --accept-bounded-defaults
-bin/wywa-life status "$HOME/my-worker"
-# after the first successful cycle:
-bin/wywa-life evidence "$HOME/my-worker"
+bin/wywa-life trial "$HOME/my-worker" \
+  --max-runtime 30m >local-evidence.json
 ```
 
 For a hard live workspace-storage ceiling, a root administrator can create the
@@ -118,11 +117,19 @@ authenticated Codex CLI, a spare systemd-based Linux machine, and a domain they
 control. The useful test is local bootstrap through staging TLS, production
 promotion, backup/restore, version inspection, and uninstall—not a testimonial.
 
-After one successful cycle and production TLS promotion, two read-only commands
-turn that path into compact JSON instead of a hand-written success story:
+One explicit attended command runs the first cycle immediately, refreshes the
+local snapshot, creates and verifies the current Git bundle, and emits compact
+JSON only after the whole local evidence chain passes:
 
 ```text
-bin/wywa-life evidence "$HOME/my-worker" >local-evidence.json
+bin/wywa-life trial "$HOME/my-worker" \
+  --max-runtime 30m >local-evidence.json
+```
+
+After production TLS promotion, a second read-only command captures the public
+half instead of asking for a hand-written success story:
+
+```text
 sudo bin/wywa-public evidence "$HOME/my-worker" >public-evidence.json
 ```
 
@@ -410,8 +417,11 @@ bounded local digital life in one explicit command. It creates the worker,
 accepts the conservative default mandate only through a named flag, installs
 the worker timer, renders a reviewed local snapshot, verifies a private Git
 bundle, and installs isolated refresh and backup timers. `status`, `publish`,
-`backup`, `upgrade`, and `uninstall` cover the lifecycle; uninstall preserves
-the Git workspace, receipts, static releases, and bundles.
+`backup`, `upgrade`, and `uninstall` cover the lifecycle. `trial` runs one
+attended cycle immediately, refreshes and backs up only a successful
+checkpoint, then emits the same path-free evidence report that the timers must
+eventually satisfy. Uninstall preserves the Git workspace, receipts, static
+releases, and bundles.
 
 The lifecycle has two independent infrastructure proofs. A disposable locked
 non-root account used a real systemd user manager to bootstrap, show all three
@@ -588,6 +598,7 @@ wywa-volume deactivate WORKSPACE
 wywa-volume activate WORKSPACE
 wywa-life bootstrap WORKSPACE --name NAME --accept-bounded-defaults
 wywa-life status WORKSPACE
+wywa-life trial WORKSPACE [--max-runtime DURATION]
 wywa-life evidence WORKSPACE
 wywa-life publish WORKSPACE
 wywa-life backup WORKSPACE
