@@ -25,6 +25,7 @@ worker_tasks_max=256
 usage() {
   cat <<EOF
 Usage:
+  $program preflight [--session-only]
   $program init WORKSPACE
   $program doctor WORKSPACE
   $program run WORKSPACE [--max-runtime DURATION] [--dry-run]
@@ -34,6 +35,9 @@ Usage:
   $program uninstall-user WORKSPACE
 
 Commands:
+  preflight
+           Verify the host, exact Codex boundary, login, and user scheduler
+           before creating a workspace.
   init     Create a private, Git-backed persistent-worker workspace.
   doctor   Verify the workspace, non-root boundary, Codex, and login.
   run      Run one bounded cycle with workspace-only filesystem access.
@@ -159,7 +163,7 @@ check_codex_permissions_support() {
     die "Codex CLI returned an unrecognized version: $version_output"
   fi
   [[ "$major.$minor.$patch" == "$reviewed_codex_version" ]] ||
-    die "Codex CLI $reviewed_codex_version is the reviewed unattended capability boundary (found $major.$minor.$patch)"
+    die "Codex CLI $reviewed_codex_version is the reviewed unattended capability boundary (found $major.$minor.$patch); install @openai/codex@$reviewed_codex_version or the official rust-v$reviewed_codex_version release before retrying"
 }
 
 safe_environment() {
@@ -553,6 +557,63 @@ doctor_workspace() {
     printf '%s\n' "doctor: note: workspace has uncommitted changes" >&2
   fi
   printf 'doctor: ok (%s)\n' "$workspace"
+}
+
+cmd_preflight() {
+  local session_only=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --session-only)
+        session_only=1
+        shift
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        die "unknown preflight option: $1"
+        ;;
+    esac
+  done
+
+  check_root_boundary
+
+  local required
+  for required in git python3 flock timeout sha256sum realpath mktemp; do
+    command -v "$required" >/dev/null 2>&1 ||
+      die "required command was not found on PATH: $required"
+  done
+
+  local codex_bin systemctl_bin loginctl_bin linger
+  local -a clean_env
+  codex_bin=$(resolve_codex_bin)
+  check_codex_permissions_support "$codex_bin"
+  safe_environment clean_env
+  "${clean_env[@]}" "$codex_bin" login status >/dev/null 2>&1 ||
+    die "Codex CLI is not authenticated"
+
+  systemctl_bin=$(resolve_systemctl_bin)
+  "$systemctl_bin" --user show-environment >/dev/null 2>&1 ||
+    die "the systemd user manager is unavailable"
+  loginctl_bin=$(resolve_loginctl_bin)
+  linger=$(
+    "$loginctl_bin" show-user "$(id -un)" -p Linger --value 2>/dev/null
+  ) || die "unable to inspect user lingering"
+  if [[ "$linger" != yes && "$session_only" != 1 ]]; then
+    die "user lingering is disabled; ask an administrator to enable it, or use --session-only"
+  fi
+
+  printf '%s\n' \
+    "preflight: ok" \
+    "codex: $reviewed_codex_version (reviewed)" \
+    "authentication: active" \
+    "scheduler: systemd user manager available"
+  if [[ "$linger" == yes ]]; then
+    printf '%s\n' "after logout: enabled by user lingering"
+  else
+    printf '%s\n' "after logout: not guaranteed (--session-only)"
+  fi
 }
 
 cmd_doctor() {
@@ -1577,6 +1638,9 @@ main() {
   local subcommand=$1
   shift
   case "$subcommand" in
+    preflight)
+      cmd_preflight "$@"
+      ;;
     init)
       cmd_init "$@"
       ;;

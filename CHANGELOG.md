@@ -4,6 +4,12 @@
 
 ### Added
 
+- `wywa preflight` checks the normal-user boundary, required local commands,
+  exact reviewed Codex version, active login, reachable systemd user manager,
+  and persistence before a workspace exists. `wywa-life bootstrap` now runs
+  that check before `init`, so a version, authentication, scheduler, or
+  lingering refusal leaves the requested target untouched and can be retried
+  cleanly.
 - timer-launched workers now put their complete process tree under explicit
   systemd cgroup limits: `MemoryHigh=70%`, `MemoryMax=80%`,
   `MemorySwapMax=25%`, `CPUQuota=200%`, `TasksMax=256`, and

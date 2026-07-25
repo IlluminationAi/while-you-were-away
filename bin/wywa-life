@@ -534,6 +534,12 @@ cmd_bootstrap() {
   fi
   local worker_cli
   worker_cli=$(source_worker_cli)
+  local -a preflight_args
+  preflight_args=()
+  if (( parsed_session_only == 1 )); then
+    preflight_args+=(--session-only)
+  fi
+  "$worker_cli" preflight "${preflight_args[@]}" >/dev/null
   "$worker_cli" init "$workspace"
   install_profile \
     "$workspace" \

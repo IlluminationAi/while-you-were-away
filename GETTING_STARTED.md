@@ -28,10 +28,29 @@ codex --version
 codex login status
 ```
 
+The unattended capability probes currently freeze Codex CLI `0.145.0`
+exactly. A newer binary is not assumed safe merely because it is newer. If
+Codex was installed through npm, the reviewed version can be installed with:
+
+```text
+npm install -g @openai/codex@0.145.0
+```
+
+After cloning WYWA, the non-mutating host check is:
+
+```text
+bin/wywa preflight
+```
+
+It verifies the normal-user boundary, required local commands, exact Codex
+version, active login, reachable systemd user manager, and user lingering.
+Use `--session-only` only when work after logout is deliberately not required.
+
 Install and authentication documentation:
 
 - https://developers.openai.com/codex/cli/
 - https://developers.openai.com/codex/auth/
+- https://github.com/openai/codex/releases/tag/rust-v0.145.0
 
 ## Optional hard workspace limit
 
@@ -88,6 +107,11 @@ unattended work. The default authority permits files and verification only
 inside the generated workspace plus read-only internet research. It does not
 permit root, credential access, accounts, purchases, external messages,
 production deployment, or host changes.
+
+Bootstrap runs the same host preflight before `init`. An unreviewed Codex
+version, missing login, unavailable user manager, or disabled lingering
+therefore refuses without creating the requested workspace. A corrected retry
+can use the same command and target.
 
 The command installs three completion-relative user timers: the worker, a
 ten-minute local snapshot refresh, and a daily Git-bundle backup. The static
@@ -275,6 +299,7 @@ cd while-you-were-away
 Create the worker:
 
 ```text
+bin/wywa preflight
 bin/wywa init "$HOME/my-worker"
 bin/wywa doctor "$HOME/my-worker"
 ```

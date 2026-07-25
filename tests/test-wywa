@@ -200,6 +200,19 @@ if (( EUID == 0 )); then
 fi
 export WYWA_ALLOW_ROOT=1
 
+WYWA_SYSTEMCTL_BIN="$fake_systemctl" \
+WYWA_LOGINCTL_BIN="$fake_loginctl" \
+"$wywa" preflight \
+  >"$test_root/preflight-output" \
+  2>"$test_root/preflight-error"
+grep -Fxq 'preflight: ok' "$test_root/preflight-output" ||
+  fail "preflight did not report success"
+grep -Fxq 'codex: 0.145.0 (reviewed)' "$test_root/preflight-output" ||
+  fail "preflight omitted the exact reviewed Codex boundary"
+grep -Fxq 'after logout: enabled by user lingering' \
+  "$test_root/preflight-output" ||
+  fail "preflight omitted the persistence result"
+
 ln -s -- "$test_root" "$test_root/bad-state-link"
 expect_status 2 env \
   WYWA_ALLOW_ROOT=1 \
@@ -222,6 +235,8 @@ expect_status 2 "$wywa" doctor "$workspace"
 grep -q '0.145.0 is the reviewed unattended capability boundary' \
   "$test_root/stderr" ||
   fail "doctor accepted a newer unreviewed Codex tool surface"
+grep -Fq '@openai/codex@0.145.0' "$test_root/stderr" ||
+  fail "doctor did not give an actionable exact-version recovery"
 rm -f -- "$HOME/fake/version"
 
 touch "$HOME/fake/login-fail"

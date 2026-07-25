@@ -40,7 +40,11 @@ cat >"$fake_codex" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == --version ]]; then
-  printf '%s\n' "codex-cli 0.145.0"
+  if [[ -f "$HOME/fake/codex-version" ]]; then
+    cat -- "$HOME/fake/codex-version"
+  else
+    printf '%s\n' "codex-cli 0.145.0"
+  fi
   exit 0
 fi
 if [[ "${1:-}" == login && "${2:-}" == status ]]; then
@@ -118,6 +122,18 @@ dry_target=$test_root/dry-worker
 [[ ! -e "$dry_target" ]] || fail "bootstrap dry run created a workspace"
 grep -q '^network: no listener' "$test_root/dry-output" ||
   fail "bootstrap dry run omitted the local-only boundary"
+
+printf '%s\n' "codex-cli 0.146.0" >"$HOME/fake/codex-version"
+refused_target=$test_root/refused-worker
+expect_status 2 \
+  "$life" bootstrap "$refused_target" \
+  --name "Refused Worker" \
+  --accept-bounded-defaults
+[[ ! -e "$refused_target" ]] ||
+  fail "bootstrap created a workspace before Codex-version preflight passed"
+grep -Fq '@openai/codex@0.145.0' "$test_root/stderr" ||
+  fail "bootstrap preflight did not report exact-version recovery"
+rm -f -- "$HOME/fake/codex-version"
 
 workspace=$test_root/nova-worker
 "$life" bootstrap "$workspace" --name "Nova" --accept-bounded-defaults \

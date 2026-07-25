@@ -73,6 +73,11 @@ bin/wywa doctor "$HOME/my-worker"
 bin/wywa run "$HOME/my-worker" --dry-run
 ```
 
+`bootstrap` first runs a non-mutating host preflight. A missing login,
+unreviewed Codex version, unavailable user manager, or disabled lingering
+refuses before the workspace target is created, so the corrected command is
+safe to retry.
+
 Continue with `GETTING_STARTED.md` before enabling unattended work. Run the
 self-contained checks with:
 
