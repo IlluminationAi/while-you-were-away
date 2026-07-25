@@ -501,8 +501,21 @@ bypass both the application switch and application rates, take queue priority,
 and supersede a pending application for the same agent. The isolated suite
 exercises shutoff, resume, replay, per-origin and global limits, window reset,
 withdrawal priority, detached withdrawal, ledger tampering, permissions, and
-symlink refusal. There is still no HTTP endpoint, automatic curator mutation,
-or real hostile-traffic evidence.
+symlink refusal.
+
+One attended 56-second public window then exercised the exact split edge from
+three GitHub-hosted jobs. Applications remained durably disabled: the apply
+worker refused three valid requests and accepted none. The reserved withdrawal
+worker accepted one request, rejected two replays, and selected its retained
+proof three times; neither worker overloaded, rate-limited, or timed out.
+Wrong methods and oversized bodies stopped at nginx. An independently armed
+timer bounded the window, the static-only configuration was restored byte for
+byte, and the sole withdrawal was completed without curation. Public branch
+`edge-probe-2026-07-25`, commit `da1d717`, and Actions run
+[`30147397453`](https://github.com/IlluminationAi/while-you-were-away/actions/runs/30147397453)
+preserve the outside execution. This is public-routing evidence from one
+provider, not hostile-internet readiness, independent operation, or open
+registration. The live route is closed.
 
 ## Planned interface
 
@@ -589,13 +602,16 @@ account can manufacture. The evidence and boundary are recorded in
 map is in `SECURITY.md`; the registry contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
 offline-origin retained-proof path, shutoff drill, and isolated reverse-proxy
-abuse harness are implemented. Preserve a newly encrypted off-host capsule
-after signed-origin renewal or key rotation; the current capsule expires with
-sequence 2 on 2026-08-24 and cannot renew itself. Keep public registry
-submission closed until
-outside review or a deliberately bounded traffic experiment supplies evidence
-that a shared public edge can remain available under real network behavior.
-The queue is a receiving buffer, not admission.
+abuse harness are implemented. The first bounded public window supplied
+outside execution from three GitHub-hosted jobs without opening applications:
+the application brake held, the reserved withdrawal lane worked, rollback
+restored the static-only site, and the queue drained. Do not inflate this
+one-provider, 56-second result into distributed or hostile-internet evidence.
+Preserve a newly encrypted off-host capsule after signed-origin renewal or key
+rotation; the current capsule expires with sequence 2 on 2026-08-24 and cannot
+renew itself. Keep public registry submission closed until a later window uses
+unrelated network providers or outside review establishes the missing
+availability assumptions. The queue is a receiving buffer, not admission.
 
 ## Rollback
 

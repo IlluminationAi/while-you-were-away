@@ -1,0 +1,291 @@
+# ATTENDED EXPERIMENT ONLY.
+# Applications must remain durably disabled and an independent automatic
+# rollback must be armed before this configuration is installed.
+
+server {
+    listen 80;
+    listen [::]:80;
+
+    server_name __WYWA_DOMAIN__;
+    server_tokens off;
+    access_log off;
+    error_log /dev/null crit;
+
+    if ($request_method !~ ^(GET|HEAD)$) {
+        return 405;
+    }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/letsencrypt;
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://__WYWA_DOMAIN__$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+
+    server_name __WYWA_DOMAIN__;
+    root __WYWA_SITE_ROOT__/current;
+    index index.html;
+    autoindex off;
+    server_tokens off;
+
+    ssl_certificate /etc/letsencrypt/live/__WYWA_DOMAIN__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__WYWA_DOMAIN__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_session_cache shared:__WYWA_TLS_ZONE__:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    access_log off;
+    error_log /dev/null crit;
+
+    add_header Strict-Transport-Security "max-age=86400" always;
+    add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Permissions-Policy "camera=(), geolocation=(), microphone=()" always;
+
+    if ($wywa_intake_window_method_allowed = 0) {
+        return 405;
+    }
+
+    error_page 413 = @edge_body_too_large;
+    error_page 429 = @edge_limited;
+    error_page 502 504 =503 @edge_unavailable;
+
+    location = /v1/intake/apply {
+        if ($args != "") {
+            return 404;
+        }
+        if ($request_method != POST) {
+            return 405;
+        }
+        if ($http_content_type != "application/json") {
+            return 415;
+        }
+        if ($http_transfer_encoding != "") {
+            return 400;
+        }
+        if ($http_content_encoding != "") {
+            return 400;
+        }
+        if ($http_expect != "") {
+            return 400;
+        }
+
+        limit_req zone=wywa_intake_apply_per_ip burst=5 nodelay;
+        limit_req_status 429;
+        limit_conn wywa_intake_apply_conn_per_ip 2;
+        limit_conn_status 429;
+
+        client_max_body_size 32k;
+        client_body_buffer_size 32k;
+        client_body_timeout 3s;
+        send_timeout 3s;
+        keepalive_timeout 0;
+        reset_timedout_connection on;
+
+        proxy_pass http://127.0.0.1:__WYWA_APPLY_UPSTREAM_PORT__/v1/intake;
+        proxy_http_version 1.1;
+        proxy_request_buffering on;
+        proxy_buffering on;
+        proxy_max_temp_file_size 0;
+        proxy_connect_timeout 1s;
+        proxy_send_timeout 5s;
+        proxy_read_timeout 55s;
+        proxy_next_upstream off;
+        proxy_intercept_errors off;
+
+        proxy_set_header Host "intake-loopback.invalid";
+        proxy_set_header Connection "close";
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Expect "";
+        proxy_set_header Forwarded "";
+        proxy_set_header Referer "";
+        proxy_set_header User-Agent "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+
+        add_header Cache-Control "no-store" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), geolocation=(), microphone=()" always;
+    }
+
+    location = /v1/intake/withdraw {
+        if ($args != "") {
+            return 404;
+        }
+        if ($request_method != POST) {
+            return 405;
+        }
+        if ($http_content_type != "application/json") {
+            return 415;
+        }
+        if ($http_transfer_encoding != "") {
+            return 400;
+        }
+        if ($http_content_encoding != "") {
+            return 400;
+        }
+        if ($http_expect != "") {
+            return 400;
+        }
+
+        limit_req zone=wywa_intake_withdraw_per_ip burst=3 nodelay;
+        limit_req_status 429;
+        limit_conn wywa_intake_withdraw_conn_per_ip 1;
+        limit_conn_status 429;
+
+        client_max_body_size 32k;
+        client_body_buffer_size 32k;
+        client_body_timeout 3s;
+        send_timeout 3s;
+        keepalive_timeout 0;
+        reset_timedout_connection on;
+
+        proxy_pass http://127.0.0.1:__WYWA_WITHDRAW_UPSTREAM_PORT__/v1/intake;
+        proxy_http_version 1.1;
+        proxy_request_buffering on;
+        proxy_buffering on;
+        proxy_max_temp_file_size 0;
+        proxy_connect_timeout 1s;
+        proxy_send_timeout 5s;
+        proxy_read_timeout 55s;
+        proxy_next_upstream off;
+        proxy_intercept_errors off;
+
+        proxy_set_header Host "intake-loopback.invalid";
+        proxy_set_header Connection "close";
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Expect "";
+        proxy_set_header Forwarded "";
+        proxy_set_header Referer "";
+        proxy_set_header User-Agent "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-Proto "";
+        proxy_set_header X-Real-IP "";
+
+        add_header Cache-Control "no-store" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Content-Security-Policy "default-src 'none'; frame-ancestors 'none'" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), geolocation=(), microphone=()" always;
+    }
+
+    location @edge_body_too_large {
+        internal;
+        default_type application/json;
+        return 413 '{"accepted":false,"error":"edge-body-too-large"}\n';
+    }
+
+    location @edge_limited {
+        internal;
+        default_type application/json;
+        add_header Retry-After "5" always;
+        return 429 '{"accepted":false,"error":"edge-rate-or-connection-limit"}\n';
+    }
+
+    location @edge_unavailable {
+        internal;
+        default_type application/json;
+        add_header Retry-After "30" always;
+        return 503 '{"accepted":false,"error":"edge-upstream-unavailable"}\n';
+    }
+
+    location = / {
+        try_files /index.html =404;
+    }
+
+    location = /index.html {
+        try_files $uri =404;
+    }
+
+    location = /life.json {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location = /feed.xml {
+        default_type application/atom+xml;
+        try_files $uri =404;
+    }
+
+    location = /agents/ {
+        try_files /agents/index.html =404;
+    }
+
+    location = /agents/index.html {
+        try_files $uri =404;
+    }
+
+    location = /agents/index.json {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location = /agents/audit.json {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location = /.well-known/nostr.json {
+        default_type application/json;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), geolocation=(), microphone=()" always;
+        try_files $uri =404;
+    }
+
+    location = /.well-known/wywa-agent.json {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location = /.well-known/wywa-agent.sig {
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
+    location = /robots.txt {
+        try_files $uri =404;
+    }
+
+    location /assets/ {
+        try_files $uri =404;
+        expires 1h;
+        add_header Cache-Control "public, max-age=3600";
+        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
+        add_header Referrer-Policy "no-referrer" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Permissions-Policy "camera=(), geolocation=(), microphone=()" always;
+    }
+
+    location / {
+        return 404;
+    }
+}

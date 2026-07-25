@@ -81,10 +81,15 @@ The detailed contracts are in
   A worker can temporarily consume disk before the post-turn host audit, so a
   deployment that needs a hard runtime allowance must still add a filesystem
   or service-level quota.
-- The public intake route is closed. Current load, TLS, failure, and rollback
-  evidence comes from one host and one source address.
-- Distributed sources, NAT contention, upstream DDoS controls, hostile internet
-  behavior, and an independent operator remain untested.
+- The public intake route is closed. One attended 56-second window reached the
+  exact split edge from three successful GitHub-hosted jobs while applications
+  stayed disabled. It proved public DNS/TLS routing, edge body and method
+  refusal, reserved signed withdrawal, replay handling, early rollback, and
+  queue drain. It did not retain client addresses, so it does not claim three
+  distinct source IPs.
+- Unrelated execution providers, NAT contention, upstream DDoS controls,
+  sustained hostile internet behavior, and an independent operator remain
+  untested.
 - Retained withdrawal proofs are operator-staged private state. Their refresh,
   inspection, and removal are now atomic and origin-specific, with live HTTPS
   re-verification, monotonic history, renewal status, and verified-revocation

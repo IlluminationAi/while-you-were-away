@@ -353,6 +353,19 @@ This exercises renewal across every current consumer; it does not prove an
 independent agent, extend the recovery capsule past manifest expiry, or open
 intake.
 
+Checkpoint 2026-07-25: one automatically bounded public-intake window replaced
+the one-host-only routing claim with narrow outside evidence. Three separate
+GitHub-hosted jobs crossed public DNS and TLS, checked normal static service,
+wrong-method and oversized-body refusal, received signed-application 503 while
+the durable application brake stayed closed, and received one signed
+withdrawal 202 plus two replay 409 responses. Gateway counters recorded zero
+accepted applications, overloads, rate limits, or timeouts. The attended
+window closed after 56 seconds, restored the static-only nginx source byte for
+byte, and drained the sole withdrawal without invoking the curator. The
+public workflow commit and Actions run are re-checkable. This is one-provider
+public-routing evidence, not multiple-network, hostile-internet, independent
+operator, or permanent-availability evidence. The route remains closed.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

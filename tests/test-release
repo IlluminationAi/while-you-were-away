@@ -94,6 +94,10 @@ release_root=$(find \
   fail "release omitted public traffic controls"
 [[ -f "$release_root/platform/intake-edge-harness.nginx.conf.in" ]] ||
   fail "release omitted the isolated intake-edge harness"
+[[ -f "$release_root/platform/intake-public-window.nginx.conf.in" ]] ||
+  fail "release omitted the attended public-intake window"
+[[ -f "$release_root/platform/intake-public-window-zones.conf" ]] ||
+  fail "release omitted the public-intake window traffic controls"
 
 shellcheck \
   "$release_root/bin/wywa" \

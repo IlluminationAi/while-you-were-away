@@ -75,6 +75,8 @@ install -m 0644 -- \
   "$release_root/platform/site.css"
 for filename in \
   intake-edge-harness.nginx.conf.in \
+  intake-public-window.nginx.conf.in \
+  intake-public-window-zones.conf \
   public-nginx-bootstrap.conf.in \
   public-nginx.conf.in \
   public-nginx-zones.conf

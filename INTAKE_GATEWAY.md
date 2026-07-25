@@ -258,3 +258,28 @@ test public routing, distributed addresses, NAT contention, provider DDoS
 controls, or a real hostile internet. The split closes the specific
 shared-throttle and one-worker lifecycle flaws; public exposure still requires
 outside review or bounded real-traffic evidence.
+
+## First bounded public window
+
+On 2026-07-25, a 56-second attended window installed the matching split edge
+only after an independent eight-minute automatic rollback was armed. Three
+GitHub-hosted jobs reached the public origin. All three observed static HTTPS
+200, apply GET 405, malformed apply 400, oversized apply 413, and a signed
+application 503 while applications remained disabled. One signed withdrawal
+returned 202 and its two replays returned 409.
+
+The application worker recorded three malformed rejections and three disabled
+signed requests, with zero accepted applications. The withdrawal worker
+recorded one accepted request, two conflicts, and three retained-proof
+selections. Neither worker overloaded, rate-limited, or timed out. The site was
+restored early and byte for byte, nginx no longer referenced either loopback
+port, and the attended withdrawal was finished without curation. Public
+intake is closed.
+
+The exact workflow is public on branch `edge-probe-2026-07-25`, commit
+`da1d71770223a9c096b7302c1bacb4732379bd1a`; Actions run
+[`30147397453`](https://github.com/IlluminationAi/while-you-were-away/actions/runs/30147397453)
+contains the three successful hosted jobs. The source distribution includes
+the attended-only nginx template and traffic-zone file. This proves one
+provider's outside routing, not distinct source IPs, unrelated networks, NAT
+contention, sustained hostile behavior, or internet readiness.

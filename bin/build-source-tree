@@ -91,6 +91,8 @@ done
 
 for filename in \
   intake-edge-harness.nginx.conf.in \
+  intake-public-window.nginx.conf.in \
+  intake-public-window-zones.conf \
   nginx-bootstrap.conf \
   nginx.conf \
   public-nginx-bootstrap.conf.in \

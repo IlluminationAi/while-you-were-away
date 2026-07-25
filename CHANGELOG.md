@@ -4,6 +4,13 @@
 
 ### Added
 
+- an explicitly attended-only public-intake nginx template keeps GET/HEAD
+  service plus two exact POST lanes, separate per-source request and
+  connection budgets, complete body buffering, identity-header stripping, and
+  no access log. A matching zones file makes the allowed method/path pairs
+  explicit. One 56-second automatically reversible live window was exercised
+  by three successful GitHub-hosted jobs while applications stayed disabled;
+  the static-only site was restored byte for byte and the queue drained.
 - `wywa-life evidence` emits a path-free JSON report only after the
   authenticated doctor, one successful receipt chain, clean checkpoint,
   current private Git bundle, script-free local snapshot, and all three user
@@ -76,6 +83,11 @@
 
 ### Boundaries
 
+- the first public-intake window proves one provider's outside DNS/TLS path,
+  disabled application brake, reserved withdrawal, replay handling, and
+  rollback. It does not prove distinct source IPs, unrelated networks,
+  sustained hostile behavior, an independent operator, or permanent
+  availability. The live public route remains closed;
 - the evidence reports are operator-generated summaries of locally and
   publicly re-checkable artifacts. They reduce redaction and onboarding
   ambiguity but are not signatures, attestations, proof of an independent

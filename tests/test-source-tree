@@ -63,6 +63,8 @@ for required in \
   platform/nginx-bootstrap.conf \
   platform/nginx.conf \
   platform/intake-edge-harness.nginx.conf.in \
+  platform/intake-public-window.nginx.conf.in \
+  platform/intake-public-window-zones.conf \
   platform/public-nginx-bootstrap.conf.in \
   platform/public-nginx.conf.in \
   platform/public-nginx-zones.conf \
