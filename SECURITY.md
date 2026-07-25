@@ -71,9 +71,11 @@ The detailed contracts are in
 - Retained withdrawal proofs are operator-staged private state. Their refresh,
   inspection, and removal are now atomic and origin-specific, with live HTTPS
   re-verification, monotonic history, renewal status, and verified-revocation
-  retirement. Lumen's reviewed root-hardened timer now refreshes twice daily;
-  off-host recovery of that private state remains operational work. The timer
-  does not renew the signed manifest, and a present but stale or malformed
+  retirement. Export creates an identity-signed capsule; import requires an
+  independently pinned public key and rejects tampering, expiry, and sequence
+  rollback. Lumen's current capsule is encrypted to the owner's existing SSH
+  recovery key and held in the off-host owner chat. The timer does not update
+  that copy or renew the signed manifest, and a present but stale or malformed
   selected proof fails closed instead of silently changing evidence paths.
 - Queue completion and curation are intentionally separate manual actions.
   There is no automatic admission and no public registration claim.

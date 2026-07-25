@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import datetime as dt
 import fcntl
@@ -31,6 +32,7 @@ MAX_SECONDS = 30 * 24 * 60 * 60
 MAX_VERIFICATION_AGE = dt.timedelta(minutes=5)
 MAX_FUTURE_SKEW = dt.timedelta(minutes=5)
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+BACKUP_NAMESPACE = "wywa-retained-proof-backup-v1"
 HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
 DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
@@ -49,6 +51,15 @@ RECORD_KEYS = {
     "expires_at",
     "sequence",
     "status",
+}
+CAPSULE_KEYS = {
+    "capsule_schema_version",
+    "exported_at",
+    "origin",
+    "record",
+    "record_sha256",
+    "signer_fingerprint",
+    "signature",
 }
 
 
@@ -106,6 +117,37 @@ def canonical_bytes(record: dict[str, Any]) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def canonical_public_key(value: str, label: str) -> tuple[str, bytes]:
+    lines = value.strip().splitlines()
+    if len(lines) != 1:
+        raise RetainedProofError(f"{label} must contain one Ed25519 SSH key")
+    parts = lines[0].split()
+    if len(parts) < 2 or parts[0] != "ssh-ed25519":
+        raise RetainedProofError(f"{label} must contain one Ed25519 SSH key")
+    try:
+        blob = base64.b64decode(parts[1], validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise RetainedProofError(f"{label} has invalid key encoding") from error
+    key_type = b"ssh-ed25519"
+    if (
+        len(blob) != 4 + len(key_type) + 4 + 32
+        or int.from_bytes(blob[:4], "big") != len(key_type)
+        or blob[4 : 4 + len(key_type)] != key_type
+        or int.from_bytes(
+            blob[4 + len(key_type) : 8 + len(key_type)],
+            "big",
+        )
+        != 32
+    ):
+        raise RetainedProofError(f"{label} is not a valid Ed25519 SSH key")
+    return f"ssh-ed25519 {parts[1]}", blob
+
+
+def key_fingerprint(blob: bytes) -> str:
+    encoded = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii")
+    return f"SHA256:{encoded.rstrip('=')}"
 
 
 def normalize_origin(value: object) -> str:
@@ -179,6 +221,7 @@ def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
 
 
 def read_regular(path: Path, label: str) -> bytes:
+    reject_symlink_ancestors(path.parent)
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -192,6 +235,181 @@ def read_regular(path: Path, label: str) -> bytes:
     if metadata.st_size > MAX_RECORD_BYTES:
         raise RetainedProofError(f"{label} exceeds its size limit")
     return path.read_bytes()
+
+
+def read_public_key(path: Path, label: str) -> tuple[str, bytes]:
+    reject_symlink_ancestors(path.parent)
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise RetainedProofError(f"{label} does not exist") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RetainedProofError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        raise RetainedProofError(
+            f"{label} must be current-user-owned and not writable "
+            "by group or others"
+        )
+    if metadata.st_size > 4096:
+        raise RetainedProofError(f"{label} exceeds its size limit")
+    try:
+        value = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise RetainedProofError(f"{label} is not UTF-8") from error
+    return canonical_public_key(value, label)
+
+
+def private_key_public(path: Path) -> tuple[str, bytes]:
+    read_regular(path, "backup signing key")
+    try:
+        result = subprocess.run(
+            ["ssh-keygen", "-y", "-f", str(path)],
+            cwd="/",
+            env={
+                "PATH": SAFE_PATH,
+                "LC_ALL": "C.UTF-8",
+                "TZ": "UTC",
+                "HOME": "/nonexistent",
+            },
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RetainedProofError(
+            "could not derive the backup signing public key"
+        ) from error
+    if result.returncode != 0 or len(result.stdout) > 4096:
+        raise RetainedProofError(
+            "could not derive the backup signing public key"
+        )
+    try:
+        value = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RetainedProofError(
+            "backup signing public key is not UTF-8"
+        ) from error
+    return canonical_public_key(value, "backup signing key")
+
+
+def sign_record(data: bytes, key: Path) -> str:
+    try:
+        result = subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-f",
+                str(key),
+                "-n",
+                BACKUP_NAMESPACE,
+                "-",
+            ],
+            input=data,
+            cwd="/",
+            env={
+                "PATH": SAFE_PATH,
+                "LC_ALL": "C.UTF-8",
+                "TZ": "UTC",
+                "HOME": "/nonexistent",
+            },
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RetainedProofError("could not sign the recovery capsule") from error
+    if result.returncode != 0 or len(result.stdout) > 16 * 1024:
+        raise RetainedProofError("could not sign the recovery capsule")
+    try:
+        signature = result.stdout.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise RetainedProofError(
+            "recovery signature is not ASCII"
+        ) from error
+    if (
+        not signature.startswith("-----BEGIN SSH SIGNATURE-----\n")
+        or not signature.endswith("-----END SSH SIGNATURE-----\n")
+    ):
+        raise RetainedProofError("ssh-keygen returned an invalid recovery signature")
+    return signature
+
+
+def verify_record_signature(
+    data: bytes,
+    signature: str,
+    *,
+    public_key: str,
+    identity: str,
+    directory: Path,
+) -> None:
+    with tempfile.NamedTemporaryFile(
+        prefix=".wywa-retained-allowed.",
+        dir=directory,
+        delete=False,
+    ) as allowed_handle:
+        allowed = Path(allowed_handle.name)
+        allowed_handle.write(f"{identity} {public_key}\n".encode("ascii"))
+        allowed_handle.flush()
+        os.fsync(allowed_handle.fileno())
+    with tempfile.NamedTemporaryFile(
+        prefix=".wywa-retained-signature.",
+        dir=directory,
+        delete=False,
+    ) as signature_handle:
+        signature_path = Path(signature_handle.name)
+        signature_handle.write(signature.encode("ascii"))
+        signature_handle.flush()
+        os.fsync(signature_handle.fileno())
+    try:
+        directory_metadata = directory.stat()
+        os.chown(
+            allowed,
+            directory_metadata.st_uid,
+            directory_metadata.st_gid,
+        )
+        os.chown(
+            signature_path,
+            directory_metadata.st_uid,
+            directory_metadata.st_gid,
+        )
+        os.chmod(allowed, 0o600)
+        os.chmod(signature_path, 0o600)
+        result = subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                identity,
+                "-n",
+                BACKUP_NAMESPACE,
+                "-s",
+                str(signature_path),
+            ],
+            input=data,
+            cwd="/",
+            env={
+                "PATH": SAFE_PATH,
+                "LC_ALL": "C.UTF-8",
+                "TZ": "UTC",
+                "HOME": "/nonexistent",
+            },
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RetainedProofError("recovery capsule signature is invalid")
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RetainedProofError(
+            "could not verify the recovery capsule signature"
+        ) from error
+    finally:
+        allowed.unlink(missing_ok=True)
+        signature_path.unlink(missing_ok=True)
 
 
 def normalize_record(
@@ -607,6 +825,213 @@ def remove(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def export_capsule(arguments: argparse.Namespace) -> int:
+    at = utc_now()
+    origin = normalize_origin(arguments.origin)
+    directory = private_directory(arguments.directory)
+    destination = proof_path(directory, origin)
+    key = Path(arguments.key).expanduser().absolute()
+    output = Path(arguments.output).expanduser().absolute()
+    output_directory = private_directory(str(output.parent))
+    if output.parent != output_directory:
+        raise RetainedProofError("recovery output parent did not resolve exactly")
+    if output.name in {"", ".", ".."}:
+        raise RetainedProofError("recovery output filename is invalid")
+    try:
+        output_metadata = output.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if (
+            stat.S_ISLNK(output_metadata.st_mode)
+            or not stat.S_ISREG(output_metadata.st_mode)
+            or output_metadata.st_uid != os.geteuid()
+            or output_metadata.st_mode & 0o077
+        ):
+            raise RetainedProofError(
+                "existing recovery output must be a current-user-owned "
+                "private regular file"
+            )
+    with directory_lock(directory, exclusive=False):
+        record = load_retained(destination, origin=origin, at=at)
+    expires_at = parse_moment(record["expires_at"], "expires_at")
+    if (
+        record["status"] != "active"
+        or record["eligible"] is not True
+        or expires_at <= at
+    ):
+        raise RetainedProofError("only an active unexpired proof can be exported")
+    signing_key, signing_blob = private_key_public(key)
+    record_key, _record_blob = canonical_public_key(
+        record["public_key"],
+        "retained proof public_key",
+    )
+    if signing_key != record_key:
+        raise RetainedProofError(
+            "backup signing key does not match the retained proof"
+        )
+    record_bytes = canonical_bytes(record)
+    signature = sign_record(record_bytes, key)
+    capsule = {
+        "capsule_schema_version": 1,
+        "exported_at": utc_text(at),
+        "origin": origin,
+        "record": record,
+        "record_sha256": hashlib.sha256(record_bytes).hexdigest(),
+        "signer_fingerprint": key_fingerprint(signing_blob),
+        "signature": signature,
+    }
+    atomic_write(output_directory, output, canonical_bytes(capsule))
+    emit(
+        {
+            "schema_version": 1,
+            "state": "exported",
+            "origin": origin,
+            "agent_id": record["agent_id"],
+            "sequence": record["sequence"],
+            "expires_at": record["expires_at"],
+            "record_sha256": capsule["record_sha256"],
+            "signer_fingerprint": capsule["signer_fingerprint"],
+            "capsule_sha256": hashlib.sha256(
+                canonical_bytes(capsule)
+            ).hexdigest(),
+        }
+    )
+    return 0
+
+
+def import_capsule(arguments: argparse.Namespace) -> int:
+    at = utc_now()
+    origin = normalize_origin(arguments.origin)
+    directory = private_directory(arguments.directory)
+    capsule_path = Path(arguments.capsule).expanduser().absolute()
+    expected_key_path = Path(arguments.expected_key).expanduser().absolute()
+    capsule_raw = load_json_bytes(
+        read_regular(capsule_path, "recovery capsule"),
+        "recovery capsule",
+    )
+    if set(capsule_raw) != CAPSULE_KEYS:
+        raise RetainedProofError(
+            "recovery capsule fields do not match schema version 1"
+        )
+    if capsule_raw["capsule_schema_version"] != 1:
+        raise RetainedProofError("recovery capsule has an unsupported schema")
+    capsule_origin = normalize_origin(capsule_raw["origin"])
+    if capsule_origin != origin:
+        raise RetainedProofError(
+            "recovery capsule differs from the requested origin"
+        )
+    exported_at = parse_moment(capsule_raw["exported_at"], "exported_at")
+    if exported_at > at + MAX_FUTURE_SKEW:
+        raise RetainedProofError("recovery capsule is from the future")
+    raw_record = capsule_raw["record"]
+    if not isinstance(raw_record, dict):
+        raise RetainedProofError("recovery capsule record must be an object")
+    record = normalize_record(
+        raw_record,
+        expected_origin=origin,
+        at=at,
+        require_recent=False,
+    )
+    if canonical_bytes(raw_record) != canonical_bytes(record):
+        raise RetainedProofError("recovery capsule record is not canonical")
+    if record["status"] != "active" or record["eligible"] is not True:
+        raise RetainedProofError("recovery capsule does not contain active proof")
+    if parse_moment(record["expires_at"], "expires_at") <= at:
+        raise RetainedProofError("recovery capsule proof has expired")
+    record_bytes = canonical_bytes(record)
+    record_hash = capsule_raw["record_sha256"]
+    if (
+        not isinstance(record_hash, str)
+        or HASH_PATTERN.fullmatch(record_hash) is None
+        or record_hash != hashlib.sha256(record_bytes).hexdigest()
+    ):
+        raise RetainedProofError("recovery capsule record digest is invalid")
+    expected_key, expected_blob = read_public_key(
+        expected_key_path,
+        "expected public key",
+    )
+    record_key, _record_blob = canonical_public_key(
+        record["public_key"],
+        "recovery capsule public_key",
+    )
+    if expected_key != record_key:
+        raise RetainedProofError(
+            "expected public key does not match the recovery capsule"
+        )
+    expected_fingerprint = key_fingerprint(expected_blob)
+    if capsule_raw["signer_fingerprint"] != expected_fingerprint:
+        raise RetainedProofError(
+            "recovery capsule signer fingerprint does not match"
+        )
+    signature = capsule_raw["signature"]
+    if (
+        not isinstance(signature, str)
+        or len(signature) > 16 * 1024
+        or not signature.startswith("-----BEGIN SSH SIGNATURE-----\n")
+        or not signature.endswith("-----END SSH SIGNATURE-----\n")
+        or not signature.isascii()
+    ):
+        raise RetainedProofError("recovery capsule signature encoding is invalid")
+    with directory_lock(directory, exclusive=True):
+        verify_record_signature(
+            record_bytes,
+            signature,
+            public_key=expected_key,
+            identity=record["agent_id"],
+            directory=directory,
+        )
+        destination = proof_path(directory, origin)
+        try:
+            destination.lstat()
+        except FileNotFoundError:
+            existing = None
+        else:
+            existing = load_retained(destination, origin=origin, at=at)
+        state = "imported"
+        if existing is not None:
+            if record["sequence"] < existing["sequence"]:
+                raise RetainedProofError(
+                    "recovery capsule would roll back the retained sequence"
+                )
+            if record["sequence"] == existing["sequence"]:
+                if (
+                    record["manifest_sha256"] != existing["manifest_sha256"]
+                    or record_key
+                    != canonical_public_key(
+                        existing["public_key"],
+                        "existing retained proof public_key",
+                    )[0]
+                    or record["status"] != existing["status"]
+                ):
+                    raise RetainedProofError(
+                        "recovery capsule conflicts with the retained sequence"
+                    )
+                if parse_moment(
+                    record["verified_at"],
+                    "verified_at",
+                ) <= parse_moment(existing["verified_at"], "verified_at"):
+                    state = "present"
+            if state == "imported":
+                atomic_write(directory, destination, record_bytes)
+        else:
+            atomic_write(directory, destination, record_bytes)
+    emit(
+        {
+            "schema_version": 1,
+            "state": state,
+            "origin": origin,
+            "agent_id": record["agent_id"],
+            "sequence": record["sequence"],
+            "verified_at": record["verified_at"],
+            "expires_at": record["expires_at"],
+            "manifest_sha256": record["manifest_sha256"],
+            "signer_fingerprint": expected_fingerprint,
+        }
+    )
+    return 0
+
+
 def bounded_seconds(value: str) -> int:
     try:
         parsed = int(value)
@@ -621,8 +1046,8 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog=PROGRAM,
         description=(
-            "Refresh, inspect, or remove private live-origin verification "
-            "records used for offline-origin consent withdrawal."
+            "Refresh, inspect, remove, export, or restore private live-origin "
+            "verification records used for offline-origin consent withdrawal."
         ),
     )
     subcommands = result.add_subparsers(dest="command", required=True)
@@ -658,6 +1083,24 @@ def parser() -> argparse.ArgumentParser:
     )
     remove_parser.add_argument("--origin", required=True)
     remove_parser.add_argument("--directory", required=True)
+
+    export_parser = subcommands.add_parser(
+        "export",
+        help="sign one retained record into a portable recovery capsule",
+    )
+    export_parser.add_argument("--origin", required=True)
+    export_parser.add_argument("--directory", required=True)
+    export_parser.add_argument("--key", required=True)
+    export_parser.add_argument("--output", required=True)
+
+    import_parser = subcommands.add_parser(
+        "import",
+        help="verify and atomically restore one recovery capsule",
+    )
+    import_parser.add_argument("--origin", required=True)
+    import_parser.add_argument("--directory", required=True)
+    import_parser.add_argument("--capsule", required=True)
+    import_parser.add_argument("--expected-key", required=True)
     return result
 
 
@@ -669,6 +1112,10 @@ def main() -> int:
         return status(arguments)
     if arguments.command == "remove":
         return remove(arguments)
+    if arguments.command == "export":
+        return export_capsule(arguments)
+    if arguments.command == "import":
+        return import_capsule(arguments)
     raise RetainedProofError("unknown command")
 
 

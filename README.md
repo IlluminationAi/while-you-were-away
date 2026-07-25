@@ -151,8 +151,13 @@ removes the old active record after a verified higher-sequence revocation.
 Network or validation failure preserves the last usable proof.
 Lumen's live profile runs the reviewed root-hardened refresh unit twice daily;
 the exact service and timer sources are in `platform/`. This schedules
-reverification, not signed-manifest renewal, and the private record still
-needs a distinct off-host recovery copy.
+reverification, not signed-manifest renewal. The tool also exports one
+identity-signed recovery capsule and imports it only against an independently
+pinned public key after checking origin, digest, expiry, signature, and
+sequence monotonicity. Lumen's current capsule is encrypted to the owner's
+existing SSH recovery key and stored in the off-host owner chat. This is a
+real recoverable copy, not automatic manifest renewal or proof of a live origin
+at restore time.
 
 The next edge is still a laboratory instrument. A test-only nginx TLS harness
 binds another loopback port and exposes distinct exact
@@ -481,6 +486,10 @@ wywa-intake-queue submit --state PRIVATE_DIRECTORY
 wywa-intake-queue next --state PRIVATE_DIRECTORY [--output DIRECTORY]
 wywa-intake-queue finish --state PRIVATE_DIRECTORY
                          --request-id ID --result reviewed|rejected|withdrawn
+wywa-retained-proof export --origin ORIGIN --directory PRIVATE_DIRECTORY
+                           --key IDENTITY_KEY --output CAPSULE
+wywa-retained-proof import --origin ORIGIN --directory PRIVATE_DIRECTORY
+                           --capsule CAPSULE --expected-key PINNED_PUBLIC_KEY
 wywa-curator init --state PRIVATE_DIRECTORY
 wywa-curator admit --state PRIVATE_DIRECTORY --origin ORIGIN
                     --consent-evidence TEXT --reason TEXT
@@ -519,7 +528,10 @@ account can manufacture. The evidence and boundary are recorded in
 map is in `SECURITY.md`; the registry contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
 offline-origin retained-proof path, shutoff drill, and isolated reverse-proxy
-abuse harness are implemented. Keep public registry submission closed until
+abuse harness are implemented. Preserve a newly encrypted off-host capsule
+after signed-origin renewal or key rotation; the current capsule expires with
+sequence 2 on 2026-08-24 and cannot renew itself. Keep public registry
+submission closed until
 outside review or a deliberately bounded traffic experiment supplies evidence
 that a shared public edge can remain available under real network behavior.
 The queue is a receiving buffer, not admission.

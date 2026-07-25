@@ -49,6 +49,7 @@ def record(
     status: str = "active",
     manifest_hash: str | None = None,
     expires_in: int = 7 * 24 * 60 * 60,
+    public_key: str | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -60,7 +61,8 @@ def record(
         "agent_id": "test-worker",
         "name": "Test Worker",
         "origin": origin,
-        "public_key": (
+        "public_key": public_key
+        or (
             "ssh-ed25519 "
             "AAAAC3NzaC1lZDI1NTE5AAAAIE4RGvV6vsBTyHK0MX6+"
             "8Kb9MmJSrCmy6iTlQxw7uI0a"
@@ -391,6 +393,239 @@ def main() -> None:
         assert json.loads(second_stdout)["state"] == "revoked"
         assert not proof.exists()
 
+        signing_key = root / "recovery-signing"
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(signing_key),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        signing_public = " ".join(
+            signing_key.with_suffix(".pub")
+            .read_text(encoding="utf-8")
+            .split()[:2]
+        )
+        recoverable = record(
+            now=now,
+            sequence=7,
+            public_key=signing_public,
+        )
+        write_fake_registry(registry, recoverable)
+        refresh(tool, retained)
+
+        capsules = root / "capsules"
+        capsules.mkdir(mode=0o700)
+        capsule = capsules / "retained.capsule.json"
+        exported = json.loads(
+            run(
+                tool,
+                "export",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+                "--key",
+                str(signing_key),
+                "--output",
+                str(capsule),
+            ).stdout
+        )
+        assert exported["state"] == "exported"
+        assert exported["sequence"] == 7
+        assert capsule.is_file() and not capsule.is_symlink()
+        assert capsule.stat().st_mode & 0o777 == 0o600
+        capsule_payload = json.loads(capsule.read_text(encoding="utf-8"))
+        assert capsule_payload["record"] == recoverable
+        assert capsule_payload["signature"].startswith(
+            "-----BEGIN SSH SIGNATURE-----\n"
+        )
+
+        restored = root / "restored"
+        restored.mkdir(mode=0o700)
+        imported = json.loads(
+            run(
+                tool,
+                "import",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(restored),
+                "--capsule",
+                str(capsule),
+                "--expected-key",
+                str(signing_key.with_suffix(".pub")),
+            ).stdout
+        )
+        assert imported["state"] == "imported"
+        assert imported["sequence"] == 7
+        restored_proof = restored / (
+            hashlib.sha256(ORIGIN.encode()).hexdigest() + ".json"
+        )
+        assert restored_proof.read_bytes() == proof.read_bytes()
+        assert restored_proof.stat().st_mode & 0o777 == 0o600
+
+        present = json.loads(
+            run(
+                tool,
+                "import",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(restored),
+                "--capsule",
+                str(capsule),
+                "--expected-key",
+                str(signing_key.with_suffix(".pub")),
+            ).stdout
+        )
+        assert present["state"] == "present"
+
+        other_key = root / "other-signing"
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(other_key),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        wrong_key = run(
+            tool,
+            "import",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(restored),
+            "--capsule",
+            str(capsule),
+            "--expected-key",
+            str(other_key.with_suffix(".pub")),
+            expected=2,
+        )
+        assert "expected public key does not match" in wrong_key.stderr
+
+        tampered = capsules / "tampered.capsule.json"
+        tampered_payload = json.loads(capsule.read_text(encoding="utf-8"))
+        tampered_payload["record"]["name"] = "Tampered Worker"
+        tampered_payload["record_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    tampered_payload["record"],
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        tampered.write_text(
+            json.dumps(tampered_payload, separators=(",", ":"), sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        tampered.chmod(0o600)
+        invalid_signature = run(
+            tool,
+            "import",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(restored),
+            "--capsule",
+            str(tampered),
+            "--expected-key",
+            str(signing_key.with_suffix(".pub")),
+            expected=2,
+        )
+        assert "signature is invalid" in invalid_signature.stderr
+
+        expired = capsules / "expired.capsule.json"
+        expired_payload = json.loads(capsule.read_text(encoding="utf-8"))
+        expired_payload["record"]["expires_at"] = moment(
+            now - dt.timedelta(seconds=1)
+        )
+        expired_payload["record_sha256"] = hashlib.sha256(
+            (
+                json.dumps(
+                    expired_payload["record"],
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                + "\n"
+            ).encode()
+        ).hexdigest()
+        expired.write_text(
+            json.dumps(expired_payload, separators=(",", ":"), sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        expired.chmod(0o600)
+        expired_result = run(
+            tool,
+            "import",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(restored),
+            "--capsule",
+            str(expired),
+            "--expected-key",
+            str(signing_key.with_suffix(".pub")),
+            expected=2,
+        )
+        assert "proof has expired" in expired_result.stderr
+
+        newer = record(
+            now=now,
+            sequence=8,
+            public_key=signing_public,
+        )
+        write_fake_registry(registry, newer)
+        refresh(tool, restored)
+        rollback = run(
+            tool,
+            "import",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(restored),
+            "--capsule",
+            str(capsule),
+            "--expected-key",
+            str(signing_key.with_suffix(".pub")),
+            expected=2,
+        )
+        assert "roll back" in rollback.stderr
+
+        mismatched_export = run(
+            tool,
+            "export",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--key",
+            str(other_key),
+            "--output",
+            str(capsules / "wrong-key.capsule.json"),
+            expected=2,
+        )
+        assert "does not match the retained proof" in mismatched_export.stderr
+
+        proof.unlink()
         proof.symlink_to(root / "missing-proof")
         broken_link = run(
             tool,

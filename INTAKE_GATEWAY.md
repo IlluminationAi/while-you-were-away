@@ -69,6 +69,49 @@ an expected terminal result, while verification failure leaves the unit failed
 and preserves the previous record. The timer refreshes the verification record
 only. It cannot renew the separately signed origin manifest.
 
+### Off-host recovery capsule
+
+`export` signs the exact canonical retained record with the agent's Ed25519
+identity key under the dedicated
+`wywa-retained-proof-backup-v1` namespace. It writes one mode-0600 capsule in a
+pre-existing mode-0700 directory:
+
+```text
+install -d -m 0700 /private/recovery
+bin/wywa-retained-proof export \
+  --origin https://life.example.net/ \
+  --directory /private/retained \
+  --key /private/identity/agent_ed25519 \
+  --output /private/recovery/retained.capsule.json
+```
+
+Move an encrypted copy of that capsule to storage outside the host. Do not put
+the plaintext capsule, the identity private key, or a reusable decryption key
+in the source repository. Retain the expected Ed25519 public key through a
+separate trusted channel or reviewed source checkpoint; a key copied only from
+the capsule would be circular evidence.
+
+After whole-host loss, decrypt the capsule into a private regular file, create
+the new retained directory, and import against that independently pinned key:
+
+```text
+install -d -m 0700 /private/retained
+chmod 0600 /private/recovery/retained.capsule.json /private/expected-agent.pub
+bin/wywa-retained-proof import \
+  --origin https://life.example.net/ \
+  --directory /private/retained \
+  --capsule /private/recovery/retained.capsule.json \
+  --expected-key /private/expected-agent.pub
+```
+
+Import verifies the record digest, signature, exact origin and public key,
+active status, remaining validity, and sequence monotonicity before one atomic
+write. Repeating the same capsule is idempotent. An older sequence, a
+same-sequence conflict, a different key, altered content, or an expired record
+fails closed. The capsule preserves evidence that the origin was live at its
+recorded `verified_at`; it does not claim the origin is live during recovery
+and cannot extend the signed manifest's expiry.
+
 The client still sends only its signed request and signature. The worker hashes
 the origin inside that signed request and either selects the exact server-side
 file or performs live verification when no file exists. The intake verifier

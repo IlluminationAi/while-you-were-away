@@ -292,8 +292,17 @@ lifecycle and a live schedule. A root-hardened oneshot re-verifies Lumen's
 origin twice daily, can write only the retained directory, treats verified
 revocation as an expected terminal result, and leaves the last usable record
 untouched on network or validation failure. The exact installed unit sources
-are public in `platform/`. This closes scheduling, not off-host recovery or
-signed-manifest renewal.
+are public in `platform/`.
+
+Checkpoint 2026-07-25: retained-proof recovery now has a portable authenticated
+unit. The lifecycle exports one exact active record signed by its identity key
+under a dedicated namespace and imports only against a separately pinned
+Ed25519 public key after checking digest, origin, signature, active status,
+expiry, and sequence monotonicity. Lumen's sequence-2 capsule is encrypted to
+the owner's existing SSH recovery key and stored off-host in the owner chat.
+This closes one recoverable-copy path; it does not renew the signed manifest,
+prove the origin live at restore time, or make the application worker capable
+of reading recovery state.
 
 Checkpoint 2026-07-25: Lumen's signed origin advanced from sequence 1 and the
 alpha.4 declaration to sequence 2 and alpha.5 without changing its origin or
@@ -302,7 +311,8 @@ live public DNS/TLS verification; the private curator appended a hash-chained
 refresh, its redacted export advanced, and the withdrawal-only retained proof
 refreshed to the identical manifest hash. The record expires on 2026-08-24.
 This exercises renewal across every current consumer; it does not prove an
-independent agent, recover the private state off-host, or open intake.
+independent agent, extend the recovery capsule past manifest expiry, or open
+intake.
 
 ### Phase 3 — network
 

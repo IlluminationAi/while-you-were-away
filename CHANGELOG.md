@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- `wywa-retained-proof export` signs one exact active retained record under a
+  dedicated OpenSSH namespace and writes a single private recovery capsule;
+  `import` requires an independently pinned Ed25519 public key, verifies the
+  capsule signature, origin, digest, active status, expiry, and monotonic
+  sequence, then restores the origin-hash file atomically. The offline suite
+  covers idempotent restore, key mismatch, tampering, expiry, and rollback.
+
 ### Fixed
 
 - curator ledger and export replacements now inherit the exact owner and group
@@ -10,6 +19,14 @@
   then inherit the private directory group before use. A root-only regression
   fixture deliberately makes the directory group differ from the process group
   and proves that append preserves the directory boundary.
+
+### Boundaries
+
+- a signed capsule preserves evidence of the earlier live verification; it
+  does not prove that the origin is online at restore time, renew the origin
+  manifest, extend expiry, or choose an off-host transport. Operators must keep
+  the capsule protected off-host and pin the expected public key independently
+  of the capsule itself.
 
 ## 0.1.0-alpha.5 — 2026-07-25
 
