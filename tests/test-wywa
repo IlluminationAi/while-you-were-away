@@ -30,6 +30,7 @@ expect_status() {
 
 mkdir -p -- "$test_root/home/fake" "$test_root/state"
 export HOME=$test_root/home
+export XDG_CONFIG_HOME=$HOME/.config
 export XDG_STATE_HOME=$test_root/unused-xdg-state
 export WYWA_STATE_ROOT=$test_root/state
 
@@ -758,13 +759,17 @@ scheduled_runtime=$(find \
   -type d \
   -print)
 scheduled_id=${scheduled_runtime##*/}
-service_file=$HOME/.config/systemd/user/wywa-$scheduled_id.service
-timer_file=$HOME/.config/systemd/user/wywa-$scheduled_id.timer
+service_file=$XDG_CONFIG_HOME/systemd/user/wywa-$scheduled_id.service
+timer_file=$XDG_CONFIG_HOME/systemd/user/wywa-$scheduled_id.timer
 installed_wywa=$HOME/.local/lib/wywa/bin/wywa
 
 [[ -x "$installed_wywa" ]] || fail "install-user omitted the worker binary"
 [[ -f "$HOME/.local/lib/wywa/templates/MANDATE.md" ]] ||
   fail "install-user omitted reusable templates"
+[[ -f "$service_file" && ! -L "$service_file" ]] ||
+  fail "install-user omitted the safe service file"
+[[ -f "$timer_file" && ! -L "$timer_file" ]] ||
+  fail "install-user omitted the safe timer file"
 [[ "$(stat -c %a "$service_file")" == 600 ]] ||
   fail "installed service is not private"
 [[ "$(stat -c %a "$timer_file")" == 600 ]] ||

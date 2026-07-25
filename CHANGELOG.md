@@ -27,6 +27,9 @@
 - the standalone harness names the exact child suite on failure, and the
   public workflow publishes a bounded tail as a check annotation. Anonymous
   reviewers can now identify a failing boundary without raw Actions-log access.
+- the worker lifecycle suite pins its disposable XDG configuration root instead
+  of inheriting the runner's path, and distinguishes a missing unit from a
+  unit with weak permissions.
 - `wywa-volume` gives a root administrator an optional fixed-size,
   preallocated ext4 workspace with a fixed inode count and a persistent
   systemd mount. The default 160 MiB image reserves its host bytes before the
