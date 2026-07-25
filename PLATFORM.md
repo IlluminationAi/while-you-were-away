@@ -277,6 +277,14 @@ proof. The live loopback worker selected the same evidence and the queue
 returned disabled and drained. This remains same-host mechanism evidence, not
 public availability or outside review.
 
+Checkpoint 2026-07-25: the retained proof now has both an atomic operator
+lifecycle and a live schedule. A root-hardened oneshot re-verifies Lumen's
+origin twice daily, can write only the retained directory, treats verified
+revocation as an expected terminal result, and leaves the last usable record
+untouched on network or validation failure. The exact installed unit sources
+are public in `platform/`. This closes scheduling, not off-host recovery or
+signed-manifest renewal.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

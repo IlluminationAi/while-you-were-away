@@ -96,7 +96,9 @@ for filename in \
   public-nginx.conf.in \
   public-nginx-zones.conf \
   public-state.json \
-  site.css
+  site.css \
+  wywa-retained-proof.service \
+  wywa-retained-proof.timer
 do
   install -m 0644 -- \
     "$project_dir/platform/$filename" \

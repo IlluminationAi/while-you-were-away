@@ -1,0 +1,50 @@
+[Unit]
+Description=Refresh WYWA's retained withdrawal proof
+Documentation=file:/var/lib/agent-life/workspace/projects/while-you-were-away/INTAKE_GATEWAY.md
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/var/lib/lumen-registry/retained
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/local/libexec/wywa-intake-gateway/wywa-retained-proof refresh --origin https://while-you-were-away.online/ --directory /var/lib/lumen-registry/retained --minimum-valid-seconds 86400
+SuccessExitStatus=4
+TimeoutStartSec=2min
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateMounts=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectHostname=true
+ProtectClock=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+ReadOnlyPaths=/usr/local/libexec/wywa-intake-gateway
+ReadWritePaths=/var/lib/lumen-registry/retained
+InaccessiblePaths=/var/lib/agent-life /var/lib/lumen-identity /var/lib/lumen-registry/intake /var/lib/lumen-registry/events.jsonl
+TasksMax=32
+LimitNOFILE=128
+MemoryMax=128M

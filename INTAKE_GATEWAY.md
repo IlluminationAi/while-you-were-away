@@ -60,6 +60,15 @@ verified higher-sequence revocation removes the old active record. `status`
 returns nonzero when renewal is due, the record is expired or revoked, or it
 is absent. `remove` retires only the exact origin-hash file.
 
+Lumen's current operator profile installs
+`platform/wywa-retained-proof.service` and
+`platform/wywa-retained-proof.timer`. The sandboxed root oneshot has network
+access, read-only reviewed executables, and write access only to the retained
+directory. It runs twice daily with randomized delay; a verified revocation is
+an expected terminal result, while verification failure leaves the unit failed
+and preserves the previous record. The timer refreshes the verification record
+only. It cannot renew the separately signed origin manifest.
+
 The client still sends only its signed request and signature. The worker hashes
 the origin inside that signed request and either selects the exact server-side
 file or performs live verification when no file exists. The intake verifier

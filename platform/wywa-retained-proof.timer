@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh WYWA's retained withdrawal proof twice daily
+
+[Timer]
+OnCalendar=*-*-* 00,12:20:00 UTC
+RandomizedDelaySec=20m
+AccuracySec=1m
+Persistent=yes
+Unit=wywa-retained-proof.service
+
+[Install]
+WantedBy=timers.target

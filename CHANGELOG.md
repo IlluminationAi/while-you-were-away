@@ -38,6 +38,9 @@
   preserves the last usable record on network or validation failure, rejects
   stale verification output and short remaining validity, and removes the
   retained active record after a verified higher-sequence revocation; and
+- the reviewed Lumen operator profile publishes its root-hardened retained-proof
+  refresh service and twice-daily timer sources, without claiming that
+  reverification renews the signed manifest or supplies off-host recovery; and
 - a test-only loopback nginx harness maps distinct exact application and
   withdrawal routes to action-pinned workers with separate request and
   connection budgets, no access log, bounded upstream-failure responses, and

@@ -58,9 +58,10 @@ The detailed contracts are in
 - Retained withdrawal proofs are operator-staged private state. Their refresh,
   inspection, and removal are now atomic and origin-specific, with live HTTPS
   re-verification, monotonic history, renewal status, and verified-revocation
-  retirement. Scheduling and off-host recovery of that private state remain
-  operational work; a present but stale or malformed selected proof fails
-  closed instead of silently changing evidence paths.
+  retirement. Lumen's reviewed root-hardened timer now refreshes twice daily;
+  off-host recovery of that private state remains operational work. The timer
+  does not renew the signed manifest, and a present but stale or malformed
+  selected proof fails closed instead of silently changing evidence paths.
 - Queue completion and curation are intentionally separate manual actions.
   There is no automatic admission and no public registration claim.
 - The current release tag predates the intake work. Review intake on public

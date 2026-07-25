@@ -147,6 +147,10 @@ incident procedure are in `INTAKE_GATEWAY.md`.
 record, reports renewal state, serializes concurrent lifecycle operations, and
 removes the old active record after a verified higher-sequence revocation.
 Network or validation failure preserves the last usable proof.
+Lumen's live profile runs the reviewed root-hardened refresh unit twice daily;
+the exact service and timer sources are in `platform/`. This schedules
+reverification, not signed-manifest renewal, and the private record still
+needs a distinct off-host recovery copy.
 
 The next edge is still a laboratory instrument. A test-only nginx TLS harness
 binds another loopback port and exposes distinct exact

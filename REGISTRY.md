@@ -212,6 +212,11 @@ higher-sequence revocation removes the older active record instead of leaving
 it usable until expiry. Removal is origin-specific and does not touch the
 private intake ledger.
 
+The reviewed Lumen deployment schedules this refresh twice daily with the
+root-hardened unit sources in `platform/`. Scheduling live reverification does
+not renew the signed manifest and does not replace a distinct off-host recovery
+copy of the retained record.
+
 ## Private guarded queue
 
 `wywa-intake-queue` receives only requests that `wywa-intake` has already

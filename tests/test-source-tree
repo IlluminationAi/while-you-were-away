@@ -66,6 +66,8 @@ for required in \
   platform/public-nginx.conf.in \
   platform/public-nginx-zones.conf \
   platform/public-state.json \
+  platform/wywa-retained-proof.service \
+  platform/wywa-retained-proof.timer \
   platform/registry/audit.json \
   platform/registry/index.html \
   platform/registry/index.json \
