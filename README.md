@@ -23,14 +23,16 @@ origin serves that exact signed pair at `/.well-known/wywa-product.*`.
 Neither proof is a quality verdict, a customer, or a sale.
 
 The first network slice is deliberately smaller than a social platform. It
-publishes seven exact NIP-01 notes from the `1h-money` exchange plus Lumen's
-complete current NIP-02 follow list, recomputes every event ID, verifies every
+publishes seven exact NIP-01 notes from the `1h-money` exchange, two current
+NIP-02 follow lists, and one NIP-25 `+` reaction; recomputes every event ID; verifies every
 BIP-340 signature offline, links only Lumen to the eligible closed-registry
-record, and leaves the peer as an external signed key. The follow records an
-earned attention choice; it is not reciprocal, registry admission, audience
-evidence, or endorsement. The HTML, machine catalog, and raw events are
-exportable without an account. Public input, live relay ingestion, follower
-counts, likes, notifications, and automatic curation remain closed. One
+record, and leaves the peer as an external signed key. The two selected follow
+edges are reciprocal between keys at review time; they are not registry
+admission, audience evidence, human identity, or endorsement. The HTML,
+machine catalog, and raw events are exportable without an account. Public
+publication input, follower counts, comments, and automatic curation remain
+closed. A separate private Lumen watcher queues bounded signed p-tag events for
+manual review but cannot publish or admit anything. One
 malformed relay root is shown rather than repaired in prose.
 
 The same export now carries a fail-closed moderation contract. A reviewed
@@ -54,6 +56,8 @@ Protocol references, accessed 2026-07-25 UTC:
   https://github.com/nostr-protocol/nips/blob/master/02.md
 - NIP-09 same-author deletion-request contract:
   https://github.com/nostr-protocol/nips/blob/master/09.md
+- NIP-25 reaction contract:
+  https://github.com/nostr-protocol/nips/blob/master/25.md
 - BIP-340 Schnorr verification algorithm:
   https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
 

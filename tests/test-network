@@ -122,35 +122,52 @@ def main() -> None:
             assert (first / relative).read_bytes() == (second / relative).read_bytes()
 
         catalog = json.loads((first / "index.json").read_text(encoding="utf-8"))
-        assert catalog["schema_version"] == 4
+        assert catalog["schema_version"] == 5
         assert catalog["admission"] == "reviewed-read-only"
-        assert catalog["protocol"] == "nostr-nip-01+02+09"
+        assert catalog["protocol"] == "nostr-nip-01+02+09+25"
         assert catalog["summary"] == {
             "author_deleted_events": 0,
             "author_deletion_requests": 0,
-            "events": 8,
+            "events": 10,
             "external_key_only_participants": 1,
-            "follow_list_events": 1,
-            "follows": 1,
+            "follow_list_events": 2,
+            "follows": 2,
             "notes": 7,
             "participants": 2,
+            "reactions": 1,
             "registry_linked_participants": 1,
             "replies": 5,
             "threads": 2,
-            "verified_event_ids": 8,
-            "verified_event_signatures": 8,
+            "unreviewed_follow_entries": 35,
+            "verified_event_ids": 10,
+            "verified_event_signatures": 10,
         }
         assert [thread["id"] for thread in catalog["threads"]] == [
             "durable-attention",
             "credential-custody",
         ]
-        assert len(catalog["relationships"]) == 1
+        assert len(catalog["relationships"]) == 2
         follow = catalog["relationships"][0]
         assert follow["type"] == "nip-02-follow-list"
         assert follow["source_participant_id"] == "lumen"
         assert follow["target_participant_ids"] == ["one-hour-money"]
         assert follow["content"] == ""
+        assert follow["unreviewed_target_count"] == 0
         assert follow["verification"]["semantics"] == "nip-02-follow-list"
+        peer_follow = catalog["relationships"][1]
+        assert peer_follow["source_participant_id"] == "one-hour-money"
+        assert peer_follow["target_participant_ids"] == ["lumen"]
+        assert peer_follow["unreviewed_target_count"] == 35
+        assert len(peer_follow["follow_tags"]) == 36
+        assert len(catalog["reactions"]) == 1
+        reaction = catalog["reactions"][0]
+        assert reaction["source_participant_id"] == "one-hour-money"
+        assert reaction["target_participant_id"] == "lumen"
+        assert reaction["content"] == "+"
+        assert (
+            reaction["verification"]["semantics"]
+            == "nip-25-exact-event-reaction"
+        )
         assert catalog["moderation"] == {
             "active_blocked_pubkeys": 0,
             "active_excluded_events": 0,
@@ -186,10 +203,12 @@ def main() -> None:
         assert "<style" not in page.lower()
         assert "Relationship," in page
         assert "Follows 1h-money" in page
+        assert "Follows Lumen" in page
+        assert "Reacted + to Lumen" in page
         assert "A report is a signal" in page
         assert "author-controlled withdrawal" in page
         assert "root drift" in page
-        assert len(list((first / "events").glob("*.json"))) == 8
+        assert len(list((first / "events").glob("*.json"))) == 10
 
         deletion_events = root / "deletion-events"
         shutil.copytree(EVENTS, deletion_events)
@@ -215,9 +234,9 @@ def main() -> None:
         )
         assert deletion_catalog["summary"]["author_deletion_requests"] == 1
         assert deletion_catalog["summary"]["author_deleted_events"] == 1
-        assert deletion_catalog["summary"]["events"] == 9
+        assert deletion_catalog["summary"]["events"] == 11
         assert deletion_catalog["summary"]["notes"] == 7
-        assert deletion_catalog["summary"]["verified_event_ids"] == 10
+        assert deletion_catalog["summary"]["verified_event_ids"] == 12
         assert deletion_catalog["threads"][-1]["events"] == []
         assert deletion_catalog["threads"][-1]["author_deleted_event_ids"] == [
             FIXTURE_NOTE["id"]
@@ -305,6 +324,20 @@ def main() -> None:
         )
         assert wrong_follow.returncode != 0
         assert "NIP-01 id verification" in wrong_follow.stderr
+
+        wrong_reaction_events = root / "wrong-reaction-events"
+        shutil.copytree(EVENTS, wrong_reaction_events)
+        target = wrong_reaction_events / (
+            "80b83a27feab1b249bcd3a4e3224881193fa09e338a527ec5c23ea1b87de6f55.json"
+        )
+        record = json.loads(target.read_text(encoding="utf-8"))
+        record["tags"][0][1] = "00" * 32
+        target.write_text(json.dumps(record), encoding="utf-8")
+        wrong_reaction = run_build(
+            REVIEW, wrong_reaction_events, root / "wrong-reaction-output"
+        )
+        assert wrong_reaction.returncode != 0
+        assert "NIP-01 id verification" in wrong_reaction.stderr
 
         extra_events = root / "extra-events"
         shutil.copytree(EVENTS, extra_events)
@@ -401,8 +434,8 @@ def main() -> None:
         assert "moderation decision is from the future" in future_decision.stderr
 
     print(
-        "PASS read-only signed WYWA network, fail-closed moderation, "
-        "and same-author withdrawal"
+        "PASS read-only signed WYWA network, reciprocal follows, reaction, "
+        "fail-closed moderation, and same-author withdrawal"
     )
 
 

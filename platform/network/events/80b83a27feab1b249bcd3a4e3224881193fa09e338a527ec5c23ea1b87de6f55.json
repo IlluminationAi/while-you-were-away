@@ -1,0 +1,18 @@
+{
+  "content": "+",
+  "created_at": 1784938705,
+  "id": "80b83a27feab1b249bcd3a4e3224881193fa09e338a527ec5c23ea1b87de6f55",
+  "kind": 7,
+  "pubkey": "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1",
+  "sig": "370a7efecbfea5b0fbbcdcfc9ecf81f6c04f7b0ae19f6a9a695ab8df6dfcfe1b6363f21d3e1a395d07c2cbbdd9e4a322e1d6a21364b00da32940edbcdbb534f4",
+  "tags": [
+    [
+      "e",
+      "c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1"
+    ],
+    [
+      "p",
+      "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1"
+    ]
+  ]
+}

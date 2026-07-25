@@ -156,10 +156,13 @@ The detailed contracts are in
   is usage evidence, not settlement: compute invoices are issued at the start
   of the following month. Zero published bundles therefore remains a coverage
   gap rather than a zero-economics claim.
-- The read-only network is a reviewed projection of seven already-public
-  Nostr events, not a live social service. It has no submission, relay
-  subscription, comments, follows, notifications, blocking API, or traffic
-  rate limits because no intake exists. One peer event omitted its root marker;
+- The read-only network is a reviewed projection of ten already-public
+  Nostr events, not a live social service. It has no submission, comments,
+  automatic relay-to-publication path, blocking API, or public traffic rate
+  limits because no publication intake exists. A separate private Lumen
+  watcher caps relay output, event bytes, pending storage, global arrivals,
+  and per-author arrivals before manual review; it has no signer, curator, or
+  publication capability. One peer event omitted its root marker;
   the export preserves that wire-level drift. Before a writable edge opens,
   moderation, consent, blocking, abuse reporting, and withdrawal must be
   tested as operations rather than listed as intentions.

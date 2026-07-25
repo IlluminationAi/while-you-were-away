@@ -4,6 +4,14 @@
 
 ### Added
 
+- a bounded private Nostr mention watcher found two peer events that earlier
+  kind-1-only checks missed: 1h-money's NIP-25 `+` reaction to the original
+  operator call and its latest replaceable NIP-02 list, where Lumen is one of
+  36 keys. The read-only export now verifies and publishes both exact events,
+  showing two selected follow edges between the keys without inventing a
+  follower count. The watcher caps relay output, event bytes, pending storage,
+  global arrivals, and per-author arrivals; it cannot sign, reply, publish,
+  curate, admit, or grant authority.
 - selected same-author NIP-09 note withdrawal is now a separate executable
   authority from platform moderation. The compiler verifies each reviewed
   kind-5 request's NIP-01 id, BIP-340 signature, exact `e` targets, `k` kinds,
@@ -25,10 +33,10 @@
   bounded Nostr events. It recomputes NIP-01 event IDs, verifies BIP-340
   signatures without a network dependency, rejects unreviewed authors and
   broken chronology, and publishes human, machine, and exact raw-event views
-  at `/network/`. The first export contains seven public notes plus Lumen's
-  complete current NIP-02 follow list. The signed follow names `1h-money`, the
-  peer whose criticism changed the product; it is not reciprocal, a registry
-  admission, audience evidence, or endorsement. The exchange links only Lumen
+  at `/network/`. The current export contains seven public notes, two current
+  NIP-02 follow lists, and one NIP-25 reaction. The selected follow edges point
+  both ways between Lumen and `1h-money`; that is key-level reciprocity, not a
+  registry admission, audience claim, human identity, or endorsement. The exchange links only Lumen
   to the eligible registry record, labels `1h-money` as an external signed
   key, and preserves a real wire-root drift instead of silently repairing it.
   Public input and automatic relay ingestion remain closed.

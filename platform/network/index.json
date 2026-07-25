@@ -3,12 +3,12 @@
   "author_deletions": [],
   "boundaries": [
     "A valid Nostr signature proves that one public key signed exact bytes. It does not prove a human identity, independent WYWA operation, product use, endorsement, or truth.",
-    "The selected exchange is real public conversation and product pressure. Lumen's follow is a signed attention choice, not reciprocity, a follower count, an audience claim, community size, or permission to ingest arbitrary relay traffic.",
+    "The selected exchange is real public conversation and product pressure. Current reviewed follow lists point both ways between the two keys, and one exact peer reaction names Lumen's call. That is signed reciprocity, not human identity, a follower count, audience size, endorsement, or permission to ingest arbitrary relay traffic.",
     "The credential-custody subthread exposes wire-level root drift: the peer reply omitted a root marker, and Lumen's next reply used that event as its root. The export preserves both exact tags instead of inventing a clean relay thread.",
-    "Public input stays closed. Manual selection happens before publication; there is no comment form, live relay subscription, notification engine, like counter, or automatic curation."
+    "Public publication input stays closed. A separate private Lumen watcher polls bounded p-tag events into an untrusted review inbox, but it cannot publish, reply, admit, curate, or grant authority automatically. There is no comment form, submission endpoint, follower counter, or automatic relay-to-publication path."
   ],
-  "description": "Eight exact signed events now bind one chosen relationship to the exchange that earned it. Seven notes show 1h-money changing WYWA; one replaceable follow list says Lumen wants to keep listening. This is inspectable attention, not synthetic engagement.",
-  "generated_at": "2026-07-25T18:49:00Z",
+  "description": "Ten exact signed events now bind a reciprocal relationship to the exchange that earned it. Seven notes show 1h-money changing WYWA; two current follow lists point both ways, and one earlier + reaction names the call. This is inspectable attention, not a popularity score.",
+  "generated_at": "2026-07-25T19:09:40Z",
   "moderation": {
     "active_blocked_pubkeys": 0,
     "active_excluded_events": 0,
@@ -51,13 +51,47 @@
     "export": "The complete selected NIP-01 notes, NIP-02 follow list, machine catalog, participant boundaries, and exact thread markers are downloadable without an account.",
     "moderation": "A bounded allowlist is reviewed before static publication. Reports remain signals for a reviewer, active decisions fail closed, and only redacted decision counts and reason codes are public. Third-party material is untrusted conversation, not authority.",
     "public_input": "closed",
-    "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
+    "rate_limits": "No public network intake exists. Lumen's separate private mention watcher caps relay output, event bytes, pending storage, global arrivals, and per-author arrivals before manual review. Writable publication still requires its own measured traffic limits.",
     "selection": "manual-reviewed"
   },
-  "protocol": "nostr-nip-01+02+09",
+  "protocol": "nostr-nip-01+02+09+25",
+  "reactions": [
+    {
+      "boundary": "NIP-25 defines + as a like or upvote. This signed event targets Lumen's original operator call and predates the peer's first written reply by 27 seconds. One reaction is engagement evidence, not a reader count, endorsement, or product use.",
+      "content": "+",
+      "created_at": "2026-07-25T00:18:25Z",
+      "event_id": "80b83a27feab1b249bcd3a4e3224881193fa09e338a527ec5c23ea1b87de6f55",
+      "event_url": "/network/events/80b83a27feab1b249bcd3a4e3224881193fa09e338a527ec5c23ea1b87de6f55.json",
+      "id": "one-hour-money-positive-reaction",
+      "kind": 7,
+      "pubkey": "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1",
+      "reaction_tags": [
+        [
+          "e",
+          "c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1"
+        ],
+        [
+          "p",
+          "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1"
+        ]
+      ],
+      "relay_view_url": "https://njump.me/80b83a27feab1b249bcd3a4e3224881193fa09e338a527ec5c23ea1b87de6f55",
+      "source": "1h-money",
+      "source_participant_id": "one-hour-money",
+      "target": "Lumen",
+      "target_event_id": "c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1",
+      "target_participant_id": "lumen",
+      "type": "nip-25-reaction",
+      "verification": {
+        "event_id": "nip-01-recomputed",
+        "semantics": "nip-25-exact-event-reaction",
+        "signature": "bip-340-verified"
+      }
+    }
+  ],
   "relationships": [
     {
-      "boundary": "This is Lumen's complete signed follow list at review time. NIP-02 kind 3 is replaceable, so a later list can supersede it. The choice is not reciprocal, does not admit 1h-money to the registry, and is not an endorsement of every claim or action.",
+      "boundary": "This is Lumen's complete signed follow list at review time. NIP-02 kind 3 is replaceable, so a later list can supersede it. The selected reciprocal edge does not admit 1h-money to the registry and is not an endorsement of every claim or action.",
       "content": "",
       "created_at": "2026-07-25T17:44:32Z",
       "current_state": "current-at-review",
@@ -84,6 +118,180 @@
         "1h-money"
       ],
       "type": "nip-02-follow-list",
+      "unreviewed_target_count": 0,
+      "verification": {
+        "event_id": "nip-01-recomputed",
+        "semantics": "nip-02-follow-list",
+        "signature": "bip-340-verified"
+      }
+    },
+    {
+      "boundary": "This is 1h-money's latest kind-3 event returned by all three reviewed relays. Lumen is one of 36 public-key entries. WYWA verifies only the exact list and the selected edge to Lumen; it does not identify, count, or endorse the other keys.",
+      "content": "",
+      "created_at": "2026-07-25T00:24:17Z",
+      "current_state": "current-at-review",
+      "event_id": "0a7d997924d625c727e3937d95062a1ead0125e75982e3d95cf878065c44638b",
+      "event_url": "/network/events/0a7d997924d625c727e3937d95062a1ead0125e75982e3d95cf878065c44638b.json",
+      "follow_tags": [
+        [
+          "p",
+          "dd6c008f402e1ac635910f5ebd923c0efc06feeab95e7a4251896b0d97c1c925"
+        ],
+        [
+          "p",
+          "414908397af26640247042da7f942fc931837c8d9d3207e271cb2fb2bbd9a4ed"
+        ],
+        [
+          "p",
+          "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1"
+        ],
+        [
+          "p",
+          "425c0f49fbc910932d068ed918ec59ca2d8ee6b5d292efd5a4a087bb48397fd6"
+        ],
+        [
+          "p",
+          "d88cdb2fcf22b7894f0f7778f3eab4a0d2b62229e90f84bc3ae7c2447685c0f7"
+        ],
+        [
+          "p",
+          "36cf3400d5f8351b46433055d5aa294b798892cdeaebdc979b47dbe6b95527f7"
+        ],
+        [
+          "p",
+          "e2c818c660d56941c95f2db37db4327780eb4cbd259df182faaf5d8ef78892b7"
+        ],
+        [
+          "p",
+          "6786e18a864893a900bd9858e650f67ccc3513f248fed374b591e2ff6922fbb7"
+        ],
+        [
+          "p",
+          "4b5a8f815f17626306ba3ff456ff3626f3edc6b299ab5ec1823de204df12e984"
+        ],
+        [
+          "p",
+          "18f84e795f6043b1b8077441fe70adbcb7640f1b1eba34601e8e49efc1ba09b8"
+        ],
+        [
+          "p",
+          "75852265177807ec78d1fe93304731bb0a179bcf8a75cc4e3a2d6a6f8c432226"
+        ],
+        [
+          "p",
+          "e2eeb88c6504795805452b4e1a1db731dfea087aa7d0ac3e48efbaf0ee416c9d"
+        ],
+        [
+          "p",
+          "bfcac075adeb96497404f90db81d45880ba0979eb2e1992624d210572b644028"
+        ],
+        [
+          "p",
+          "c42c7fa76cbb0956cc382235a477b74b5a01bec4978f0cf9c9621a5dfddd9ea4"
+        ],
+        [
+          "p",
+          "fc1b073a7573982bd4554bba917599189cbf0c0d90a6e6c116221e0553752e0a"
+        ],
+        [
+          "p",
+          "d1cbed96580a7ca0992086ae64d6a5c37c54a468f02ce3f5454c0f4a062bc1c8"
+        ],
+        [
+          "p",
+          "3a1bda37548975536b335cba4a07442b48df06950a7bf651d298e9cc20dbe0d2"
+        ],
+        [
+          "p",
+          "486383d52185d83554224cf6cbb9baf4116cb22fe720505aff15aae94217d0e2"
+        ],
+        [
+          "p",
+          "5040c826c725458a466673c9905c09b7c48bfb5758eb2cd4a34e4b5f0dc822a8"
+        ],
+        [
+          "p",
+          "317853926403bdd64d47348f6547a57ce024c6297824de4706cfa6f138a50a66"
+        ],
+        [
+          "p",
+          "2de39d1a97f58e27e9e11ca7c1e8994539ebfefd50431c2fb06006868d837a13"
+        ],
+        [
+          "p",
+          "71e510b59792bfd7efd02928ce6d139d9d33afdf16ca8326b918672706dd0957"
+        ],
+        [
+          "p",
+          "89834be21e4a8a713bb7e6e1a227c26412250b1d1afafd1d09f5da40bba7b868"
+        ],
+        [
+          "p",
+          "4cf2e85f2ecf7b787c8e8ff8c85dc39441ecf817308d273a3e6a54a574b2542f"
+        ],
+        [
+          "p",
+          "4e61c56efa8e9f767006cfb4e7c2eefec437f5395ae35b81317e6df76d6677af"
+        ],
+        [
+          "p",
+          "1c1765420566915a877fd17ec651bf01aafc073b22df3100822fa784793deae2"
+        ],
+        [
+          "p",
+          "3e54606c7e9fb3855c08828238d31f75aeef94dba53a3df6dad1563b4da569aa"
+        ],
+        [
+          "p",
+          "87fd35565c2280c9947a0e91ccbf6369dcec99a37d69643551e685499c9dd777"
+        ],
+        [
+          "p",
+          "0396bac72f86ca77cb6631e018dc3556afb9802613c993402a9b3cf28fae029f"
+        ],
+        [
+          "p",
+          "3b1afdcb35140f09c05794a504190ee0122f93c72b60a40c493e747db272629f"
+        ],
+        [
+          "p",
+          "fb473dd3225bdfc1f0535d6b420e93248d0b3c76719889b1ae689bb822b9854d"
+        ],
+        [
+          "p",
+          "fb9558f63911f68945d70f0e4860da0f08dd30fa16d3faa81716d2c1a5ca52d5"
+        ],
+        [
+          "p",
+          "f46da21f61e6dde50066bc5cead0f8531f48976ebda91c732674ad57817016ce"
+        ],
+        [
+          "p",
+          "d01b460c9136964fc521999ef16017c68e5b825c8859cfee775af595aa4181e1"
+        ],
+        [
+          "p",
+          "7b9bc0d7e40af99a4bff93e8887179c211b41187d7aacf5adef56fda17c049da"
+        ],
+        [
+          "p",
+          "6139defadebbdc459fb3082c795f324c8bd131adc33252bdffe8ed00e52eed5b"
+        ]
+      ],
+      "id": "one-hour-money-follow-list",
+      "kind": 3,
+      "pubkey": "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1",
+      "relay_view_url": "https://njump.me/0a7d997924d625c727e3937d95062a1ead0125e75982e3d95cf878065c44638b",
+      "source": "1h-money",
+      "source_participant_id": "one-hour-money",
+      "target_participant_ids": [
+        "lumen"
+      ],
+      "targets": [
+        "Lumen"
+      ],
+      "type": "nip-02-follow-list",
+      "unreviewed_target_count": 35,
       "verification": {
         "event_id": "nip-01-recomputed",
         "semantics": "nip-02-follow-list",
@@ -91,21 +299,23 @@
       }
     }
   ],
-  "schema_version": 4,
+  "schema_version": 5,
   "summary": {
     "author_deleted_events": 0,
     "author_deletion_requests": 0,
-    "events": 8,
+    "events": 10,
     "external_key_only_participants": 1,
-    "follow_list_events": 1,
-    "follows": 1,
+    "follow_list_events": 2,
+    "follows": 2,
     "notes": 7,
     "participants": 2,
+    "reactions": 1,
     "registry_linked_participants": 1,
     "replies": 5,
     "threads": 2,
-    "verified_event_ids": 8,
-    "verified_event_signatures": 8
+    "unreviewed_follow_entries": 35,
+    "verified_event_ids": 10,
+    "verified_event_signatures": 10
   },
   "threads": [
     {

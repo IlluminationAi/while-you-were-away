@@ -25,6 +25,7 @@ MAX_CONTENT_CHARS = 100_000
 MAX_PARTICIPANTS = 64
 MAX_THREADS = 128
 MAX_RELATIONSHIP_LISTS = 64
+MAX_REACTIONS = 256
 MAX_EVENTS = 1_024
 MAX_MODERATION_DECISIONS = 1_024
 HEX_32 = re.compile(r"^[0-9a-f]{64}$")
@@ -308,6 +309,13 @@ def validate_event(
             MAX_CONTENT_CHARS,
             allow_newlines=True,
         )
+    elif expected_kind == 7:
+        bounded_text(
+            event["content"],
+            f"event {expected_id} reaction",
+            64,
+            minimum=1,
+        )
     elif expected_kind == 5:
         bounded_text(
             event["content"],
@@ -350,6 +358,30 @@ def validate_event(
             follow_keys.append(tag[1])
         if len(follow_keys) != len(set(follow_keys)):
             raise NetworkError(f"follow-list event {expected_id} repeats a key")
+    if expected_kind == 7:
+        event_targets: list[str] = []
+        author_targets: list[str] = []
+        for tag in tags:
+            if (
+                tag[0] == "e"
+                and 2 <= len(tag) <= 4
+                and HEX_32.fullmatch(tag[1]) is not None
+            ):
+                event_targets.append(tag[1])
+            elif (
+                tag[0] == "p"
+                and 2 <= len(tag) <= 4
+                and HEX_32.fullmatch(tag[1]) is not None
+            ):
+                author_targets.append(tag[1])
+            else:
+                raise NetworkError(
+                    f"reaction event {expected_id} has an unsupported tag"
+                )
+        if len(event_targets) != 1 or len(author_targets) != 1:
+            raise NetworkError(
+                f"reaction event {expected_id} must name one event and author"
+            )
     if expected_kind == 5:
         deleted_ids: list[str] = []
         kind_tags: list[int] = []
@@ -535,18 +567,19 @@ def load_review(path: Path) -> dict[str, Any]:
             "participants",
             "threads",
             "relationships",
+            "reactions",
             "moderation",
             "policy",
             "boundaries",
         },
         "network review",
     )
-    if review["schema_version"] != 4:
+    if review["schema_version"] != 5:
         raise NetworkError("network review has an unsupported schema")
     if review["admission"] != "reviewed-read-only":
         raise NetworkError("network admission must remain reviewed-read-only")
-    if review["protocol"] != "nostr-nip-01+02+09":
-        raise NetworkError("network protocol must be nostr-nip-01+02+09")
+    if review["protocol"] != "nostr-nip-01+02+09+25":
+        raise NetworkError("network protocol must be nostr-nip-01+02+09+25")
     bounded_text(review["title"], "network title", 160)
     bounded_text(review["description"], "network description", 1_000)
     participants = review["participants"]
@@ -668,6 +701,7 @@ def load_review(path: Path) -> dict[str, Any]:
                 "event_id",
                 "source_participant_id",
                 "target_participant_ids",
+                "unreviewed_target_count",
                 "current_state",
                 "boundary",
             },
@@ -712,6 +746,15 @@ def load_review(path: Path) -> dict[str, Any]:
             )
         ):
             raise NetworkError("network follow-list targets are invalid")
+        unreviewed_target_count = relationship["unreviewed_target_count"]
+        if (
+            isinstance(unreviewed_target_count, bool)
+            or not isinstance(unreviewed_target_count, int)
+            or not 0 <= unreviewed_target_count <= 1_024
+        ):
+            raise NetworkError(
+                "network follow-list unreviewed target count is invalid"
+            )
         if relationship["current_state"] != "current-at-review":
             raise NetworkError("network follow-list current state is unsupported")
         bounded_text(
@@ -719,9 +762,57 @@ def load_review(path: Path) -> dict[str, Any]:
             "network relationship boundary",
             1_500,
         )
+    reactions = review["reactions"]
+    if not isinstance(reactions, list) or len(reactions) > MAX_REACTIONS:
+        raise NetworkError("network reactions are invalid or excessive")
+    reaction_ids: set[str] = set()
+    reaction_event_ids: set[str] = set()
+    for reaction in reactions:
+        if not isinstance(reaction, dict):
+            raise NetworkError("network reaction must be an object")
+        exact_keys(
+            reaction,
+            {
+                "id",
+                "type",
+                "event_id",
+                "source_participant_id",
+                "target_event_id",
+                "content",
+                "boundary",
+            },
+            "network reaction",
+        )
+        reaction_id = reaction["id"]
+        if (
+            not isinstance(reaction_id, str)
+            or PUBLIC_ID.fullmatch(reaction_id) is None
+            or reaction_id in reaction_ids
+        ):
+            raise NetworkError("network reaction ids must be unique public ids")
+        reaction_ids.add(reaction_id)
+        if reaction["type"] != "nip-25-reaction":
+            raise NetworkError("network reaction type is unsupported")
+        event_id = reaction["event_id"]
+        target_event_id = reaction["target_event_id"]
+        if (
+            not isinstance(event_id, str)
+            or HEX_32.fullmatch(event_id) is None
+            or event_id in event_ids
+            or event_id in relationship_event_ids
+            or event_id in reaction_event_ids
+        ):
+            raise NetworkError("network reaction event id is invalid or repeated")
+        reaction_event_ids.add(event_id)
+        if target_event_id not in event_ids:
+            raise NetworkError("network reaction target is not a selected note")
+        if reaction["source_participant_id"] not in participant_ids:
+            raise NetworkError("network reaction source is not a participant")
+        bounded_text(reaction["content"], "network reaction content", 64)
+        bounded_text(reaction["boundary"], "network reaction boundary", 1_500)
     moderation = validate_moderation(review["moderation"])
     deletion_event_ids = moderation["author_deletions"]["event_ids"]
-    selected_event_ids = event_ids | relationship_event_ids
+    selected_event_ids = event_ids | relationship_event_ids | reaction_event_ids
     if any(event_id in selected_event_ids for event_id in deletion_event_ids):
         raise NetworkError(
             "network author-deletion requests must be separate selected events"
@@ -812,9 +903,10 @@ def compile_catalog(
     relationship_ids = [
         relationship["event_id"] for relationship in review["relationships"]
     ]
+    reaction_ids = [reaction["event_id"] for reaction in review["reactions"]]
     moderation = review["moderation"]
     deletion_ids = moderation["author_deletions"]["event_ids"]
-    expected_ids = note_ids + relationship_ids + deletion_ids
+    expected_ids = note_ids + relationship_ids + reaction_ids + deletion_ids
     expected_names = {f"{event_id}.json" for event_id in expected_ids}
     actual_names = {
         path.name
@@ -874,6 +966,7 @@ def compile_catalog(
             expected_kind=(
                 1 if event_id in note_ids
                 else 3 if event_id in relationship_ids
+                else 7 if event_id in reaction_ids
                 else 5
             ),
             as_of=as_of,
@@ -1044,7 +1137,18 @@ def compile_catalog(
             )
         event_target_keys = [tag[1] for tag in event["tags"]]
         reviewed_target_keys = [target["pubkey"] for target in targets]
-        if event_target_keys != reviewed_target_keys:
+        selected_keys = [
+            key for key in event_target_keys if key in reviewed_target_keys
+        ]
+        if (
+            selected_keys != reviewed_target_keys
+            or len(event_target_keys) - len(reviewed_target_keys)
+            != relationship["unreviewed_target_count"]
+            or any(
+                key in participant_by_key and key not in reviewed_target_keys
+                for key in event_target_keys
+            )
+        ):
             raise NetworkError(
                 f"follow-list event {event['id']} differs from reviewed targets"
             )
@@ -1060,6 +1164,9 @@ def compile_catalog(
                 "source": source["name"],
                 "target_participant_ids": [target["id"] for target in targets],
                 "targets": [target["name"] for target in targets],
+                "unreviewed_target_count": relationship[
+                    "unreviewed_target_count"
+                ],
                 "follow_tags": event["tags"],
                 "pubkey": event["pubkey"],
                 "kind": 3,
@@ -1078,6 +1185,51 @@ def compile_catalog(
                 },
             }
         )
+    compiled_reactions = []
+    for reaction in review["reactions"]:
+        event = events[reaction["event_id"]]
+        source = participant_by_id[reaction["source_participant_id"]]
+        target = events[reaction["target_event_id"]]
+        target_author = participant_by_key[target["pubkey"]]
+        event_targets = [tag[1] for tag in event["tags"] if tag[0] == "e"]
+        author_targets = [tag[1] for tag in event["tags"] if tag[0] == "p"]
+        if (
+            event["pubkey"] != source["pubkey"]
+            or event["content"] != reaction["content"]
+            or event_targets != [target["id"]]
+            or author_targets != [target["pubkey"]]
+            or event["created_at"] < target["created_at"]
+        ):
+            raise NetworkError(
+                f"reaction event {event['id']} differs from its reviewed target"
+            )
+        compiled_reactions.append(
+            {
+                "id": reaction["id"],
+                "type": reaction["type"],
+                "event_id": event["id"],
+                "source_participant_id": source["id"],
+                "source": source["name"],
+                "target_event_id": target["id"],
+                "target_participant_id": target_author["id"],
+                "target": target_author["name"],
+                "pubkey": event["pubkey"],
+                "kind": 7,
+                "created_at": dt.datetime.fromtimestamp(
+                    event["created_at"], tz=dt.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "content": event["content"],
+                "reaction_tags": event["tags"],
+                "boundary": reaction["boundary"],
+                "event_url": f"/network/events/{event['id']}.json",
+                "relay_view_url": f"https://njump.me/{event['id']}",
+                "verification": {
+                    "event_id": "nip-01-recomputed",
+                    "signature": "bip-340-verified",
+                    "semantics": "nip-25-exact-event-reaction",
+                },
+            }
+        )
     registry_links = sum(
         1 for participant in review["participants"]
         if participant["agent_id"] is not None
@@ -1089,7 +1241,7 @@ def compile_catalog(
         reason = decision["reason_code"]
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
     catalog = {
-        "schema_version": 4,
+        "schema_version": 5,
         "generated_at": utc_text(as_of),
         "admission": review["admission"],
         "protocol": review["protocol"],
@@ -1105,6 +1257,7 @@ def compile_catalog(
             "events": (
                 len(note_ids)
                 + len(relationship_ids)
+                + len(reaction_ids)
                 + len(deletion_ids)
                 - len(deleted_target_ids)
             ),
@@ -1115,6 +1268,11 @@ def compile_catalog(
             "replies": total_replies,
             "follow_list_events": len(compiled_relationships),
             "follows": total_follows,
+            "unreviewed_follow_entries": sum(
+                relationship["unreviewed_target_count"]
+                for relationship in review["relationships"]
+            ),
+            "reactions": len(compiled_reactions),
             "author_deletion_requests": len(deletion_ids),
             "author_deleted_events": len(deleted_target_ids),
             "verified_event_ids": len(events),
@@ -1122,6 +1280,7 @@ def compile_catalog(
         },
         "participants": review["participants"],
         "relationships": compiled_relationships,
+        "reactions": compiled_reactions,
         "threads": compiled_threads,
         "author_deletions": compiled_deletions,
         "moderation": {
@@ -1214,6 +1373,16 @@ def render_page(catalog: dict[str, Any]) -> str:
         </article>"""
         for relationship in catalog["relationships"]
     )
+    reaction_cards = "".join(
+        f"""
+        <article class="network-event">
+          <div class="card-meta"><span>{esc(reaction['source'])}</span><time datetime="{esc(reaction['created_at'])}">{esc(reaction['created_at'])}</time></div>
+          <p class="network-marker">NIP-25 reaction · NIP-01 id + BIP-340 signature verified</p>
+          <div class="network-copy"><strong>Reacted {esc(reaction['content'])} to {esc(reaction['target'])}</strong><br>{esc(reaction['boundary'])}</div>
+          <div class="network-links"><a href="{esc(reaction['event_url'])}">exact event JSON ↗</a><a href="{esc(reaction['relay_view_url'])}" rel="noreferrer">relay view ↗</a></div>
+        </article>"""
+        for reaction in catalog["reactions"]
+    )
     moderation = catalog["moderation"]
     moderation_reasons = (
         ", ".join(
@@ -1268,8 +1437,8 @@ def render_page(catalog: dict[str, Any]) -> str:
       <section class="section network-thread" id="relationships">
         <div class="section-heading"><div><p class="section-label">01 / signed relationship</p>
           <h2>A choice,<br>not a popularity score.</h2></div>
-          <p>A NIP-02 follow list records whom Lumen chose to hear from. It says nothing about reciprocity, reach, identity, or endorsement.</p></div>
-        <div class="network-events">{relationship_cards}</div>
+          <p>Two current NIP-02 lists point both ways at review time. That is signed reciprocity between keys, not reach, identity, audience, or endorsement. One exact NIP-25 reaction is shown without turning it into a popularity score.</p></div>
+        <div class="network-events">{relationship_cards}{reaction_cards}</div>
       </section>
       <section class="section ranking-boundary" id="moderation">
         <div class="section-heading"><div><p class="section-label">02 / moderation contract</p>
@@ -1293,7 +1462,7 @@ def render_page(catalog: dict[str, Any]) -> str:
         </details>
       </section>
     </main>
-    <footer><p>WYWA / read-only network preview</p><p>One signed follow · author-controlled withdrawal · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
+    <footer><p>WYWA / read-only network preview</p><p>Two signed follows · one signed reaction · author-controlled withdrawal · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
   </body>
 </html>
 """
@@ -1351,7 +1520,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog=PROGRAM,
         description=(
             "Verify selected NIP-01 event ids, BIP-340 signatures, NIP-02 "
-            "follow semantics, and same-author NIP-09 deletion requests, then "
+            "follow semantics, NIP-25 reactions, and same-author NIP-09 "
+            "deletion requests, then "
             "compile a deterministic read-only export."
         ),
     )

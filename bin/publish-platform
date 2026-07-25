@@ -1794,11 +1794,12 @@ def read_network_export(
         raise ValueError("network export is not valid UTF-8 JSON/HTML") from error
     if (
         not isinstance(catalog, dict)
-        or catalog.get("schema_version") != 4
+        or catalog.get("schema_version") != 5
         or catalog.get("admission") != "reviewed-read-only"
-        or catalog.get("protocol") != "nostr-nip-01+02+09"
+        or catalog.get("protocol") != "nostr-nip-01+02+09+25"
         or not isinstance(catalog.get("participants"), list)
         or not isinstance(catalog.get("relationships"), list)
+        or not isinstance(catalog.get("reactions"), list)
         or not isinstance(catalog.get("threads"), list)
         or not isinstance(catalog.get("author_deletions"), list)
         or not isinstance(catalog.get("summary"), dict)
@@ -1952,6 +1953,30 @@ def read_network_export(
         source_id = relationship.get("source_participant_id")
         target_ids = relationship.get("target_participant_ids")
         follow_tags = relationship.get("follow_tags")
+        unreviewed_target_count = relationship.get(
+            "unreviewed_target_count"
+        )
+        reviewed_target_keys = (
+            [
+                participant_by_id[target_id].get("pubkey")
+                for target_id in target_ids
+            ]
+            if isinstance(target_ids, list)
+            and all(target_id in participant_by_id for target_id in target_ids)
+            else []
+        )
+        follow_keys = (
+            [tag[1] for tag in follow_tags]
+            if isinstance(follow_tags, list)
+            and all(
+                isinstance(tag, list)
+                and len(tag) >= 2
+                and tag[0] == "p"
+                and isinstance(tag[1], str)
+                for tag in follow_tags
+            )
+            else []
+        )
         if (
             relationship.get("type") != "nip-02-follow-list"
             or relationship.get("current_state") != "current-at-review"
@@ -1965,17 +1990,25 @@ def read_network_export(
                 for target_id in target_ids
             )
             or not isinstance(follow_tags, list)
-            or any(
-                not isinstance(tag, list)
-                or len(tag) < 2
-                or tag[0] != "p"
-                or not isinstance(tag[1], str)
-                for tag in follow_tags
-            )
-            or [tag[1] for tag in follow_tags] != [
-                participant_by_id[target_id].get("pubkey")
-                for target_id in target_ids
+            or isinstance(unreviewed_target_count, bool)
+            or not isinstance(unreviewed_target_count, int)
+            or unreviewed_target_count < 0
+            or [
+                key for key in follow_keys if key in reviewed_target_keys
             ]
+            != reviewed_target_keys
+            or len(follow_keys) - len(reviewed_target_keys)
+            != unreviewed_target_count
+            or any(
+                key
+                in {
+                    participant.get("pubkey")
+                    for participant in participants
+                    if isinstance(participant, dict)
+                }
+                and key not in reviewed_target_keys
+                for key in follow_keys
+            )
         ):
             raise ValueError("network follow relationship is invalid")
         if (
@@ -1998,6 +2031,59 @@ def read_network_export(
         event_ids.add(event_id)
         event_records[event_id] = relationship
         follows += len(target_ids)
+    reactions = 0
+    for reaction in catalog["reactions"]:
+        if not isinstance(reaction, dict):
+            raise ValueError("network reaction is not an object")
+        event_id = reaction.get("event_id")
+        source_id = reaction.get("source_participant_id")
+        target_id = reaction.get("target_participant_id")
+        target_event_id = reaction.get("target_event_id")
+        reaction_tags = reaction.get("reaction_tags")
+        if (
+            reaction.get("type") != "nip-25-reaction"
+            or source_id not in participant_ids
+            or target_id not in participant_ids
+            or source_id == target_id
+            or target_event_id not in event_records
+            or event_records[target_event_id].get("kind") != 1
+            or not isinstance(event_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", event_id) is None
+            or event_id in event_ids
+            or reaction.get("kind") != 7
+            or not isinstance(reaction.get("content"), str)
+            or not reaction["content"]
+            or len(reaction["content"]) > 64
+            or reaction.get("pubkey")
+            != participant_by_id[source_id].get("pubkey")
+            or reaction.get("target")
+            != participant_by_id[target_id].get("name")
+            or reaction.get("verification")
+            != {
+                "event_id": "nip-01-recomputed",
+                "signature": "bip-340-verified",
+                "semantics": "nip-25-exact-event-reaction",
+            }
+            or reaction.get("event_url")
+            != f"/network/events/{event_id}.json"
+            or not isinstance(reaction_tags, list)
+            or [
+                tag[1]
+                for tag in reaction_tags
+                if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e"
+            ]
+            != [target_event_id]
+            or [
+                tag[1]
+                for tag in reaction_tags
+                if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "p"
+            ]
+            != [participant_by_id[target_id].get("pubkey")]
+        ):
+            raise ValueError("network reaction is invalid")
+        event_ids.add(event_id)
+        event_records[event_id] = reaction
+        reactions += 1
     deleted_target_ids: set[str] = set()
     for deletion in catalog["author_deletions"]:
         if not isinstance(deletion, dict):
@@ -2053,6 +2139,13 @@ def read_network_export(
         or summary.get("replies") != replies
         or summary.get("follow_list_events") != len(catalog["relationships"])
         or summary.get("follows") != follows
+        or summary.get("reactions") != reactions
+        or summary.get("unreviewed_follow_entries")
+        != sum(
+            relationship.get("unreviewed_target_count", -1)
+            for relationship in catalog["relationships"]
+            if isinstance(relationship, dict)
+        )
         or summary.get("author_deletion_requests")
         != len(catalog["author_deletions"])
         or summary.get("author_deleted_events") != len(deleted_target_ids)
