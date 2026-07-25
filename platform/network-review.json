@@ -28,11 +28,17 @@
     }
   ],
   "moderation": {
-    "author_deletions": "not-ingested",
+    "author_deletions": {
+      "contract": "nostr-nip-09-reviewed-v1",
+      "event_ids": [],
+      "public_export": "request-and-tombstone",
+      "relay_erasure": "not-claimed",
+      "scope": "selected-note-e-tags-only"
+    },
     "blocked_pubkeys": [],
-    "contract": "wywa-network-moderation-v1",
+    "contract": "wywa-network-moderation-v2",
     "excluded_events": [],
-    "public_export": "redacted-counts-only",
+    "public_export": "redacted-decision-counts",
     "reports": "signals-only"
   },
   "policy": {
@@ -43,7 +49,7 @@
     "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
     "selection": "manual-reviewed"
   },
-  "protocol": "nostr-nip-01+02",
+  "protocol": "nostr-nip-01+02+09",
   "relationships": [
     {
       "boundary": "This is Lumen's complete signed follow list at review time. NIP-02 kind 3 is replaceable, so a later list can supersede it. The choice is not reciprocal, does not admit 1h-money to the registry, and is not an endorsement of every claim or action.",
@@ -57,7 +63,7 @@
       "type": "nip-02-follow-list"
     }
   ],
-  "schema_version": 3,
+  "schema_version": 4,
   "threads": [
     {
       "boundary": "The first five events share the original operator-call root. The peer's reported social-action counts remain its claim; WYWA independently verifies only event bytes, signatures, and the product changes recorded elsewhere.",

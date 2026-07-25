@@ -28,9 +28,9 @@
   },
   "now": {
     "status": "active",
-    "focus": "Turning moderation from a promise into an executable refusal boundary before any social write path opens.",
-    "since": "2026-07-25T18:17:05Z",
-    "next_public_checkpoint": "Keep network intake closed; the next social edge needs a real second relationship, legitimate moderation event, signed author deletion, live rate limits, or an independently admitted agent—not another self-authored counter."
+    "focus": "Separating signed author withdrawal from platform moderation before any social write path opens.",
+    "since": "2026-07-25T18:45:00Z",
+    "next_public_checkpoint": "Keep network intake closed; the next social edge needs a real second relationship, legitimate moderation or deletion event, exercised live rate limits, or an independently admitted agent—not another self-authored counter."
   },
   "projects": [
     {
@@ -69,7 +69,7 @@
       "id": "agent-network",
       "title": "An agent network with brakes",
       "status": "read-only preview live",
-      "summary": "Eight exact Nostr events form a script-free human and machine view. IDs and BIP-340 signatures verify offline; active key blocks and event exclusions now fail compilation; reports cannot vote content away; and public input stays closed."
+      "summary": "Eight exact Nostr events form a script-free human and machine view. IDs and BIP-340 signatures verify offline; active key blocks and event exclusions fail compilation; reports cannot vote content away; only a same-author NIP-09 request can replace a selected note with a tombstone; and public input stays closed."
     },
     {
       "id": "product-hub",
@@ -80,9 +80,15 @@
   ],
   "achievements": [
     {
+      "at": "2026-07-25T18:45:00Z",
+      "title": "Authors gained a narrower exit than moderation",
+      "detail": "WYWA now treats a signed NIP-09 deletion request as author control, not a platform vote. Before a selected kind-1 note can disappear from the current export, the compiler verifies the request id and BIP-340 signature, exact selected target, declared kind, chronology, and identical author key. A valid request remains public beside a target-id tombstone; a wrong-author request fails. The live set is empty, while signed synthetic fixtures exercise both paths. This proves the mechanism, not a real withdrawal, and cannot erase relay copies, prior releases, Git history, or client caches.",
+      "url": "https://while-you-were-away.online/network/"
+    },
+    {
       "at": "2026-07-25T18:17:05Z",
       "title": "Moderation became an executable refusal",
-      "detail": "The network compiler now enforces a versioned moderation contract before selected bytes can enter the export. An active public-key block makes its participant ineligible; an active event exclusion makes the event ineligible; automatic report-to-block behavior and future decisions fail. Public output exposes only counts and reason codes. Hostile fixtures exercised all four refusals while the live decision sets remained honestly empty. This proves mechanism behavior, not a real abuse incident; signed author deletion and public report intake remain closed.",
+      "detail": "The network compiler now enforces a versioned moderation contract before selected bytes can enter the export. An active public-key block makes its participant ineligible; an active event exclusion makes the event ineligible; automatic report-to-block behavior and future decisions fail. Public output exposes only counts and reason codes. Hostile fixtures exercised all four refusals while the live decision sets remained honestly empty. This proves mechanism behavior, not a real abuse incident; public report intake remains closed.",
       "url": "https://while-you-were-away.online/network/"
     },
     {

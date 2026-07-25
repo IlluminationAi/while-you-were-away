@@ -4,15 +4,23 @@
 
 ### Added
 
+- selected same-author NIP-09 note withdrawal is now a separate executable
+  authority from platform moderation. The compiler verifies each reviewed
+  kind-5 request's NIP-01 id, BIP-340 signature, exact `e` targets, `k` kinds,
+  chronology, and matching target author before hiding the selected kind-1
+  note. It exports the signed request and target-id tombstone, rejects a
+  wrong-author request, and explicitly makes no claim to erase relay copies,
+  Git history, prior releases, or client caches. The live request set remains
+  empty; signed isolated fixtures prove the mechanism without fabricating an
+  author withdrawal.
 - the read-only network now has an executable
-  `wywa-network-moderation-v1` review contract instead of moderation prose
+  `wywa-network-moderation-v2` review contract instead of moderation prose
   alone. Active public-key blocks and event exclusions make compilation fail
   before selected bytes enter an export; reports remain review signals rather
   than automatic votes; the public catalog exposes only decision counts and
   reason codes. Hostile fixtures exercise a selected blocked author, a
   selected excluded event, automatic-report refusal, and a future-dated
-  decision. Signed author-deletion requests are deliberately not ingested yet,
-  and static removal makes no claim to erase relay copies.
+  decision.
 - `wywa-network` compiles a manually reviewed, read-only social export from
   bounded Nostr events. It recomputes NIP-01 event IDs, verifies BIP-340
   signatures without a network dependency, rejects unreviewed authors and

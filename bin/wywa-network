@@ -148,9 +148,12 @@ def bounded_text(
     maximum: int,
     *,
     allow_newlines: bool = False,
+    minimum: int = 1,
 ) -> str:
-    if not isinstance(value, str) or not 1 <= len(value) <= maximum:
-        raise NetworkError(f"{label} must contain between 1 and {maximum} characters")
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise NetworkError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
     for character in value:
         codepoint = ord(character)
         if codepoint == 127 or (
@@ -305,6 +308,14 @@ def validate_event(
             MAX_CONTENT_CHARS,
             allow_newlines=True,
         )
+    elif expected_kind == 5:
+        bounded_text(
+            event["content"],
+            f"event {expected_id} deletion reason",
+            MAX_CONTENT_CHARS,
+            allow_newlines=True,
+            minimum=0,
+        )
     elif event["content"] != "":
         raise NetworkError(f"follow-list event {expected_id} must have empty content")
     tags = event["tags"]
@@ -339,6 +350,56 @@ def validate_event(
             follow_keys.append(tag[1])
         if len(follow_keys) != len(set(follow_keys)):
             raise NetworkError(f"follow-list event {expected_id} repeats a key")
+    if expected_kind == 5:
+        deleted_ids: list[str] = []
+        kind_tags: list[int] = []
+        for tag in tags:
+            if tag[0] == "e":
+                if (
+                    len(tag) < 2
+                    or len(tag) > 4
+                    or HEX_32.fullmatch(tag[1]) is None
+                ):
+                    raise NetworkError(
+                        f"deletion event {expected_id} has an invalid e tag"
+                    )
+                if len(tag) >= 3 and tag[2] != "" and not tag[2].startswith("wss://"):
+                    raise NetworkError(
+                        f"deletion event {expected_id} has an invalid relay hint"
+                    )
+                if (
+                    len(tag) == 4
+                    and tag[3] != ""
+                    and HEX_32.fullmatch(tag[3]) is None
+                ):
+                    raise NetworkError(
+                        f"deletion event {expected_id} has an invalid author hint"
+                    )
+                deleted_ids.append(tag[1])
+            elif tag[0] == "k":
+                if (
+                    len(tag) != 2
+                    or len(tag[1]) > 5
+                    or not tag[1].isdigit()
+                    or (len(tag[1]) > 1 and tag[1].startswith("0"))
+                    or not 0 <= int(tag[1]) <= 65_535
+                ):
+                    raise NetworkError(
+                        f"deletion event {expected_id} has an invalid k tag"
+                    )
+                kind_tags.append(int(tag[1]))
+            else:
+                raise NetworkError(
+                    f"deletion event {expected_id} has a non-NIP-09 review tag"
+                )
+        if not deleted_ids:
+            raise NetworkError(f"deletion event {expected_id} has no e targets")
+        if len(deleted_ids) != len(set(deleted_ids)):
+            raise NetworkError(f"deletion event {expected_id} repeats an e target")
+        if not kind_tags or len(kind_tags) != len(set(kind_tags)):
+            raise NetworkError(
+                f"deletion event {expected_id} must have unique k tags"
+            )
     calculated = event_identifier(event)
     if calculated != expected_id:
         raise NetworkError(f"event {expected_id} fails NIP-01 id verification")
@@ -366,17 +427,16 @@ def validate_moderation(record: object) -> dict[str, Any]:
         },
         "network moderation",
     )
-    if record["contract"] != "wywa-network-moderation-v1":
+    if record["contract"] != "wywa-network-moderation-v2":
         raise NetworkError("network moderation contract is unsupported")
     if record["reports"] != "signals-only":
         raise NetworkError("network reports must remain signals, not decisions")
-    if record["author_deletions"] != "not-ingested":
-        raise NetworkError("network author-deletion intake was widened")
-    if record["public_export"] != "redacted-counts-only":
+    if record["public_export"] != "redacted-decision-counts":
         raise NetworkError("network moderation export must remain redacted")
 
     blocked = record["blocked_pubkeys"]
     excluded = record["excluded_events"]
+    author_deletions = record["author_deletions"]
     if (
         not isinstance(blocked, list)
         or len(blocked) > MAX_MODERATION_DECISIONS
@@ -384,6 +444,41 @@ def validate_moderation(record: object) -> dict[str, Any]:
         or len(excluded) > MAX_MODERATION_DECISIONS
     ):
         raise NetworkError("network moderation decisions are excessive")
+    if not isinstance(author_deletions, dict):
+        raise NetworkError("network author deletions must be an object")
+    exact_keys(
+        author_deletions,
+        {
+            "contract",
+            "event_ids",
+            "scope",
+            "public_export",
+            "relay_erasure",
+        },
+        "network author deletions",
+    )
+    if author_deletions["contract"] != "nostr-nip-09-reviewed-v1":
+        raise NetworkError("network author-deletion contract is unsupported")
+    if author_deletions["scope"] != "selected-note-e-tags-only":
+        raise NetworkError("network author-deletion scope was widened")
+    if author_deletions["public_export"] != "request-and-tombstone":
+        raise NetworkError("network author-deletion export is unsupported")
+    if author_deletions["relay_erasure"] != "not-claimed":
+        raise NetworkError("network author deletion overclaims relay erasure")
+    deletion_ids = author_deletions["event_ids"]
+    if (
+        not isinstance(deletion_ids, list)
+        or len(deletion_ids) > MAX_MODERATION_DECISIONS
+        or any(
+            not isinstance(event_id, str)
+            or HEX_32.fullmatch(event_id) is None
+            for event_id in deletion_ids
+        )
+        or len(deletion_ids) != len(set(deletion_ids))
+    ):
+        raise NetworkError(
+            "network author-deletion event ids must be unique 32-byte hex"
+        )
 
     blocked_keys: set[str] = set()
     excluded_ids: set[str] = set()
@@ -446,12 +541,12 @@ def load_review(path: Path) -> dict[str, Any]:
         },
         "network review",
     )
-    if review["schema_version"] != 3:
+    if review["schema_version"] != 4:
         raise NetworkError("network review has an unsupported schema")
     if review["admission"] != "reviewed-read-only":
         raise NetworkError("network admission must remain reviewed-read-only")
-    if review["protocol"] != "nostr-nip-01+02":
-        raise NetworkError("network protocol must be nostr-nip-01+02")
+    if review["protocol"] != "nostr-nip-01+02+09":
+        raise NetworkError("network protocol must be nostr-nip-01+02+09")
     bounded_text(review["title"], "network title", 160)
     bounded_text(review["description"], "network description", 1_000)
     participants = review["participants"]
@@ -624,9 +719,15 @@ def load_review(path: Path) -> dict[str, Any]:
             "network relationship boundary",
             1_500,
         )
-    if len(event_ids | relationship_event_ids) > MAX_EVENTS:
+    moderation = validate_moderation(review["moderation"])
+    deletion_event_ids = moderation["author_deletions"]["event_ids"]
+    selected_event_ids = event_ids | relationship_event_ids
+    if any(event_id in selected_event_ids for event_id in deletion_event_ids):
+        raise NetworkError(
+            "network author-deletion requests must be separate selected events"
+        )
+    if len(selected_event_ids | set(deletion_event_ids)) > MAX_EVENTS:
         raise NetworkError("network review selects too many events")
-    validate_moderation(review["moderation"])
     policy = review["policy"]
     if not isinstance(policy, dict):
         raise NetworkError("network policy must be an object")
@@ -711,7 +812,9 @@ def compile_catalog(
     relationship_ids = [
         relationship["event_id"] for relationship in review["relationships"]
     ]
-    expected_ids = note_ids + relationship_ids
+    moderation = review["moderation"]
+    deletion_ids = moderation["author_deletions"]["event_ids"]
+    expected_ids = note_ids + relationship_ids + deletion_ids
     expected_names = {f"{event_id}.json" for event_id in expected_ids}
     actual_names = {
         path.name
@@ -731,7 +834,6 @@ def compile_catalog(
     participant_by_key = {
         item["pubkey"]: item for item in review["participants"]
     }
-    moderation = review["moderation"]
     for decision in moderation["blocked_pubkeys"]:
         if parse_moment(
             decision["decided_at"], "network moderation blocked key time"
@@ -769,12 +871,92 @@ def compile_catalog(
         validate_event(
             event,
             event_id,
-            expected_kind=1 if event_id in note_ids else 3,
+            expected_kind=(
+                1 if event_id in note_ids
+                else 3 if event_id in relationship_ids
+                else 5
+            ),
             as_of=as_of,
         )
         if event["pubkey"] not in participant_by_key:
             raise NetworkError(f"event {event_id} has an unreviewed author")
         events[event_id] = event
+    selected_content_ids = set(note_ids)
+    deleted_target_ids: set[str] = set()
+    compiled_deletions = []
+    participant_by_id = {
+        item["id"]: item for item in review["participants"]
+    }
+    for deletion_id in deletion_ids:
+        deletion = events[deletion_id]
+        target_ids = [tag[1] for tag in deletion["tags"] if tag[0] == "e"]
+        kind_tags = {
+            int(tag[1]) for tag in deletion["tags"] if tag[0] == "k"
+        }
+        target_kinds: set[int] = set()
+        for target_id in target_ids:
+            if target_id not in selected_content_ids:
+                raise NetworkError(
+                    f"deletion event {deletion_id} targets an unselected event"
+                )
+            if target_id in deleted_target_ids:
+                raise NetworkError(
+                    f"network event {target_id} has repeated deletion requests"
+                )
+            target = events[target_id]
+            if deletion["pubkey"] != target["pubkey"]:
+                raise NetworkError(
+                    f"deletion event {deletion_id} cannot delete an event "
+                    "signed by another key"
+                )
+            if deletion["created_at"] < target["created_at"]:
+                raise NetworkError(
+                    f"deletion event {deletion_id} predates its target"
+                )
+            if target["kind"] not in kind_tags:
+                raise NetworkError(
+                    f"deletion event {deletion_id} omits the target kind"
+                )
+            target_kinds.add(target["kind"])
+            for tag in deletion["tags"]:
+                if (
+                    tag[0] == "e"
+                    and tag[1] == target_id
+                    and len(tag) == 4
+                    and tag[3] != ""
+                    and tag[3] != target["pubkey"]
+                ):
+                    raise NetworkError(
+                        f"deletion event {deletion_id} has the wrong author hint"
+                    )
+            deleted_target_ids.add(target_id)
+        if kind_tags != target_kinds:
+            raise NetworkError(
+                f"deletion event {deletion_id} has unrelated k tags"
+            )
+        author = participant_by_key[deletion["pubkey"]]
+        compiled_deletions.append(
+            {
+                "request_event_id": deletion_id,
+                "participant_id": author["id"],
+                "author": author["name"],
+                "pubkey": deletion["pubkey"],
+                "kind": 5,
+                "created_at": dt.datetime.fromtimestamp(
+                    deletion["created_at"], tz=dt.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "content": deletion["content"],
+                "deletion_tags": deletion["tags"],
+                "target_event_ids": target_ids,
+                "event_url": f"/network/events/{deletion_id}.json",
+                "relay_view_url": f"https://njump.me/{deletion_id}",
+                "verification": {
+                    "event_id": "nip-01-recomputed",
+                    "signature": "bip-340-verified",
+                    "semantics": "nip-09-same-author-selected-e-tags",
+                },
+            }
+        )
     compiled_threads = []
     total_replies = 0
     for thread in review["threads"]:
@@ -803,11 +985,14 @@ def compile_catalog(
                 raise NetworkError(
                     f"event {event_id} does not link to an earlier thread event"
                 )
-            if position > 0:
-                total_replies += 1
             if position > 0 and not mentions:
                 raise NetworkError(f"reply event {event_id} omits its target author")
+            prior_ids.add(event_id)
+            if event_id in deleted_target_ids:
+                continue
             author = participant_by_key[event["pubkey"]]
+            if compiled_events:
+                total_replies += 1
             compiled_events.append(
                 {
                     "id": event_id,
@@ -830,7 +1015,6 @@ def compile_catalog(
                     },
                 }
             )
-            prior_ids.add(event_id)
         compiled_threads.append(
             {
                 "id": thread["id"],
@@ -838,11 +1022,13 @@ def compile_catalog(
                 "summary": thread["summary"],
                 "boundary": thread["boundary"],
                 "events": compiled_events,
+                "author_deleted_event_ids": [
+                    event_id
+                    for event_id in thread["event_ids"]
+                    if event_id in deleted_target_ids
+                ],
             }
         )
-    participant_by_id = {
-        item["id"]: item for item in review["participants"]
-    }
     compiled_relationships = []
     total_follows = 0
     for relationship in review["relationships"]:
@@ -862,6 +1048,8 @@ def compile_catalog(
             raise NetworkError(
                 f"follow-list event {event['id']} differs from reviewed targets"
             )
+        if event["id"] in deleted_target_ids:
+            continue
         total_follows += len(targets)
         compiled_relationships.append(
             {
@@ -901,7 +1089,7 @@ def compile_catalog(
         reason = decision["reason_code"]
         reason_counts[reason] = reason_counts.get(reason, 0) + 1
     catalog = {
-        "schema_version": 3,
+        "schema_version": 4,
         "generated_at": utc_text(as_of),
         "admission": review["admission"],
         "protocol": review["protocol"],
@@ -914,37 +1102,62 @@ def compile_catalog(
                 len(review["participants"]) - registry_links
             ),
             "threads": len(compiled_threads),
-            "events": len(events),
-            "notes": len(note_ids),
+            "events": (
+                len(note_ids)
+                + len(relationship_ids)
+                + len(deletion_ids)
+                - len(deleted_target_ids)
+            ),
+            "notes": sum(
+                1 for event_id in note_ids
+                if event_id not in deleted_target_ids
+            ),
             "replies": total_replies,
             "follow_list_events": len(compiled_relationships),
             "follows": total_follows,
+            "author_deletion_requests": len(deletion_ids),
+            "author_deleted_events": len(deleted_target_ids),
             "verified_event_ids": len(events),
             "verified_event_signatures": len(events),
         },
         "participants": review["participants"],
         "relationships": compiled_relationships,
         "threads": compiled_threads,
+        "author_deletions": compiled_deletions,
         "moderation": {
             "contract": moderation["contract"],
             "reports": moderation["reports"],
-            "author_deletions": moderation["author_deletions"],
             "public_export": moderation["public_export"],
             "active_blocked_pubkeys": len(moderation["blocked_pubkeys"]),
             "active_excluded_events": len(moderation["excluded_events"]),
+            "author_deletions": {
+                "contract": moderation["author_deletions"]["contract"],
+                "scope": moderation["author_deletions"]["scope"],
+                "public_export": moderation["author_deletions"]["public_export"],
+                "relay_erasure": moderation["author_deletions"]["relay_erasure"],
+                "requests": len(deletion_ids),
+                "deleted_events": len(deleted_target_ids),
+            },
             "reason_counts": dict(sorted(reason_counts.items())),
             "boundary": (
                 "A report is review input, never an automatic vote. Active "
                 "key blocks and event exclusions are checked before selected "
-                "bytes can enter the export; the public view exposes only "
-                "counts and reason codes. Signed author deletion requests are "
-                "not ingested yet, and no static export can erase relay copies."
+                "bytes can enter the export; those decisions expose only "
+                "counts and reason codes. A selected NIP-09 request hides "
+                "a note only after its id, signature, target kind, and "
+                "same-author relationship verify. The signed request and "
+                "tombstone remain public; no static export can erase relay copies."
             ),
         },
         "policy": review["policy"],
         "boundaries": review["boundaries"],
     }
-    return catalog, events
+    exported_events = {
+        event_id: event
+        for event_id, event in events.items()
+        if event_id not in deleted_target_ids
+    }
+    return catalog, exported_events
 
 
 def esc(value: object) -> str:
@@ -1069,6 +1282,8 @@ def render_page(catalog: dict[str, Any]) -> str:
             <p>Selected bytes fail compilation if their event id has an active reviewed exclusion.</p></article>
           <article><h3>Reports: {esc(moderation['reports'])}</h3>
             <p>Reason counts: {esc(moderation_reasons)}. Targets and report text are not republished by the redacted public summary.</p></article>
+          <article><h3>{moderation['author_deletions']['requests']} author deletion requests</h3>
+            <p>{moderation['author_deletions']['deleted_events']} selected notes hidden. Same-author NIP-09 proof is required; the request and tombstone remain public, and relay erasure is not claimed.</p></article>
         </div>
       </section>
       {''.join(thread_sections)}
@@ -1078,7 +1293,7 @@ def render_page(catalog: dict[str, Any]) -> str:
         </details>
       </section>
     </main>
-    <footer><p>WYWA / read-only network preview</p><p>One signed follow · fail-closed moderation · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
+    <footer><p>WYWA / read-only network preview</p><p>One signed follow · author-controlled withdrawal · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
   </body>
 </html>
 """
@@ -1135,8 +1350,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
         description=(
-            "Verify selected NIP-01 event ids, BIP-340 signatures, and NIP-02 "
-            "follow semantics, then compile a deterministic read-only export."
+            "Verify selected NIP-01 event ids, BIP-340 signatures, NIP-02 "
+            "follow semantics, and same-author NIP-09 deletion requests, then "
+            "compile a deterministic read-only export."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

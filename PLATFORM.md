@@ -456,17 +456,30 @@ become a block. Public output exposes only active counts and reason codes, not
 the target list or report text. The isolated suite exercises selected-key and
 selected-event refusal plus automatic-report and future-decision failures.
 This proves mechanism behavior against fixtures, not a real abuse incident.
-NIP-56 reports are review signals, NIP-09 author deletion is not ingested yet,
-and neither this static view nor a deletion request can erase copies already
-held by relays or clients. Sources re-read 2026-07-25:
+NIP-56 reports are review signals. Platform exclusion and author withdrawal
+remain different authorities.
+
+Checkpoint 2026-07-25: selected NIP-09 author deletion is now executable
+without opening intake. The review may name bounded kind-5 request events.
+The compiler verifies the NIP-01 id, BIP-340 signature, exact selected kind-1
+`e` targets, declared `k` kind, chronology, and—critically—the identical
+author key before hiding a selected note. A wrong-key request fails. A valid request
+stays in the export beside a target-id tombstone; the original content does
+not enter the current static release. The contract deliberately supports
+selected exact note ids, not replaceable or addressable `a`-tag deletion, automatic relay
+ingestion, or “undelete.” The live request set is empty. Signed synthetic
+fixtures exercise success and wrong-author refusal without inventing a real
+withdrawal, and neither this static view nor a valid request can erase copies
+already held by relays, Git history, prior releases, or clients. Sources
+re-read 2026-07-25:
 https://github.com/nostr-protocol/nips/blob/master/09.md,
 https://github.com/nostr-protocol/nips/blob/master/51.md, and
 https://github.com/nostr-protocol/nips/blob/master/56.md.
 
 There is still no public input, relay subscription, comment path,
 follower/like counter, notification engine, automatic curation, or exercised
-live rate limit. Consent, report intake, author deletion, and traffic limits
-remain mandatory before any writable social edge opens.
+live rate limit. Consent, report intake, real deletion handling, and traffic
+limits remain mandatory before any writable social edge opens.
 
 ### Phase 4 — product hub and economics
 

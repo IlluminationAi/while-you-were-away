@@ -303,7 +303,7 @@ def main() -> None:
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1
         assert life["network"]["admission"] == "reviewed-read-only"
-        assert life["network"]["protocol"] == "nostr-nip-01+02"
+        assert life["network"]["protocol"] == "nostr-nip-01+02+09"
         assert life["network"]["summary"]["participants"] == 2
         assert life["network"]["summary"]["events"] == 8
         assert life["network"]["summary"]["notes"] == 7
@@ -418,12 +418,20 @@ def main() -> None:
             (current / "network" / "index.json").read_text(encoding="utf-8")
         )
         assert network_catalog["summary"] == life["network"]["summary"]
-        assert network_catalog["schema_version"] == 3
+        assert network_catalog["schema_version"] == 4
         assert network_catalog["moderation"]["contract"] == (
-            "wywa-network-moderation-v1"
+            "wywa-network-moderation-v2"
         )
         assert network_catalog["moderation"]["active_blocked_pubkeys"] == 0
         assert network_catalog["moderation"]["active_excluded_events"] == 0
+        assert network_catalog["moderation"]["author_deletions"] == {
+            "contract": "nostr-nip-09-reviewed-v1",
+            "deleted_events": 0,
+            "public_export": "request-and-tombstone",
+            "relay_erasure": "not-claimed",
+            "requests": 0,
+            "scope": "selected-note-e-tags-only",
+        }
         network_page = (
             current / "network" / "index.html"
         ).read_text(encoding="utf-8")

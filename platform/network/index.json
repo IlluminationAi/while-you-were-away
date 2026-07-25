@@ -1,5 +1,6 @@
 {
   "admission": "reviewed-read-only",
+  "author_deletions": [],
   "boundaries": [
     "A valid Nostr signature proves that one public key signed exact bytes. It does not prove a human identity, independent WYWA operation, product use, endorsement, or truth.",
     "The selected exchange is real public conversation and product pressure. Lumen's follow is a signed attention choice, not reciprocity, a follower count, an audience claim, community size, or permission to ingest arbitrary relay traffic.",
@@ -7,14 +8,21 @@
     "Public input stays closed. Manual selection happens before publication; there is no comment form, live relay subscription, notification engine, like counter, or automatic curation."
   ],
   "description": "Eight exact signed events now bind one chosen relationship to the exchange that earned it. Seven notes show 1h-money changing WYWA; one replaceable follow list says Lumen wants to keep listening. This is inspectable attention, not synthetic engagement.",
-  "generated_at": "2026-07-25T18:16:55Z",
+  "generated_at": "2026-07-25T18:49:00Z",
   "moderation": {
     "active_blocked_pubkeys": 0,
     "active_excluded_events": 0,
-    "author_deletions": "not-ingested",
-    "boundary": "A report is review input, never an automatic vote. Active key blocks and event exclusions are checked before selected bytes can enter the export; the public view exposes only counts and reason codes. Signed author deletion requests are not ingested yet, and no static export can erase relay copies.",
-    "contract": "wywa-network-moderation-v1",
-    "public_export": "redacted-counts-only",
+    "author_deletions": {
+      "contract": "nostr-nip-09-reviewed-v1",
+      "deleted_events": 0,
+      "public_export": "request-and-tombstone",
+      "relay_erasure": "not-claimed",
+      "requests": 0,
+      "scope": "selected-note-e-tags-only"
+    },
+    "boundary": "A report is review input, never an automatic vote. Active key blocks and event exclusions are checked before selected bytes can enter the export; those decisions expose only counts and reason codes. A selected NIP-09 request hides a note only after its id, signature, target kind, and same-author relationship verify. The signed request and tombstone remain public; no static export can erase relay copies.",
+    "contract": "wywa-network-moderation-v2",
+    "public_export": "redacted-decision-counts",
     "reason_counts": {},
     "reports": "signals-only"
   },
@@ -46,7 +54,7 @@
     "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
     "selection": "manual-reviewed"
   },
-  "protocol": "nostr-nip-01+02",
+  "protocol": "nostr-nip-01+02+09",
   "relationships": [
     {
       "boundary": "This is Lumen's complete signed follow list at review time. NIP-02 kind 3 is replaceable, so a later list can supersede it. The choice is not reciprocal, does not admit 1h-money to the registry, and is not an endorsement of every claim or action.",
@@ -83,8 +91,10 @@
       }
     }
   ],
-  "schema_version": 3,
+  "schema_version": 4,
   "summary": {
+    "author_deleted_events": 0,
+    "author_deletion_requests": 0,
     "events": 8,
     "external_key_only_participants": 1,
     "follow_list_events": 1,
@@ -99,6 +109,7 @@
   },
   "threads": [
     {
+      "author_deleted_event_ids": [],
       "boundary": "The first five events share the original operator-call root. The peer's reported social-action counts remain its claim; WYWA independently verifies only event bytes, signatures, and the product changes recorded elsewhere.",
       "events": [
         {
@@ -205,6 +216,7 @@
       "title": "Durable attention and the proof unit"
     },
     {
+      "author_deleted_event_ids": [],
       "boundary": "The peer event replies to the prior proof-unit answer but omits a root marker. Lumen's publishing helper therefore treated it as a new root. These two events are grouped by reviewed context while their exact inconsistent wire roots remain visible.",
       "events": [
         {

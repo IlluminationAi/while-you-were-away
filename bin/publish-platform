@@ -1794,12 +1794,13 @@ def read_network_export(
         raise ValueError("network export is not valid UTF-8 JSON/HTML") from error
     if (
         not isinstance(catalog, dict)
-        or catalog.get("schema_version") != 3
+        or catalog.get("schema_version") != 4
         or catalog.get("admission") != "reviewed-read-only"
-        or catalog.get("protocol") != "nostr-nip-01+02"
+        or catalog.get("protocol") != "nostr-nip-01+02+09"
         or not isinstance(catalog.get("participants"), list)
         or not isinstance(catalog.get("relationships"), list)
         or not isinstance(catalog.get("threads"), list)
+        or not isinstance(catalog.get("author_deletions"), list)
         or not isinstance(catalog.get("summary"), dict)
         or not isinstance(catalog.get("moderation"), dict)
     ):
@@ -1812,15 +1813,27 @@ def read_network_export(
         raise ValueError("network page contains inline executable or style content")
     summary = catalog["summary"]
     moderation = catalog["moderation"]
+    author_deletion_policy = moderation.get("author_deletions")
     moderation_counts = (
         moderation.get("active_blocked_pubkeys"),
         moderation.get("active_excluded_events"),
     )
     if (
-        moderation.get("contract") != "wywa-network-moderation-v1"
+        moderation.get("contract") != "wywa-network-moderation-v2"
         or moderation.get("reports") != "signals-only"
-        or moderation.get("author_deletions") != "not-ingested"
-        or moderation.get("public_export") != "redacted-counts-only"
+        or moderation.get("public_export") != "redacted-decision-counts"
+        or not isinstance(author_deletion_policy, dict)
+        or author_deletion_policy.get("contract") != "nostr-nip-09-reviewed-v1"
+        or author_deletion_policy.get("scope") != "selected-note-e-tags-only"
+        or author_deletion_policy.get("public_export")
+        != "request-and-tombstone"
+        or author_deletion_policy.get("relay_erasure") != "not-claimed"
+        or isinstance(author_deletion_policy.get("requests"), bool)
+        or not isinstance(author_deletion_policy.get("requests"), int)
+        or author_deletion_policy.get("requests") < 0
+        or isinstance(author_deletion_policy.get("deleted_events"), bool)
+        or not isinstance(author_deletion_policy.get("deleted_events"), int)
+        or author_deletion_policy.get("deleted_events") < 0
         or any(
             isinstance(count, bool)
             or not isinstance(count, int)
@@ -1886,11 +1899,24 @@ def read_network_export(
         raise ValueError("network external-participant count is inconsistent")
     event_ids: set[str] = set()
     event_records: dict[str, dict[str, Any]] = {}
+    thread_deleted_ids: set[str] = set()
     replies = 0
     notes = 0
     for thread in catalog["threads"]:
-        if not isinstance(thread, dict) or not isinstance(thread.get("events"), list):
+        if (
+            not isinstance(thread, dict)
+            or not isinstance(thread.get("events"), list)
+            or not isinstance(thread.get("author_deleted_event_ids"), list)
+        ):
             raise ValueError("network thread is incomplete")
+        for deleted_id in thread["author_deleted_event_ids"]:
+            if (
+                not isinstance(deleted_id, str)
+                or re.fullmatch(r"[0-9a-f]{64}", deleted_id) is None
+                or deleted_id in thread_deleted_ids
+            ):
+                raise ValueError("network thread deletion ids are invalid or repeated")
+            thread_deleted_ids.add(deleted_id)
         for position, event in enumerate(thread["events"]):
             if not isinstance(event, dict):
                 raise ValueError("network event is not an object")
@@ -1972,6 +1998,54 @@ def read_network_export(
         event_ids.add(event_id)
         event_records[event_id] = relationship
         follows += len(target_ids)
+    deleted_target_ids: set[str] = set()
+    for deletion in catalog["author_deletions"]:
+        if not isinstance(deletion, dict):
+            raise ValueError("network author deletion is not an object")
+        request_id = deletion.get("request_event_id")
+        target_ids = deletion.get("target_event_ids")
+        participant_id = deletion.get("participant_id")
+        deletion_tags = deletion.get("deletion_tags")
+        if (
+            not isinstance(request_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", request_id) is None
+            or request_id in event_ids
+            or participant_id not in participant_ids
+            or deletion.get("pubkey")
+            != participant_by_id[participant_id].get("pubkey")
+            or deletion.get("kind") != 5
+            or not isinstance(deletion.get("content"), str)
+            or not isinstance(target_ids, list)
+            or not target_ids
+            or len(target_ids) != len(set(target_ids))
+            or any(
+                not isinstance(target_id, str)
+                or re.fullmatch(r"[0-9a-f]{64}", target_id) is None
+                or target_id in deleted_target_ids
+                for target_id in target_ids
+            )
+            or not isinstance(deletion_tags, list)
+            or [
+                tag[1]
+                for tag in deletion_tags
+                if isinstance(tag, list) and len(tag) >= 2 and tag[0] == "e"
+            ]
+            != target_ids
+            or deletion.get("verification")
+            != {
+                "event_id": "nip-01-recomputed",
+                "signature": "bip-340-verified",
+                "semantics": "nip-09-same-author-selected-e-tags",
+            }
+            or deletion.get("event_url")
+            != f"/network/events/{request_id}.json"
+        ):
+            raise ValueError("network author deletion is invalid")
+        deleted_target_ids.update(target_ids)
+        event_ids.add(request_id)
+        event_records[request_id] = deletion
+    if thread_deleted_ids != deleted_target_ids:
+        raise ValueError("network thread tombstones differ from deletion requests")
     if (
         summary.get("threads") != len(catalog["threads"])
         or summary.get("events") != len(event_ids)
@@ -1979,8 +2053,17 @@ def read_network_export(
         or summary.get("replies") != replies
         or summary.get("follow_list_events") != len(catalog["relationships"])
         or summary.get("follows") != follows
-        or summary.get("verified_event_ids") != len(event_ids)
-        or summary.get("verified_event_signatures") != len(event_ids)
+        or summary.get("author_deletion_requests")
+        != len(catalog["author_deletions"])
+        or summary.get("author_deleted_events") != len(deleted_target_ids)
+        or author_deletion_policy.get("requests")
+        != len(catalog["author_deletions"])
+        or author_deletion_policy.get("deleted_events")
+        != len(deleted_target_ids)
+        or summary.get("verified_event_ids")
+        != len(event_ids) + len(deleted_target_ids)
+        or summary.get("verified_event_signatures")
+        != len(event_ids) + len(deleted_target_ids)
     ):
         raise ValueError("network event summary is inconsistent")
     events_directory = directory / "events"
@@ -2026,6 +2109,10 @@ def read_network_export(
             or (
                 raw.get("kind") == 3
                 and raw.get("tags") != reviewed.get("follow_tags")
+            )
+            or (
+                raw.get("kind") == 5
+                and raw.get("tags") != reviewed.get("deletion_tags")
             )
             or expected_time != reviewed.get("created_at")
         ):

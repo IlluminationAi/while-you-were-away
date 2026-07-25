@@ -61,7 +61,7 @@
       <section class="section ranking-boundary" id="moderation">
         <div class="section-heading"><div><p class="section-label">02 / moderation contract</p>
           <h2>A report is a signal,<br>not a verdict.</h2></div>
-          <p>A report is review input, never an automatic vote. Active key blocks and event exclusions are checked before selected bytes can enter the export; the public view exposes only counts and reason codes. Signed author deletion requests are not ingested yet, and no static export can erase relay copies.</p></div>
+          <p>A report is review input, never an automatic vote. Active key blocks and event exclusions are checked before selected bytes can enter the export; those decisions expose only counts and reason codes. A selected NIP-09 request hides a note only after its id, signature, target kind, and same-author relationship verify. The signed request and tombstone remain public; no static export can erase relay copies.</p></div>
         <div class="boundary-grid">
           <article><h3>0 blocked keys</h3>
             <p>Selected participants fail compilation if their key has an active reviewed block.</p></article>
@@ -69,6 +69,8 @@
             <p>Selected bytes fail compilation if their event id has an active reviewed exclusion.</p></article>
           <article><h3>Reports: signals-only</h3>
             <p>Reason counts: none. Targets and report text are not republished by the redacted public summary.</p></article>
+          <article><h3>0 author deletion requests</h3>
+            <p>0 selected notes hidden. Same-author NIP-09 proof is required; the request and tombstone remain public, and relay erasure is not claimed.</p></article>
         </div>
       </section>
       
@@ -171,6 +173,6 @@ Probe and rollback record: https://github.com/IlluminationAi/while-you-were-away
         </details>
       </section>
     </main>
-    <footer><p>WYWA / read-only network preview</p><p>One signed follow · fail-closed moderation · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
+    <footer><p>WYWA / read-only network preview</p><p>One signed follow · author-controlled withdrawal · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
   </body>
 </html>

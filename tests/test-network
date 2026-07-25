@@ -15,6 +15,64 @@ NETWORK = PROJECT / "bin" / "wywa-network"
 REVIEW = PROJECT / "platform" / "network-review.json"
 EVENTS = PROJECT / "platform" / "network-events"
 AS_OF = "2026-07-25T18:00:00Z"
+FIXTURE_NOTE = {
+    "kind": 1,
+    "id": "963ae3b47f18d6253369fc7d53f855491de44fb52b3678a7c834572c89a7a3d4",
+    "pubkey": "bf652aa5de30e1de7a3f14b7d99e9cc38fda31cb02823363ff68394847da46cb",
+    "created_at": 1785000000,
+    "tags": [],
+    "content": "fixture note",
+    "sig": (
+        "0492d4f04e836f60ada8833ede20af3e58a22b1782488b1c83d694c577425cbf"
+        "28ecfcc83e70edf9aef1dd7e890c1513c368ee0f656b79ca82dd34e8fe48290c"
+    ),
+}
+FIXTURE_DELETION = {
+    "kind": 5,
+    "id": "3eee8cc0b19f8589a1657cb754cdd950d65c38a9174622703f73a1cb8bd69fd6",
+    "pubkey": FIXTURE_NOTE["pubkey"],
+    "created_at": 1785000001,
+    "tags": [["e", FIXTURE_NOTE["id"]], ["k", "1"]],
+    "content": "fixture author withdrawal",
+    "sig": (
+        "c1d338ded29ed9759975c828d5dbcd0a07da76b9cc5e7f1f5dd994c5fb558c4"
+        "d43d9b191c7efba7c1443c1960929712254337b6a3574c7f5237a6316d1bc94db"
+    ),
+}
+WRONG_AUTHOR_DELETION = {
+    "kind": 5,
+    "id": "c5da92708458debce2530d5b48c923f0894bbfc060c90acd8a6459bb78d27293",
+    "pubkey": "21c2387ea2d9bf2fa5da0c699b3742c0bf14b7ff6fcc2ae0a38736089add32a1",
+    "created_at": 1785000001,
+    "tags": [["e", FIXTURE_NOTE["id"]], ["k", "1"]],
+    "content": "wrong author fixture",
+    "sig": (
+        "98d09d53f7ff72c0ff8bdcae59743c695e3a127ec1fdb7ea8a60bbca0165b528"
+        "d734984cae78f66f48d0fca3d22418333c454e06378ad92465329467cc316ec8"
+    ),
+}
+
+
+def fixture_participant(public_key: str, participant_id: str) -> dict[str, object]:
+    return {
+        "agent_id": None,
+        "boundary": "Synthetic signed fixture used only by the isolated suite.",
+        "id": participant_id,
+        "identity_evidence": "nostr-event-key-only",
+        "name": participant_id,
+        "pubkey": public_key,
+        "url": "https://example.com/",
+    }
+
+
+def fixture_thread() -> dict[str, object]:
+    return {
+        "boundary": "The only selected note is hidden by its author's request.",
+        "event_ids": [FIXTURE_NOTE["id"]],
+        "id": "author-withdrawal-fixture",
+        "summary": "A same-author NIP-09 request replaces selected content.",
+        "title": "Author withdrawal fixture",
+    }
 
 
 def run_build(
@@ -64,10 +122,12 @@ def main() -> None:
             assert (first / relative).read_bytes() == (second / relative).read_bytes()
 
         catalog = json.loads((first / "index.json").read_text(encoding="utf-8"))
-        assert catalog["schema_version"] == 3
+        assert catalog["schema_version"] == 4
         assert catalog["admission"] == "reviewed-read-only"
-        assert catalog["protocol"] == "nostr-nip-01+02"
+        assert catalog["protocol"] == "nostr-nip-01+02+09"
         assert catalog["summary"] == {
+            "author_deleted_events": 0,
+            "author_deletion_requests": 0,
             "events": 8,
             "external_key_only_participants": 1,
             "follow_list_events": 1,
@@ -94,19 +154,29 @@ def main() -> None:
         assert catalog["moderation"] == {
             "active_blocked_pubkeys": 0,
             "active_excluded_events": 0,
-            "author_deletions": "not-ingested",
+            "author_deletions": {
+                "contract": "nostr-nip-09-reviewed-v1",
+                "deleted_events": 0,
+                "public_export": "request-and-tombstone",
+                "relay_erasure": "not-claimed",
+                "requests": 0,
+                "scope": "selected-note-e-tags-only",
+            },
             "boundary": (
                 "A report is review input, never an automatic vote. Active "
                 "key blocks and event exclusions are checked before selected "
-                "bytes can enter the export; the public view exposes only "
-                "counts and reason codes. Signed author deletion requests are "
-                "not ingested yet, and no static export can erase relay copies."
+                "bytes can enter the export; those decisions expose only "
+                "counts and reason codes. A selected NIP-09 request hides "
+                "a note only after its id, signature, target kind, and "
+                "same-author relationship verify. The signed request and "
+                "tombstone remain public; no static export can erase relay copies."
             ),
-            "contract": "wywa-network-moderation-v1",
-            "public_export": "redacted-counts-only",
+            "contract": "wywa-network-moderation-v2",
+            "public_export": "redacted-decision-counts",
             "reason_counts": {},
             "reports": "signals-only",
         }
+        assert catalog["author_deletions"] == []
         custody = catalog["threads"][1]
         assert custody["events"][0]["wire_root"] is None
         assert custody["events"][0]["reply_to"].startswith("d0cd2e6b")
@@ -117,9 +187,82 @@ def main() -> None:
         assert "Relationship," in page
         assert "Follows 1h-money" in page
         assert "A report is a signal" in page
-        assert "fail-closed moderation" in page
+        assert "author-controlled withdrawal" in page
         assert "root drift" in page
         assert len(list((first / "events").glob("*.json"))) == 8
+
+        deletion_events = root / "deletion-events"
+        shutil.copytree(EVENTS, deletion_events)
+        for event in (FIXTURE_NOTE, FIXTURE_DELETION):
+            (deletion_events / f"{event['id']}.json").write_text(
+                json.dumps(event), encoding="utf-8"
+            )
+        deletion_review = root / "deletion-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["participants"].append(
+            fixture_participant(FIXTURE_NOTE["pubkey"], "fixture-author")
+        )
+        record["threads"].append(fixture_thread())
+        record["moderation"]["author_deletions"]["event_ids"] = [
+            FIXTURE_DELETION["id"]
+        ]
+        deletion_review.write_text(json.dumps(record), encoding="utf-8")
+        deletion_output = root / "deletion-output"
+        deletion = run_build(deletion_review, deletion_events, deletion_output)
+        assert deletion.returncode == 0, deletion.stderr
+        deletion_catalog = json.loads(
+            (deletion_output / "index.json").read_text(encoding="utf-8")
+        )
+        assert deletion_catalog["summary"]["author_deletion_requests"] == 1
+        assert deletion_catalog["summary"]["author_deleted_events"] == 1
+        assert deletion_catalog["summary"]["events"] == 9
+        assert deletion_catalog["summary"]["notes"] == 7
+        assert deletion_catalog["summary"]["verified_event_ids"] == 10
+        assert deletion_catalog["threads"][-1]["events"] == []
+        assert deletion_catalog["threads"][-1]["author_deleted_event_ids"] == [
+            FIXTURE_NOTE["id"]
+        ]
+        assert deletion_catalog["author_deletions"][0]["target_event_ids"] == [
+            FIXTURE_NOTE["id"]
+        ]
+        assert deletion_catalog["author_deletions"][0]["verification"][
+            "semantics"
+        ] == "nip-09-same-author-selected-e-tags"
+        assert not (
+            deletion_output / "events" / f"{FIXTURE_NOTE['id']}.json"
+        ).exists()
+        assert (
+            deletion_output / "events" / f"{FIXTURE_DELETION['id']}.json"
+        ).is_file()
+
+        wrong_author_events = root / "wrong-author-events"
+        shutil.copytree(EVENTS, wrong_author_events)
+        for event in (FIXTURE_NOTE, WRONG_AUTHOR_DELETION):
+            (wrong_author_events / f"{event['id']}.json").write_text(
+                json.dumps(event), encoding="utf-8"
+            )
+        wrong_author_review = root / "wrong-author-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["participants"].extend(
+            [
+                fixture_participant(FIXTURE_NOTE["pubkey"], "fixture-author"),
+                fixture_participant(
+                    WRONG_AUTHOR_DELETION["pubkey"], "wrong-fixture-author"
+                ),
+            ]
+        )
+        record["threads"].append(fixture_thread())
+        record["moderation"]["author_deletions"]["event_ids"] = [
+            WRONG_AUTHOR_DELETION["id"]
+        ]
+        wrong_author_review.write_text(json.dumps(record), encoding="utf-8")
+        wrong_author = run_build(
+            wrong_author_review,
+            wrong_author_events,
+            root / "wrong-author-output",
+        )
+        assert wrong_author.returncode != 0
+        assert "signed by another key" in wrong_author.stderr
 
         tampered_events = root / "tampered-events"
         shutil.copytree(EVENTS, tampered_events)
@@ -257,7 +400,10 @@ def main() -> None:
         assert future_decision.returncode != 0
         assert "moderation decision is from the future" in future_decision.stderr
 
-    print("PASS read-only signed WYWA network and fail-closed moderation")
+    print(
+        "PASS read-only signed WYWA network, fail-closed moderation, "
+        "and same-author withdrawal"
+    )
 
 
 if __name__ == "__main__":
