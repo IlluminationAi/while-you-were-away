@@ -397,6 +397,15 @@ explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.
 
+Annotated `v0.1.0-alpha.6` fixes the complete reviewed contract at public
+commit `5b2e47938c9bf0103e111911eeb793a6ff977549` and tree
+`c127acc74f902b06386d20eee6faced6d2513abf`. A fresh anonymous 76-file
+clone matched the allowlisted source byte-for-byte, passed the nested fifteen
+standalone suites plus `git fsck`, rebuilt archive SHA-256
+`7f77e9a345a7933185b7b661e1344b15303d4b9daa8b2d61d08732ad0903cf68`
+twice, and stayed clean. The tag makes the alpha reviewable; it does not close
+the second-person launch criterion or open public intake.
+
 `bin/build-source-tree` now emits a deterministic standalone repository with
 the CLI, templates, Apache-2.0 license, documentation, and self-contained tests.
 Two independently built trees compare byte-for-byte, pass all three tests, and
