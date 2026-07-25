@@ -113,6 +113,9 @@ else
     '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"fake result"}}' \
     '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
 fi
+if [[ -f "$fake_root/diagnostics" ]]; then
+  cat -- "$fake_root/diagnostics" >&2
+fi
 
 if [[ -f "$fake_root/exit-status" ]]; then
   exit "$(<"$fake_root/exit-status")"
@@ -244,6 +247,10 @@ grep -Fqx \
 grep -Fqx 'approvals: never; session persistence: ephemeral' \
   "$test_root/dry-run-output" ||
   fail "dry run omitted the approval and persistence boundary"
+grep -Fqx \
+  'output ceilings: events=16777216 bytes diagnostics=4194304 bytes final-message=65536 bytes' \
+  "$test_root/dry-run-output" ||
+  fail "dry run omitted the evidence output ceilings"
 grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
   fail "dry run omitted the runtime bound"
 
@@ -338,7 +345,7 @@ grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
   fail "successful receipt omitted the host checkpoint"
 receipt_commit=$(git -C "$workspace" rev-parse HEAD)
 receipt_tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
-grep -Fq "receipt=6" "$runtime_dir/last-run" ||
+grep -Fq "receipt=7" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its schema version"
 grep -Fq "local_network=disabled web_search=live" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its split network capabilities"
@@ -350,6 +357,10 @@ grep -Fq \
   "events=wywa-v1 event_counts=agent_message:1,reasoning:0,command_execution:0,file_change:0,web_search:0,todo_list:0,plan:0,image_view:0,context_compaction:0" \
   "$runtime_dir/last-run" ||
   fail "successful receipt omitted its audited event counts"
+grep -Fq \
+  "child_file_bytes_max=16777216 event_bytes_max=16777216 diagnostics_bytes_max=4194304 message_bytes_max=65536" \
+  "$runtime_dir/last-run" ||
+  fail "successful receipt omitted its enforced output ceilings"
 grep -Fq "commit=$receipt_commit" "$runtime_dir/last-run" ||
   fail "successful receipt omitted the exact commit"
 grep -Fq "tree=$receipt_tree" "$runtime_dir/last-run" ||
@@ -367,38 +378,54 @@ grep -Fq "receipt: verified commit=${receipt_commit:0:12}" \
   "$test_root/verify-receipt-output" ||
   fail "verify-receipt did not verify the successful checkpoint"
 
-cp -- "$runtime_dir/last-run" "$test_root/version-6-capabilities.saved"
+cp -- "$runtime_dir/last-run" "$test_root/version-7-capabilities.saved"
 sed \
   's/local_network=disabled/local_network=enabled/' \
-  "$test_root/version-6-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected local network capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed local network capability"
 sed \
   's/web_search=live/web_search=disabled/' \
-  "$test_root/version-6-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected hosted web search capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed hosted web search capability"
 sed \
   's/apps=disabled/apps=enabled/' \
-  "$test_root/version-6-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected app capability' "$test_root/stderr" ||
   fail "verify-receipt accepted enabled apps"
 sed \
   's/approval=never/approval=on-request/' \
-  "$test_root/version-6-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected approval posture' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed approval posture"
 sed \
   's/events=wywa-v1/events=unreviewed/' \
-  "$test_root/version-6-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected event-audit policy' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed event-audit policy"
-mv -- "$test_root/version-6-capabilities.saved" "$runtime_dir/last-run"
+sed \
+  's/child_file_bytes_max=16777216/child_file_bytes_max=33554432/' \
+  "$test_root/version-7-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'unexpected child file ceiling' "$test_root/stderr" ||
+  fail "verify-receipt accepted a changed child file ceiling"
+mv -- "$test_root/version-7-capabilities.saved" "$runtime_dir/last-run"
+
+cp -- "$runtime_dir/last-run" "$test_root/version-7-receipt.saved"
+sed \
+  -e 's/receipt=7 /receipt=6 /' \
+  -e 's/ child_file_bytes_max=[^ ]* event_bytes_max=[^ ]* diagnostics_bytes_max=[^ ]* message_bytes_max=[^ ]*//' \
+  "$test_root/version-7-receipt.saved" >"$runtime_dir/last-run"
+"$wywa" verify-receipt "$workspace" >"$test_root/version-6-receipt-output"
+grep -Fq 'child_file_bytes_max=unrecorded event_bytes_max=unrecorded' \
+  "$test_root/version-6-receipt-output" ||
+  fail "verify-receipt invented output ceilings for a version-6 receipt"
 
 cp -- "$runtime_dir/last-run" "$test_root/version-6-receipt.saved"
 sed \
@@ -440,7 +467,7 @@ sed \
 grep -Fq 'permissions=legacy-workspace-write' \
   "$test_root/legacy-receipt-output" ||
   fail "verify-receipt did not preserve version-2 compatibility"
-mv -- "$test_root/version-6-receipt.saved" "$runtime_dir/last-run"
+mv -- "$test_root/version-7-receipt.saved" "$runtime_dir/last-run"
 
 cp -- "$runtime_dir/last-message.txt" "$test_root/last-message.saved"
 printf '%s\n' "tampered result" >"$runtime_dir/last-message.txt"
@@ -484,6 +511,43 @@ rg -q 'invalid JSON on line 3' "$runtime_dir/logs" ||
 grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "malformed event stream replaced the canonical message"
 rm -f -- "$HOME/fake/events"
+
+{
+  printf '%s\n' \
+    '{"type":"thread.started","thread_id":"fake-thread"}' \
+    '{"type":"turn.started"}'
+  printf '%s' \
+    '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"'
+  head -c 16777216 /dev/zero | tr '\0' x
+  printf '%s\n' \
+    '"}}' \
+    '{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}'
+} >"$HOME/fake/events"
+expect_status 76 "$wywa" run "$workspace" --max-runtime 2m
+grep -q 'status=76 .*events=wywa-v1 event_counts=unverified' \
+  "$runtime_dir/last-run" ||
+  fail "oversized event-stream refusal receipt is missing or malformed"
+rg -q 'event stream reached the 16777216-byte ceiling' "$runtime_dir/logs" ||
+  fail "oversized event stream omitted its private diagnostic"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "oversized event stream replaced the canonical message"
+rm -f -- "$HOME/fake/events"
+
+head -c 4194305 /dev/zero | tr '\0' d >"$HOME/fake/diagnostics"
+expect_status 76 "$wywa" run "$workspace" --max-runtime 2m
+rg -q 'diagnostics exceeded the 4194304-byte ceiling' "$runtime_dir/logs" ||
+  fail "oversized diagnostics omitted the output-ceiling refusal"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "oversized diagnostics replaced the canonical message"
+rm -f -- "$HOME/fake/diagnostics"
+
+head -c 65537 /dev/zero | tr '\0' m >"$HOME/fake/message"
+expect_status 76 "$wywa" run "$workspace" --max-runtime 2m
+rg -q 'final message exceeded the 65536-byte ceiling' "$runtime_dir/logs" ||
+  fail "oversized final message omitted the output-ceiling refusal"
+grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
+  fail "oversized final message replaced the canonical message"
+printf '%s\n' "first verified result" >"$HOME/fake/message"
 
 printf '%s\n' fail >"$HOME/fake/mode"
 printf '%s\n' 23 >"$HOME/fake/exit-status"

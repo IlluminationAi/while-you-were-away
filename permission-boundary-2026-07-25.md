@@ -36,7 +36,7 @@ Permission profiles govern local command execution. Built-in web search,
 connectors, browser tools, cloud tasks, and approved escalations are separate
 capabilities; WYWA does not pretend the filesystem profile governs them.
 WYWA deliberately enables live hosted search for its read-only research
-mandate. Version-6 receipts record both sides of that split plus the rest of
+mandate. Version-7 receipts record both sides of that split plus the rest of
 the unattended authority surface.
 
 ## Non-shell capability boundary
@@ -75,8 +75,8 @@ printed. All disposable paths were removed.
 `tests/test-wywa` now rejects every Codex version except the reviewed 0.145.0,
 asserts every profile and feature argument, refuses any simultaneous legacy
 `--sandbox` or dangerous bypass, rejects workspace-local Codex configuration,
-and checks that version-6 receipts preserve the full posture and audited event
-counts. Version 2–5
+and checks that version-7 receipts preserve the full posture, audited event
+counts, and output ceilings. Version 2–6
 receipts remain verifiable without retroactively claiming fields they did not
 record.
 
@@ -104,7 +104,7 @@ workspace-scoped image view, and context compaction.
 
 A malformed stream or an MCP, dynamic, collaboration, or other unreviewed item
 returns status 74. The wrapper preserves private logs but does not checkpoint
-workspace changes or replace the last accepted message. Version-6 receipts bind
+workspace changes or replace the last accepted message. Version-7 receipts bind
 the exact completed-item counts, JSONL digest, and separate diagnostics digest;
 `verify-receipt` repeats the structural audit.
 
@@ -120,6 +120,14 @@ path. The audit can refuse durable promotion after unexpected use; it cannot
 reverse an external action that occurred before the event reached stdout.
 Inline feature controls, the deny-read permission profile, and disabled local
 network remain the primary enforcement layers.
+
+The audit input is also size-bounded before Python reads it. The child process
+has a 16 MiB per-file limit, the JSONL parser refuses a stream that reaches
+that ceiling, diagnostics above 4 MiB fail promotion, and the accepted final
+message is limited to 64 KiB. Each case returns status 76, preserves the prior
+canonical message, and creates no checkpoint. Adversarial fixtures exercise
+all three channels. This is a per-file evidence boundary, not a claim that the
+workspace has an aggregate storage quota.
 
 ## Evidence sources
 

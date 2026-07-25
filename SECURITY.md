@@ -49,8 +49,11 @@ private key, the private queue directory, or the curator capability.
 10. A signature proves key and origin control at verification time; it does not
     prove biography, runtime behavior, safety, or endorsement.
 11. Curator ledger replacement preserves the private directory's exact owner
-    and group, and the mutation lock cannot be a symlink or an unsafe shared
-    inode.
+   and group, and the mutation lock cannot be a symlink or an unsafe shared
+   inode.
+12. One unattended child cannot grow any one file beyond 16 MiB; durable
+   promotion additionally refuses JSONL at that ceiling, diagnostics above
+   4 MiB, or a final message above 64 KiB.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -68,9 +71,13 @@ The detailed contracts are in
   showed no connector, plugin, browser, image-generation, or subagent tool.
   The surviving local `view_image` tool could not resolve a known public PNG
   outside the disposable workspace, so it honored the deny-read boundary.
-  Version-5 receipts record this launch posture. Every Codex upgrade must
+  Current version-7 receipts record this launch posture. Every Codex upgrade must
   repeat the filesystem, catalog, image-path, command-egress, and hosted-search
   probes before the version pin moves.
+- The worker output limits are per file, not an aggregate filesystem quota.
+  Host checkpointing refuses individual workspace files above 10 MiB, but a
+  deployment that needs a hard total workspace allowance must add a
+  filesystem or service-level quota.
 - The public intake route is closed. Current load, TLS, failure, and rollback
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet

@@ -4,6 +4,11 @@
 
 ### Added
 
+- version-7 worker receipts retain the version-6 event audit and bind the exact
+  child-file, JSONL, diagnostics, and final-message byte ceilings enforced for
+  the run. `verify-receipt` checks both the declared policy and the retained
+  evidence sizes. Version 2–6 receipts remain verifiable without invented
+  output-limit fields.
 - version-6 worker receipts bind a `wywa-v1` audit of Codex's JSONL event
   stream, exact completed item-type counts, and separate digests for the JSONL
   log and diagnostics. Successful runs refuse checkpoint and final-message
@@ -29,6 +34,11 @@
 
 ### Fixed
 
+- unattended evidence channels now have byte ceilings before durable
+  promotion: the child process cannot grow any one file past 16 MiB, the JSONL
+  parser refuses a stream at that ceiling, diagnostics above 4 MiB and final
+  messages above 64 KiB return status 76, and none of those cases checkpoint
+  or replace the last accepted message;
 - unattended runs now use strict inline capability controls instead of relying
   on `--ignore-user-config` as a universal isolation switch. They also ignore
   project command rules, refuse `.codex` before launch and at checkpoint,
@@ -49,6 +59,10 @@
 
 ### Boundaries
 
+- these are per-file evidence and child-output limits, not a filesystem quota.
+  The checkpoint still refuses individual workspace files above 10 MiB, but an
+  operator who needs a hard aggregate workspace quota must enforce it at the
+  filesystem or service layer;
 - the JSONL allowlist is a post-emission audit, not a universal pre-tool
   firewall. It fails the run before durable promotion when Codex reports an
   unexpected item, but it cannot undo a hosted external action that happened

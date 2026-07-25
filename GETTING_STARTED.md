@@ -236,6 +236,14 @@ promotion. This audit happens after Codex emits the event, so it detects
 unexpected hosted-tool use but cannot undo an outside action that already
 happened.
 
+The evidence path is byte-bounded as well as time-bounded. The child process
+has a 16 MiB per-file ceiling; the JSONL stream must remain below it,
+diagnostics must remain at or below 4 MiB, and the accepted final message must
+remain at or below 64 KiB. Exceeding any ceiling returns status 76, preserves
+the private partial evidence, and refuses both checkpointing and final-message
+promotion. These limits prevent one evidence channel from growing without
+bound; they are not an aggregate filesystem quota for the workspace.
+
 After that audit, WYWA checks the change and creates the Git checkpoint from
 the host side with hooks and global Git configuration disabled. It refuses a
 dirty starting tree, special or oversized files, nested Git metadata,
@@ -245,13 +253,14 @@ status 73 and preserves the uncommitted evidence. Neither case publishes a new
 final message. Inspect `git log`, `git status`, and the private result receipt
 before enabling unattended work.
 
-The version-6 receipt records the enforced permission profile, disabled
+The version-7 receipt records the enforced permission profile, disabled
 local-command network, live hosted search, disabled extension surfaces,
 workspace-local config absence, no-approval posture, ephemeral session,
 event-audit policy and counts, full host-created commit, exact tree, and
 SHA-256 digests of the JSONL log, separate diagnostics, and published final
-message. Version 2–5 receipts remain mechanically verifiable as legacy
-evidence, but their unrecorded capabilities are not inferred.
+message, plus the exact four output ceilings. Version 2–6 receipts remain
+mechanically verifiable as legacy evidence, but their unrecorded capabilities
+are not inferred.
 `verify-receipt` checks that mechanical chain without trusting the worker.
 This proves which bytes became durable and which output the wrapper accepted;
 it does not prove that a claim inside those bytes is true. External claims

@@ -229,10 +229,16 @@ Current main also audits what the turn actually emitted. `codex exec --json`
 feeds a versioned allowlist that requires a complete successful lifecycle and
 only the reviewed command, patch, search, planning, image-view, reasoning, and
 message item families before any checkpoint or final-message promotion.
-Version-6 receipts bind exact completed-item counts plus separate JSONL and
-diagnostics digests; malformed or unreviewed events return status 74. Version
-2–5 receipts remain verifiable without inventing that audit. This is
-post-emission detection, not a promise that a hosted action can be undone.
+Version-7 receipts bind exact completed-item counts plus separate JSONL and
+diagnostics digests; malformed or unreviewed events return status 74. They
+also bind the host boundary that caps every child-written file at 16 MiB and
+accepts only JSONL below that ceiling, diagnostics no larger than 4 MiB, and
+final messages no larger than 64 KiB. Oversized evidence returns status 76
+without a checkpoint or canonical-message replacement. Version 2–6 receipts
+remain verifiable without inventing missing audit or limit fields. The event
+audit is post-emission detection, not a promise that a hosted action can be
+undone; the byte ceilings close unbounded evidence parsing and per-file output
+growth, not aggregate filesystem use by the worker workspace.
 
 ### Phase 2 — verified registry
 

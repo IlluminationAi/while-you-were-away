@@ -9,6 +9,11 @@ permission_profile=wywa-workspace-only
 permission_filesystem='permissions.wywa-workspace-only.filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny"}'
 permission_network='permissions.wywa-workspace-only.network.enabled=false'
 reviewed_codex_version=0.145.0
+max_event_log_bytes=$((16 * 1024 * 1024))
+max_diagnostics_log_bytes=$((4 * 1024 * 1024))
+max_final_message_bytes=$((64 * 1024))
+max_child_file_bytes=$((16 * 1024 * 1024))
+child_file_limit_kib=$((max_child_file_bytes / 1024))
 
 usage() {
   cat <<EOF
@@ -433,13 +438,14 @@ valid_duration() {
 
 audit_event_log() {
   local event_log=$1
-  python3 - "$event_log" <<'PY'
+  python3 - "$event_log" "$max_event_log_bytes" <<'PY'
 import json
 import sys
 from collections import Counter
 from pathlib import Path
 
 path = Path(sys.argv[1])
+max_bytes = int(sys.argv[2])
 allowed_events = {
     "thread.started",
     "turn.started",
@@ -465,6 +471,11 @@ started_items = {}
 completed_items = set()
 
 try:
+    size = path.stat().st_size
+    if size >= max_bytes:
+        raise SystemExit(
+            f"event audit: JSONL stream reached the {max_bytes}-byte ceiling"
+        )
     lines = path.read_text(encoding="utf-8").splitlines()
 except (OSError, UnicodeError) as exc:
     raise SystemExit(f"event audit: unreadable UTF-8 JSONL: {exc}")
@@ -577,6 +588,7 @@ cmd_run() {
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
   local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
   local event_audit='' event_counts=unverified audit_status=0
+  local output_size output_bound_failure=0
   local -a clean_env permission_args capability_args command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
@@ -645,6 +657,10 @@ cmd_run() {
     printf '%s\n' "configuration: user config and project rules ignored; workspace-local .codex forbidden"
     printf '%s\n' "approvals: never; session persistence: ephemeral"
     printf '%s\n' "event stream: JSONL; reviewed item types required before checkpoint"
+    printf 'output ceilings: events=%s bytes diagnostics=%s bytes final-message=%s bytes\n' \
+      "$max_event_log_bytes" \
+      "$max_diagnostics_log_bytes" \
+      "$max_final_message_bytes"
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -685,11 +701,15 @@ cmd_run() {
     diagnostics_sha256=$(
       sha256sum -- "$diagnostics_log" | cut -d ' ' -f 1
     )
-    printf '%s receipt=6 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
+    printf '%s receipt=7 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$permission_profile" \
       "$event_counts" \
+      "$max_child_file_bytes" \
+      "$max_event_log_bytes" \
+      "$max_diagnostics_log_bytes" \
+      "$max_final_message_bytes" \
       "$checkpoint_result" \
       "$checkpoint_commit" \
       "$checkpoint_tree" \
@@ -725,11 +745,14 @@ cmd_run() {
 
   command_line+=(--output-last-message "$message_tmp" "$prompt")
   set +e
-  timeout \
-    --signal=TERM \
-    --kill-after=30s \
-    "$max_runtime" \
-    "${command_line[@]}" >>"$run_log" 2>>"$diagnostics_log" &
+  (
+    ulimit -f "$child_file_limit_kib"
+    exec timeout \
+      --signal=TERM \
+      --kill-after=30s \
+      "$max_runtime" \
+      "${command_line[@]}"
+  ) >>"$run_log" 2>>"$diagnostics_log" &
   codex_pid=$!
   if [[ -n "$termination_status" ]]; then
     kill -TERM "$codex_pid" 2>/dev/null || true
@@ -746,6 +769,31 @@ cmd_run() {
     run_status=$termination_status
   fi
   set -e
+
+  output_size=$(stat -c %s -- "$run_log")
+  if (( output_size >= max_event_log_bytes )); then
+    printf 'run: event stream reached the %s-byte ceiling\n' \
+      "$max_event_log_bytes" >>"$diagnostics_log"
+    output_bound_failure=1
+  fi
+  output_size=$(stat -c %s -- "$diagnostics_log")
+  if (( output_size > max_diagnostics_log_bytes )); then
+    printf 'run: diagnostics exceeded the %s-byte ceiling\n' \
+      "$max_diagnostics_log_bytes" >>"$diagnostics_log"
+    output_bound_failure=1
+  fi
+  output_size=$(stat -c %s -- "$message_tmp")
+  if (( output_size > max_final_message_bytes )); then
+    printf 'run: final message exceeded the %s-byte ceiling\n' \
+      "$max_final_message_bytes" >>"$diagnostics_log"
+    output_bound_failure=1
+  fi
+  if (( output_bound_failure == 1 )); then
+    checkpoint_result=refused
+    run_status=76
+    printf 'run: output ceiling exceeded; inspect diagnostics: %s\n' \
+      "$diagnostics_log" >&2
+  fi
 
   if [[ "$run_status" -eq 0 && ! -s "$message_tmp" ]]; then
     printf '%s\n' \
@@ -818,6 +866,8 @@ cmd_verify_receipt() {
   local permissions='' local_network='' web_search=''
   local apps='' plugins='' hooks='' subagents='' project_config=''
   local approval='' persistence='' events='' event_counts=''
+  local child_file_bytes_max='' event_bytes_max=''
+  local diagnostics_bytes_max='' message_bytes_max=''
   local commit='' tree='' log_sha256='' diagnostics_sha256=''
   local message_sha256='' token event_audit='' actual_event_counts=''
   local actual_commit actual_tree actual_log_sha256 actual_diagnostics_sha256
@@ -854,6 +904,14 @@ cmd_verify_receipt() {
       persistence=*) persistence=${token#persistence=} ;;
       events=*) events=${token#events=} ;;
       event_counts=*) event_counts=${token#event_counts=} ;;
+      child_file_bytes_max=*)
+        child_file_bytes_max=${token#child_file_bytes_max=}
+        ;;
+      event_bytes_max=*) event_bytes_max=${token#event_bytes_max=} ;;
+      diagnostics_bytes_max=*)
+        diagnostics_bytes_max=${token#diagnostics_bytes_max=}
+        ;;
+      message_bytes_max=*) message_bytes_max=${token#message_bytes_max=} ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
@@ -870,7 +928,8 @@ cmd_verify_receipt() {
      "$receipt_version" == 3 ||
      "$receipt_version" == 4 ||
      "$receipt_version" == 5 ||
-     "$receipt_version" == 6 ]] ||
+     "$receipt_version" == 6 ||
+     "$receipt_version" == 7 ]] ||
     die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
@@ -890,7 +949,9 @@ cmd_verify_receipt() {
     [[ "$web_search" == live ]] ||
       die "receipt records an unexpected hosted web search capability"
   fi
-  if [[ "$receipt_version" == 5 || "$receipt_version" == 6 ]]; then
+  if [[ "$receipt_version" == 5 ||
+        "$receipt_version" == 6 ||
+        "$receipt_version" == 7 ]]; then
     [[ "$local_network" == disabled ]] ||
       die "receipt records an unexpected local network capability"
     [[ "$web_search" == live ]] ||
@@ -910,13 +971,23 @@ cmd_verify_receipt() {
     [[ "$persistence" == ephemeral ]] ||
       die "receipt records unexpected Codex session persistence"
   fi
-  if [[ "$receipt_version" == 6 ]]; then
+  if [[ "$receipt_version" == 6 || "$receipt_version" == 7 ]]; then
     [[ "$events" == wywa-v1 ]] ||
       die "receipt records an unexpected event-audit policy"
     [[ "$event_counts" =~ ^agent_message:[0-9]+,reasoning:[0-9]+,command_execution:[0-9]+,file_change:[0-9]+,web_search:[0-9]+,todo_list:[0-9]+,plan:[0-9]+,image_view:[0-9]+,context_compaction:[0-9]+$ ]] ||
       die "receipt records malformed event counts"
     [[ "$diagnostics_sha256" =~ ^[0-9a-f]{64}$ ]] ||
       die "last-run receipt has an invalid diagnostics digest"
+  fi
+  if [[ "$receipt_version" == 7 ]]; then
+    [[ "$child_file_bytes_max" == "$max_child_file_bytes" ]] ||
+      die "receipt records an unexpected child file ceiling"
+    [[ "$event_bytes_max" == "$max_event_log_bytes" ]] ||
+      die "receipt records an unexpected event-stream ceiling"
+    [[ "$diagnostics_bytes_max" == "$max_diagnostics_log_bytes" ]] ||
+      die "receipt records an unexpected diagnostics ceiling"
+    [[ "$message_bytes_max" == "$max_final_message_bytes" ]] ||
+      die "receipt records an unexpected final-message ceiling"
   fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
@@ -952,7 +1023,7 @@ cmd_verify_receipt() {
   actual_log_sha256=$(sha256sum -- "$log_path" | cut -d ' ' -f 1)
   [[ "$actual_log_sha256" == "$log_sha256" ]] ||
     die "private log digest does not match the receipt"
-  if [[ "$receipt_version" == 6 ]]; then
+  if [[ "$receipt_version" == 6 || "$receipt_version" == 7 ]]; then
     [[ "$diagnostics_path" == "$runtime_dir/logs/"* ]] ||
       die "recorded diagnostics are outside the private runtime"
     [[ -f "$diagnostics_path" && ! -L "$diagnostics_path" ]] ||
@@ -962,6 +1033,16 @@ cmd_verify_receipt() {
     )
     [[ "$actual_diagnostics_sha256" == "$diagnostics_sha256" ]] ||
       die "private diagnostics digest does not match the receipt"
+    if [[ "$receipt_version" == 7 ]]; then
+      (( $(stat -c %s -- "$log_path") < max_event_log_bytes )) ||
+        die "private event log exceeds its recorded ceiling"
+      (( $(stat -c %s -- "$diagnostics_path") <=
+         max_diagnostics_log_bytes )) ||
+        die "private diagnostics exceed their recorded ceiling"
+      (( $(stat -c %s -- "$runtime_dir/last-message.txt") <=
+         max_final_message_bytes )) ||
+        die "final message exceeds its recorded ceiling"
+    fi
     event_audit=$(audit_event_log "$log_path") ||
       die "private event log no longer passes its recorded policy"
     actual_event_counts=${event_audit#policy=wywa-v1 item_counts=}
@@ -974,7 +1055,7 @@ cmd_verify_receipt() {
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s\n' \
+  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s\n' \
     "${commit:0:12}" "${tree:0:12}" \
     "${permissions:-legacy-workspace-write}" \
     "${local_network:-unrecorded}" \
@@ -987,7 +1068,11 @@ cmd_verify_receipt() {
     "${approval:-unrecorded}" \
     "${persistence:-unrecorded}" \
     "${events:-unrecorded}" \
-    "${event_counts:-unrecorded}"
+    "${event_counts:-unrecorded}" \
+    "${child_file_bytes_max:-unrecorded}" \
+    "${event_bytes_max:-unrecorded}" \
+    "${diagnostics_bytes_max:-unrecorded}" \
+    "${message_bytes_max:-unrecorded}"
 }
 
 cmd_run_state() {
