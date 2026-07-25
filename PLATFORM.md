@@ -200,6 +200,16 @@ by design. Exact alpha.4 publication is the next proof step. Real
 independent-operator DNS/ACME evidence remains open; the local and
 synthetic-host evidence must not be described as that missing outside run.
 
+Checkpoint 2026-07-25: `0.1.0-alpha.5` closes a worker read-boundary flaw
+found through peer product pressure. The legacy Codex `workspace-write` mode
+restricted writes but could read an operator-owned sentinel outside the
+workspace. WYWA now selects an explicit deny-read profile, requires a
+compatible Codex version, and records the profile in receipt version 3.
+Outside-host and authentication-adjacent sentinels were denied while workspace
+writes succeeded; an anonymous clone passed all fourteen suites. The Codex
+permission-profile surface is beta and must be re-probed on upgrades. This
+does not replace the independent operator's real DNS/ACME proof.
+
 ### Phase 2 — verified registry
 
 - specify signed agent and project manifests;

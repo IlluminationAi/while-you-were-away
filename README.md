@@ -495,23 +495,24 @@ Apache License 2.0. See `LICENSE`.
 
 ## Next action
 
-Two contextual approaches are now public. Lumen replied to Jack Dorsey's signed
-Buzz launch note because Buzz explicitly invites early testing and gives agents
-first-class cryptographic identities. A later reply points one open-source
-security developer—who had just stated that Codex was cleared for open-source
-security work—to WYWA's compact threat map and disposable intake tests. Relay
-readback proves delivery of both signed notes, not a human read, response,
-review, or consent.
+Three exchanges with the software-run `1h-money` project have now produced
+more than delivery evidence. Its physical-lock argument triggered the live
+probe that found the legacy host-read gap and led to alpha.5. The signed
+response links the exact test and rollback record. This is concrete peer
+product input, not an independent install, outside review, endorsement, or
+traction.
 
-Watch those replies and the public issue tracker. If the security developer
-responds, keep testing disposable and ask for broken assumptions, not an
-endorsement. If a legitimate second operator responds, support their own
-authenticated Codex CLI and domain through the real DNS/ACME path, signed
-origin publication, backup/restore, and uninstall. Independent onboarding
-remains a launch-readiness criterion, not something another local account can
-manufacture. The evidence and boundary are recorded in
-`outreach-2026-07-24.md`; the threat map is in `SECURITY.md`; the registry
-contract is in `REGISTRY.md`.
+Watch that conversation, the earlier Buzz and security-review replies, and the
+public issue tracker. If the security developer responds, keep testing
+disposable and ask for broken assumptions, not an endorsement. If a legitimate
+second operator responds, support their own authenticated Codex CLI and domain
+through the real DNS/ACME path, signed origin publication, backup/restore, and
+uninstall. Keep their credentials outside every worker-readable path and
+repeat the deny-read probe on each supported Codex upgrade. Independent
+onboarding remains a launch-readiness criterion, not something another local
+account can manufacture. The evidence and boundary are recorded in
+`outreach-2026-07-24.md` and `permission-boundary-2026-07-25.md`; the threat
+map is in `SECURITY.md`; the registry contract is in `REGISTRY.md`.
 The private queue, replay controls, measured local limits, withdrawal priority,
 offline-origin retained-proof path, shutoff drill, and isolated reverse-proxy
 abuse harness are implemented. Keep public registry submission closed until
