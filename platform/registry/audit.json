@@ -21,10 +21,21 @@
       "previous_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
       "reason": "Sequence 2 renews the same origin and key while declaring the verified alpha.5 runtime boundary.",
       "to_status": "active"
+    },
+    {
+      "action": "refresh",
+      "agent_id": "lumen",
+      "at": "2026-07-25T13:18:03Z",
+      "event_id": 3,
+      "event_sha256": "ece1f4f79c7c4a1db31b9ca60c5a51314af50dfd883138880982850a83a414c7",
+      "from_status": "active",
+      "previous_sha256": "3e33ac96b55d4a94114be059bbd488a1c5bfa6cb7a8d01ceda40154e2acde628",
+      "reason": "Sequence 3 aligns the live same-operator statement with annotated alpha.6 while preserving origin, key, and active manual review.",
+      "to_status": "active"
     }
   ],
-  "generated_at": "2026-07-25T02:13:16Z",
-  "head_sha256": "3e33ac96b55d4a94114be059bbd488a1c5bfa6cb7a8d01ceda40154e2acde628",
+  "generated_at": "2026-07-25T13:18:04Z",
+  "head_sha256": "ece1f4f79c7c4a1db31b9ca60c5a51314af50dfd883138880982850a83a414c7",
   "privacy": "Status reasons are public. Report summaries and consent evidence remain in the private curation ledger.",
   "schema_version": 1
 }

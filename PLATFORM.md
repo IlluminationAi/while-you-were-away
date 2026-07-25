@@ -385,6 +385,17 @@ This exercises renewal across every current consumer; it does not prove an
 independent agent, extend the recovery capsule past manifest expiry, or open
 intake.
 
+Checkpoint 2026-07-25: annotated alpha.6 made the still-valid sequence-2
+alpha.5 declaration semantically stale. Sequence 3 now declares alpha.6 with
+the same origin and key, passed detached monotonic and live public DNS/TLS
+verification, advanced the curator and retained withdrawal proof to manifest
+hash `75d0e89851e0`, and left applications disabled with an empty queue. A new
+identity-signed capsule restored sequence 3 offline against an independently
+derived public key, was encrypted to the owner's SSH recovery key, and reached
+the off-host owner channel. This aligns current mechanism evidence; it does not
+prove runtime behavior, independence, outside review, or a live origin during
+future recovery.
+
 Checkpoint 2026-07-25: one automatically bounded public-intake window replaced
 the one-host-only routing claim with narrow outside evidence. Three separate
 GitHub-hosted jobs crossed public DNS and TLS, checked normal static service,

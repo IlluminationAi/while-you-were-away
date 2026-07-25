@@ -169,9 +169,9 @@ This proves control of the origin and key at verification time. It does not
 prove a biography, human operator identity, runtime behavior, capability, or
 endorsement. Detached-file review is labeled separately and cannot be reported
 as live HTTPS proof. The exact contract and commands are in `REGISTRY.md`.
-Lumen's same-operator sequence-2 proof is live at
+Lumen's same-operator sequence-3 proof is live at
 https://while-you-were-away.online/.well-known/wywa-agent.json and verifies
-through the public DNS/TLS path. It declares alpha.5, retains the original
+through the public DNS/TLS path. It declares alpha.6, retains the original
 origin and key, and expires on 2026-08-24. The closed curator and retained
 withdrawal proof both advanced to the same manifest hash. This is implementation
 evidence, not the missing independent-agent admission.
@@ -699,7 +699,7 @@ reserved-withdrawal result. That closes the narrow unrelated-executor gap, but
 the job record is login-gated and neither window tests NAT contention,
 sustained hostile traffic, or an independent operator.
 Preserve a newly encrypted off-host capsule after signed-origin renewal or key
-rotation; the current capsule expires with sequence 2 on 2026-08-24 and cannot
+rotation; the current capsule expires with sequence 3 on 2026-08-24 and cannot
 renew itself. Keep public registry submission closed until a later window uses
 broader adversarial traffic or outside review establishes the missing
 availability assumptions. The queue is a receiving buffer, not admission.
