@@ -1,0 +1,91 @@
+name: WYWA bounded public-intake edge probe
+
+on:
+  push:
+    branches:
+      - edge-probe-2026-07-25
+
+permissions:
+  contents: read
+
+jobs:
+  outside-edge:
+    name: outside edge ${{ matrix.lane }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        lane: [one, two, three]
+    env:
+      APPLY_ENVELOPE_B64: eyJzY2hlbWFfdmVyc2lvbiI6MSwicmVxdWVzdCI6eyJhY3Rpb24iOiJhcHBseSIsImFnZW50X2lkIjoibHVtZW4iLCJleHBpcmVzX2F0IjoiMjAyNi0wNy0yNVQwNjozMTo1NFoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA3LTI1VDA2OjIxOjU0WiIsIm1hbmlmZXN0X3NoYTI1NiI6IjFmZmU3MDZhYzRhMWJhNmFmMjZiMWQyOGI1OWU4ODhjMmEwYTA0ZWQ1OGMyYjRiNTRjYWU0OTZiYzU2YmFjMWUiLCJvcmlnaW4iOiJodHRwczovL3doaWxlLXlvdS13ZXJlLWF3YXkub25saW5lLyIsInJlcXVlc3RfaWQiOiI0NGI2OGE0MGFlODJkM2U5MTQ3NTUxZTdhZTkzNTAxZSIsInNjaGVtYV92ZXJzaW9uIjoxLCJzZXF1ZW5jZSI6Mn0sInNpZ25hdHVyZV9iNjQiOiJMUzB0TFMxQ1JVZEpUaUJUVTBnZ1UwbEhUa0ZVVlZKRkxTMHRMUzBLVlRGT1NWVXdiRWhCUVVGQlFWRkJRVUZFVFVGQlFVRk1Zek5PYjB4WFZtdE5hbFV4VFZSclFVRkJRV2RGY1hsNU5tNHdXak5XYUdKTmFUWk9ZM0ZLUTFwdVQzRnNhUXBXVVU4d1dXeE1hWEZLZDAxb1MyTnhUVUZCUVVGWVpETnNNMWxUTVhsYVYyUndZek5TZVdWVE1YQmlibEpvWVRKVmRHUnFSVUZCUVVGQlFVRkJRVUp1VG05WlZGVjRDazFuUVVGQlJrMUJRVUZCVEdNelRtOU1WMVpyVFdwVk1VMVVhMEZCUVVKQmNEazFkMHhGTHpNNVNVdEtURUV2Um1zelZVOUNZbXRoU1VveWRtdG5Wa04zVW1KV1EyVUtVMWgzTm5OWlFUWllZeloxY0hFMVNtMDRVM05HTlZNd1VVTlBOVzFsYURkdGRUaEdRVEZTVmsxaFRVWkNXa1JCUFQwS0xTMHRMUzFGVGtRZ1UxTklJRk5KUjA1QlZGVlNSUzB0TFMwdENnPT0ifQo=
+      WITHDRAW_ENVELOPE_B64: eyJzY2hlbWFfdmVyc2lvbiI6MSwicmVxdWVzdCI6eyJhY3Rpb24iOiJ3aXRoZHJhdyIsImFnZW50X2lkIjoibHVtZW4iLCJleHBpcmVzX2F0IjoiMjAyNi0wNy0yNVQwNjozMTo1NVoiLCJpc3N1ZWRfYXQiOiIyMDI2LTA3LTI1VDA2OjIxOjU1WiIsIm1hbmlmZXN0X3NoYTI1NiI6IjFmZmU3MDZhYzRhMWJhNmFmMjZiMWQyOGI1OWU4ODhjMmEwYTA0ZWQ1OGMyYjRiNTRjYWU0OTZiYzU2YmFjMWUiLCJvcmlnaW4iOiJodHRwczovL3doaWxlLXlvdS13ZXJlLWF3YXkub25saW5lLyIsInJlcXVlc3RfaWQiOiJiZjZiYmQwNTdlZGRlZTk0MGQ2OTk2N2U2ZjZjYmU3MCIsInNjaGVtYV92ZXJzaW9uIjoxLCJzZXF1ZW5jZSI6Mn0sInNpZ25hdHVyZV9iNjQiOiJMUzB0TFMxQ1JVZEpUaUJUVTBnZ1UwbEhUa0ZVVlZKRkxTMHRMUzBLVlRGT1NWVXdiRWhCUVVGQlFWRkJRVUZFVFVGQlFVRk1Zek5PYjB4WFZtdE5hbFV4VFZSclFVRkJRV2RGY1hsNU5tNHdXak5XYUdKTmFUWk9ZM0ZLUTFwdVQzRnNhUXBXVVU4d1dXeE1hWEZLZDAxb1MyTnhUVUZCUVVGWVpETnNNMWxUTVhsYVYyUndZek5TZVdWVE1YQmlibEpvWVRKVmRHUnFSVUZCUVVGQlFVRkJRVUp1VG05WlZGVjRDazFuUVVGQlJrMUJRVUZCVEdNelRtOU1WMVpyVFdwVk1VMVVhMEZCUVVKQldYWnlRV1JQYUhWMVpERlNSbTlRWkVoV2JFaGFjekpZVUV0cGRFZGlhak5JUjBwMlUxTUtWRzV3VG1sWWNpdG1OamRTT1VSdFdFc3hSa3RtTkdNMWRtTTFjamRZV1c5YVZscFlURFpGVUM5cWNYUlpRMEozUFQwS0xTMHRMUzFGVGtRZ1UxTklJRk5KUjA1QlZGVlNSUzB0TFMwdENnPT0ifQo=
+      ORIGIN: https://while-you-were-away.online
+    steps:
+      - name: Exercise exact public edge without retaining client identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch=$(mktemp -d)
+          trap 'rm -rf -- "$scratch"' EXIT
+
+          printf '%s' "$APPLY_ENVELOPE_B64" | base64 -d >"$scratch/apply.json"
+          printf '%s' "$WITHDRAW_ENVELOPE_B64" | base64 -d >"$scratch/withdraw.json"
+          printf '{"schema_version":1' >"$scratch/malformed.json"
+          head -c 32769 /dev/zero | tr '\0' x >"$scratch/oversized.json"
+
+          status=$(
+            curl --fail-with-body --silent --show-error \
+              --output "$scratch/static.out" --write-out '%{http_code}' \
+              "$ORIGIN/life.json"
+          )
+          test "$status" = 200
+
+          status=$(
+            curl --silent --show-error \
+              --output "$scratch/get.out" --write-out '%{http_code}' \
+              "$ORIGIN/v1/intake/apply"
+          )
+          test "$status" = 405
+
+          status=$(
+            curl --silent --show-error \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$scratch/malformed.json" \
+              --output "$scratch/malformed.out" --write-out '%{http_code}' \
+              "$ORIGIN/v1/intake/apply"
+          )
+          test "$status" = 400
+
+          status=$(
+            curl --silent --show-error \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$scratch/oversized.json" \
+              --output "$scratch/oversized.out" --write-out '%{http_code}' \
+              "$ORIGIN/v1/intake/apply"
+          )
+          test "$status" = 413
+
+          status=$(
+            curl --silent --show-error \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$scratch/apply.json" \
+              --output "$scratch/apply.out" --write-out '%{http_code}' \
+              "$ORIGIN/v1/intake/apply"
+          )
+          test "$status" = 503
+          jq -e '.accepted == false and .error == "applications-disabled"' \
+            "$scratch/apply.out" >/dev/null
+
+          status=$(
+            curl --silent --show-error \
+              --header 'Content-Type: application/json' \
+              --data-binary "@$scratch/withdraw.json" \
+              --output "$scratch/withdraw.out" --write-out '%{http_code}' \
+              "$ORIGIN/v1/intake/withdraw"
+          )
+          test "$status" = 202 -o "$status" = 409
+
+          printf 'lane=%s static=200 wrong_method=405 malformed=400 oversized=413 apply_disabled=503 withdraw=%s\n' \
+            "${{ matrix.lane }}" "$status"
