@@ -158,6 +158,16 @@
   verification rechecks a recorded filesystem ceiling instead of inferring a
   quota from the post-turn checkpoint gate.
 
+### Changed
+
+- the Outside Run offer now leads with the buyer and failure it prevents
+  instead of the report machinery. It is presented as a $99 clean-machine
+  release rehearsal for an open-source AI-agent maintainer: one first-time
+  install, one core workflow, a public result or reproducible blocker, and one
+  rerun after a fix. Exact commands, JSON, signatures, skips, and exclusions
+  remain intact underneath as delivery evidence. The no-secrets reservation
+  form now states that same outcome before asking for technical scope.
+
 ### Evidence
 
 - fresh public-DNS/TLS verification accepted both product-origin pairs at
@@ -184,6 +194,10 @@
 
 ### Fixed
 
+- long exact commit and tree identities in ledger rows now wrap inside their
+  grid track. A true 390-pixel browser check had exposed a 31-pixel horizontal
+  leak on the Outside Run sample summary; the corrected page keeps
+  `scrollWidth == clientWidth`.
 - the public security-review map now describes its actual six-suite quick
   path and the current alpha.6 boundary. The standalone-source regression
   counts the published commands and refuses prose that drifts from them.

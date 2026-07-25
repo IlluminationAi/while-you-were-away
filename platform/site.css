@@ -558,6 +558,15 @@ footer,
   padding: 2.5rem 0;
 }
 
+.ledger li > * {
+  min-width: 0;
+}
+
+.ledger code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .ledger time {
   color: var(--cyan);
   font-size: 0.68rem;

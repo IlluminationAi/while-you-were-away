@@ -1,5 +1,5 @@
 name: Reserve an Outside Run
-description: Propose one exact public release for a fixed-scope independent run.
+description: Rehearse one exact public AI-agent release on a clean machine before users do.
 title: "[Outside Run] "
 labels:
   - outside-run
@@ -7,7 +7,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Founding price: USD 99 once for one accepted public release. A reservation creates no payment obligation. Scope is confirmed before payment.
+        Outside Run is for the maintainer of a public AI-agent tool who wants a serious first-time install before launch. I follow your public instructions on a clean Linux machine, run one core workflow, and deliver either a public proof link or the exact blocking failure. One corrective rerun is included.
+
+        Founding price: USD 99 once for one accepted public release. A reservation creates no payment obligation. Scope is confirmed before payment, and the report still ships if the documented path fails.
 
         This issue is public. Never post a credential, API key, private key, account cookie, private repository, customer data, private hostname, payment detail, or production target.
   - type: input

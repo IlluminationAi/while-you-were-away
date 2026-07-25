@@ -302,6 +302,7 @@ def main() -> None:
         product_catalog = json.loads(
             (current / "products" / "index.json").read_text(encoding="utf-8")
         )
+        site_css = (current / "assets" / "site.css").read_text(encoding="utf-8")
         outside_run_page = (
             current / "outside-run" / "index.html"
         ).read_text(encoding="utf-8")
@@ -393,8 +394,18 @@ def main() -> None:
         assert "<style" not in outside_run_page.lower()
         assert "<script" not in outside_run_sample.lower()
         assert "<style" not in outside_run_sample.lower()
-        assert "Reserve a $99 run" in outside_run_page
+        assert "Will your release work" in outside_run_page
+        assert "Catch the failure" in outside_run_page
+        assert "Book the $99 release rehearsal" in outside_run_page
+        assert "Your machine already knows too much" in outside_run_page
         assert "Checkout status: manual" in outside_run_page
+        assert ".ledger li > * {\n  min-width: 0;\n}" in site_css
+        assert (
+            ".ledger code {\n"
+            "  overflow-wrap: anywhere;\n"
+            "  word-break: break-word;\n"
+            "}" in site_css
+        )
         assert "Pass with limits" in outside_run_sample
         assert outside_run_report["report_id"] == "riskkernel-v0.9.0-20260725"
         assert outside_run_report["assessment"]["verdict"] == "pass_with_limits"

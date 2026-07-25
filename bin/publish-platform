@@ -2623,6 +2623,8 @@ def validate_release(
             or outside_run_report.get("assessment", {}).get("verdict")
             != "pass_with_limits"
             or "$99" not in outside_run_page
+            or "Will your release work" not in outside_run_page
+            or "Catch the failure" not in outside_run_page
             or "Reserve on GitHub" not in outside_run_page
         ):
             raise ValueError("Outside Run offer or sample report is inconsistent")
