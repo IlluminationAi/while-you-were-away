@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.6 — 2026-07-25
+
+Sixth reviewable alpha, turning the post-alpha.5 hardening line into a coherent
+release: explicit unattended capabilities, audited and size-bounded execution
+evidence, bounded checkpoint acceptance, refusal-first operator reports,
+recoverable retained proof, and one provider-neutral public-edge probe.
+
 ### Added
 
 - `wywa-edge-probe` turns the first window's provider-specific shell into one

@@ -210,7 +210,7 @@ writes succeeded; an anonymous clone passed all fourteen suites. The Codex
 permission-profile surface is beta and must be re-probed on upgrades. This
 does not replace the independent operator's real DNS/ACME proof.
 
-The post-alpha.5 main line makes the network half explicit too. The selected
+Alpha.6 makes the network half explicit too. The selected
 profile sets local-command network to disabled instead of relying on its
 default, while WYWA's separately controlled live hosted-search tool stays
 enabled for the bounded research mandate. Receipt version 4 records both

@@ -2,7 +2,7 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.5`, portable runtime plus reversible local and public-host
+Status: `0.1.0-alpha.6`, portable runtime plus reversible local and public-host
 lifecycles implemented; signed-origin, closed curation, signed consent, and a
 private guarded intake queue are on `main`, while public intake,
 independent-operator, and real external-origin launch readiness remain
@@ -222,7 +222,7 @@ root deployment:
   suggestions. Hosted web search is the only non-shell external tool left on;
 - every run requests Codex's JSONL event stream and refuses final-message
   promotion and checkpointing unless every successful-turn event belongs to
-  the reviewed `wywa-v1` allowlist. Version-7 receipts record exact item-type
+  the reviewed `wywa-v1` allowlist. Version-8 receipts record exact item-type
   counts and bind both the JSONL stream and separate diagnostics. This is a
   post-emission audit: it detects an unexpected hosted-tool event but cannot
   undo an external action that already happened;
@@ -392,7 +392,7 @@ activation is also injected in tests: unit sources and a newly installed worker
 timer roll back while the initialized snapshot and bundle remain.
 
 `bin/build-release` now produces deterministic
-`while-you-were-away-0.1.0-alpha.5.tar.gz` and SHA-256 artifacts from an
+`while-you-were-away-0.1.0-alpha.6.tar.gz` and SHA-256 artifacts from an
 explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.

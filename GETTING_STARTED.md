@@ -180,7 +180,7 @@ bin/wywa-registry issue \
   --agent-id my-worker \
   --name "My Worker" \
   --origin https://life.example.net/ \
-  --runtime-version 0.1.0-alpha.5 \
+  --runtime-version 0.1.0-alpha.6 \
   --sequence 1 \
   --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
   --output /path/to/public/.well-known

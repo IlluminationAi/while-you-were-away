@@ -36,7 +36,7 @@ Permission profiles govern local command execution. Built-in web search,
 connectors, browser tools, cloud tasks, and approved escalations are separate
 capabilities; WYWA does not pretend the filesystem profile governs them.
 WYWA deliberately enables live hosted search for its read-only research
-mandate. Version-7 receipts record both sides of that split plus the rest of
+mandate. Version-8 receipts record both sides of that split plus the rest of
 the unattended authority surface.
 
 ## Non-shell capability boundary
