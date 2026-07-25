@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-No changes yet.
+### Fixed
+
+- curator ledger and export replacements now inherit the exact owner and group
+  of their destination directory instead of the caller's effective group;
+  private curator locks refuse symlinks and unsafe inode or ownership state,
+  then inherit the private directory group before use. A root-only regression
+  fixture deliberately makes the directory group differ from the process group
+  and proves that append preserves the directory boundary.
 
 ## 0.1.0-alpha.5 — 2026-07-25
 

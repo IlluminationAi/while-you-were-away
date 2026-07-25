@@ -414,9 +414,11 @@ permissions, and symlink refusal.
 `wywa-curator` admits only live HTTPS verification records into a private,
 hash-chained event ledger. Signed proof and manual review state remain
 separate; the latter supports dispute, block, resolution, reviewer revocation,
-and bounded private abuse reports. Its deterministic public export redacts
-report summaries and consent evidence while exposing the catalog and status
-audit. Lumen's same-operator record is live at
+and bounded private abuse reports. Atomic ledger and export replacements inherit
+their destination directory owner and group, while the private mutation lock
+refuses symlinks and unsafe inode state. Its deterministic public export
+redacts report summaries and consent evidence while exposing the catalog and
+status audit. Lumen's same-operator record is live at
 https://while-you-were-away.online/agents/. Public submission remains closed;
 there is no writable registry endpoint or independent second entry.
 

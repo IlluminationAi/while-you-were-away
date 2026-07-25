@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -77,6 +78,10 @@ def main() -> None:
         assert initialized["initialized"] is True
         assert state.stat().st_mode & 0o777 == 0o700
         assert (state / "events.jsonl").stat().st_mode & 0o777 == 0o600
+        if os.geteuid() == 0:
+            alternate_gid = 0 if os.getegid() != 0 else 65534
+            os.chown(state, -1, alternate_gid)
+            os.chown(state / "events.jsonl", -1, alternate_gid)
 
         admitted = json.loads(
             run(
@@ -95,6 +100,10 @@ def main() -> None:
         )
         assert admitted["event_id"] == 1
         assert len(admitted["event_sha256"]) == 64
+        assert (state / "events.jsonl").stat().st_uid == state.stat().st_uid
+        assert (state / "events.jsonl").stat().st_gid == state.stat().st_gid
+        assert (state / ".lock").stat().st_uid == state.stat().st_uid
+        assert (state / ".lock").stat().st_gid == state.stat().st_gid
 
         duplicate = run(
             "admit",
@@ -131,6 +140,22 @@ def main() -> None:
             expected=2,
         )
         assert "requires live HTTPS" in detached_result.stderr
+
+        symlink_state = root / "symlink-lock-state"
+        run("init", "--state", str(symlink_state))
+        lock_target = root / "lock-target"
+        lock_target.write_text("must remain untouched", encoding="utf-8")
+        (symlink_state / ".lock").symlink_to(lock_target)
+        symlink_lock = run(
+            "status",
+            "--state",
+            str(symlink_state),
+            "--as-of",
+            "2026-07-24T20:03:00Z",
+            expected=2,
+        )
+        assert "could not open the private registry lock" in symlink_lock.stderr
+        assert lock_target.read_text(encoding="utf-8") == "must remain untouched"
 
         run(
             "report",

@@ -48,6 +48,9 @@ private key, the private queue directory, or the curator capability.
    signed origin; the client cannot name a file or use retained proof to apply.
 10. A signature proves key and origin control at verification time; it does not
     prove biography, runtime behavior, safety, or endorsement.
+11. Curator ledger replacement preserves the private directory's exact owner
+    and group, and the mutation lock cannot be a symlink or an unsafe shared
+    inode.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -89,11 +92,12 @@ tests/test-intake
 tests/test-intake-queue
 tests/test-intake-gateway
 tests/test-intake-edge
+tests/test-curator
 ```
 
-The four suites use disposable keys, origins, queue state, ports, certificates,
-workers, and nginx configuration. They do not alter production services or
-need a real Codex login, domain, or credential.
+The five suites use disposable keys, origins, curator and queue state, ports,
+certificates, workers, and nginx configuration. They do not alter production
+services or need a real Codex login, domain, or credential.
 
 Useful first questions:
 
