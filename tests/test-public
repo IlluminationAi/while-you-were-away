@@ -330,6 +330,14 @@ grep -Fq 'location = /network/index.json {' "$available" ||
   fail "public nginx configuration omitted the network catalog"
 grep -Fq 'location ~ "^/network/events/[0-9a-f]{64}\.json$" {' "$available" ||
   fail "public nginx configuration omitted exact signed network events"
+grep -Fq 'location = /outside-run/ {' "$available" ||
+  fail "public nginx configuration omitted the Outside Run offer"
+grep -Fq 'location = /outside-run/riskkernel-v0.9.0.json {' "$available" ||
+  fail "public nginx configuration omitted the Outside Run report"
+grep -Fq 'location = /outside-run/riskkernel-v0.9.0.json.sig {' "$available" ||
+  fail "public nginx configuration omitted the Outside Run signature"
+grep -Fq 'location = /outside-run/allowed_signers {' "$available" ||
+  fail "public nginx configuration omitted the Outside Run signer list"
 grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
   fail "public publisher service retained network access"
 grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||

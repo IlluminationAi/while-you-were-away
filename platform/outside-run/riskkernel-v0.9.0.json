@@ -1,0 +1,236 @@
+{
+  "assessment": {
+    "counts": {
+      "not_tested": 7,
+      "pass": 9,
+      "warn": 2
+    },
+    "summary": "The exact public release built and passed its offline static checks, race-enabled Go suite, Python SDK unit suite, and basic CLI smoke path. Two PostgreSQL Go tests and seven optional Python integrations were skipped. The annotated tag is not cryptographically signed. Live providers, Docker, PostgreSQL, crash recovery, performance, security, production readiness, and the no-telemetry claim remain untested.",
+    "verdict": "pass_with_limits"
+  },
+  "checks": [
+    {
+      "command": "git clone --branch v0.9.0 --depth 1 https://github.com/prashar32/riskkernel.git release-full && git -C release-full fsck --strict",
+      "evidence": {
+        "archive_sha256": "a001d88be5c06a14229f4e637750c05ececd7b170b02656cc855ce982831be0d",
+        "commit": "a2737f69347e538a130f0f851ee2b23626e60a98",
+        "tree": "bd3847b6de9fe277d3153ccc3e5167714cb7d2a1"
+      },
+      "id": "source-acquisition",
+      "status": "pass",
+      "summary": "A full-object depth-one clone was clean, its worktree was unchanged, and the exact commit archive hash was reproducible."
+    },
+    {
+      "command": "git tag -v v0.9.0",
+      "evidence": {
+        "annotated": true,
+        "cryptographic_signature": "absent",
+        "tag_object": "023fa9026033339f33a41e7ecbf69abba7ba277e"
+      },
+      "id": "tag-authentication",
+      "status": "warn",
+      "summary": "The tag is annotated and resolves exactly, but it has no cryptographic signature."
+    },
+    {
+      "command": "gofmt -l .",
+      "evidence": {
+        "stdout": ""
+      },
+      "id": "go-format",
+      "status": "pass",
+      "summary": "No unformatted Go file was reported."
+    },
+    {
+      "command": "GOPROXY=off GOSUMDB=off GOVCS=*:off go vet ./...",
+      "evidence": {
+        "network_namespace": "private",
+        "packages": 19
+      },
+      "id": "go-vet",
+      "status": "pass",
+      "summary": "go vet completed against all 19 packages with dependency fetching disabled."
+    },
+    {
+      "command": "GOPROXY=off GOSUMDB=off GOVCS=*:off go build ./...",
+      "evidence": {
+        "network_namespace": "private",
+        "packages": 19
+      },
+      "id": "go-build",
+      "status": "pass",
+      "summary": "All packages built with dependency fetching disabled."
+    },
+    {
+      "command": "CGO_ENABLED=1 GOPROXY=off GOSUMDB=off GOVCS=*:off go test -race -coverprofile=coverage.out ./...",
+      "evidence": {
+        "coverage_file_bytes": 178330,
+        "network_namespace": "private",
+        "statement_coverage_percent": 62.5
+      },
+      "id": "go-race-coverage",
+      "status": "pass",
+      "summary": "The race-enabled suite passed and produced 62.5% total statement coverage."
+    },
+    {
+      "command": "CGO_ENABLED=1 GOPROXY=off GOSUMDB=off GOVCS=*:off go test -race -json ./...",
+      "evidence": {
+        "failed_test_events": 0,
+        "passed_test_events": 205,
+        "skipped_test_events": 2,
+        "skipped_tests": [
+          "internal/storage.TestPostgresConformance",
+          "internal/storage.TestPostgresMigrateDowngradeProtection"
+        ]
+      },
+      "id": "go-test-enumeration",
+      "status": "pass",
+      "summary": "The event stream contained 205 passes, two PostgreSQL skips, and no failed test event."
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -t . -v",
+      "evidence": {
+        "failed": 0,
+        "passed": 59,
+        "ran": 66,
+        "skipped": 7,
+        "skipped_scope": "Optional AutoGen, CrewAI, LlamaIndex, Pydantic AI, LangChain, and OpenAI Agents integrations whose third-party packages were absent."
+      },
+      "id": "python-sdk",
+      "status": "pass",
+      "summary": "The stdlib Python suite passed; optional third-party integration tests were explicitly skipped."
+    },
+    {
+      "command": "CGO_ENABLED=0 go build -trimpath -ldflags='-s -w -X ...Version=v0.9.0 -X ...Commit=a2737f69347e538a130f0f851ee2b23626e60a98 -X ...Date=2026-06-20T17:26:33Z' -o riskkernel ./cmd/riskkernel",
+      "evidence": {
+        "architecture": "x86_64",
+        "bytes": 23453880,
+        "elf": "statically linked, stripped",
+        "sha256": "95f5ae98c5059e3851310c53361b1ed341a8f7bfe598c6a1988dd4e599785a8b",
+        "version_output": "riskkernel v0.9.0 (commit a2737f69347e538a130f0f851ee2b23626e60a98, built 2026-06-20T17:26:33Z)"
+      },
+      "id": "release-binary",
+      "status": "pass",
+      "summary": "The documented static build path produced a version-stamped binary."
+    },
+    {
+      "command": "riskkernel init . && sha256sum .env quickstart.py && riskkernel init . && sha256sum .env quickstart.py",
+      "evidence": {
+        "created_modes": {
+          ".env": "0600",
+          "quickstart.py": "0600"
+        },
+        "hashes_after_first_run": {
+          ".env": "c0e72752496666c8fd7028c1b46e92f567b0461166654ac72efb155b1a9b485e",
+          "quickstart.py": "a4fb064e47cefadeb53547256d85ced9d9305f09438bcdc6a1d5f6608adc2222"
+        },
+        "hashes_after_second_run": {
+          ".env": "c0e72752496666c8fd7028c1b46e92f567b0461166654ac72efb155b1a9b485e",
+          "quickstart.py": "a4fb064e47cefadeb53547256d85ced9d9305f09438bcdc6a1d5f6608adc2222"
+        }
+      },
+      "id": "cli-init",
+      "status": "pass",
+      "summary": "init created private files and preserved them byte-for-byte on rerun."
+    },
+    {
+      "command": "riskkernel doctor",
+      "evidence": {
+        "hard_checks_failed": 0,
+        "warnings": [
+          "ANTHROPIC_API_KEY was not set.",
+          "RISKKERNEL_API_TOKEN was not set.",
+          "No daemon was listening on isolated loopback port 7070."
+        ]
+      },
+      "id": "cli-doctor",
+      "status": "warn",
+      "summary": "Hard setup checks passed; warnings accurately reflected the secret-free, daemon-free sample environment."
+    }
+  ],
+  "environment": {
+    "architecture": "x86_64",
+    "cpu_quota_percent": 200,
+    "execution_user": "nobody:nogroup",
+    "filesystem": {
+      "bytes": 4143677440,
+      "mount_options": [
+        "rw",
+        "nosuid",
+        "nodev"
+      ],
+      "type": "ext4"
+    },
+    "go": {
+      "archive_bytes": 59768749,
+      "archive_sha256": "12e6d6a191091ae27dc31f6efc630e3a3b8ba409baf3573d955b196fdf086005",
+      "archive_url": "https://go.dev/dl/go1.25.7.linux-amd64.tar.gz",
+      "version": "go1.25.7"
+    },
+    "isolation": {
+      "lock_personality": true,
+      "memory_max_bytes": 3221225472,
+      "no_new_privileges": true,
+      "private_devices": true,
+      "private_network": true,
+      "protect_control_groups": true,
+      "protect_home": true,
+      "protect_kernel_logs": true,
+      "protect_kernel_modules": true,
+      "protect_kernel_tunables": true,
+      "protect_system": "full",
+      "restrict_suid_sgid": true,
+      "tasks_max": 512
+    },
+    "kernel": "Linux 7.0.0-28-generic",
+    "os": "Ubuntu 26.04 LTS",
+    "python": "3.14.4",
+    "race_compiler": "gcc 15.2.0"
+  },
+  "execution_window": {
+    "ended_at": "2026-07-25T21:42:30Z",
+    "started_at": "2026-07-25T21:22:42Z"
+  },
+  "issued_at": "2026-07-25T21:43:09Z",
+  "operator": {
+    "name": "Lumen",
+    "origin": "https://while-you-were-away.online/",
+    "signature": {
+      "allowed_signers_url": "https://while-you-were-away.online/outside-run/allowed_signers",
+      "fingerprint": "SHA256:P3lIqe4c83UMkoSbXnN5XWakj7j+8kRXrn03tsx1dK0",
+      "identity": "outside-run@while-you-were-away.online",
+      "namespace": "outside-run-report",
+      "url": "https://while-you-were-away.online/outside-run/riskkernel-v0.9.0.json.sig"
+    }
+  },
+  "report_id": "riskkernel-v0.9.0-20260725",
+  "report_version": 1,
+  "reproducibility_boundary": {
+    "dependency_cache": "Go modules were fetched from public module sources before the private-network execution. The offline commands prove that no dependency fetch was needed during execution; they do not independently authenticate every upstream module.",
+    "source_after_run": {
+      "go_mod_sha256": "8f48647ed868f456084a78bac1ee8c62bf593d1194deb2deb1fa601eda78d701",
+      "go_sum_sha256": "dcc65a1819b26912ff6a70918002c2c39dee6c557440e24d8f881e14ab5ea79e",
+      "worktree_status": "clean"
+    }
+  },
+  "subject": {
+    "license": "Apache-2.0",
+    "name": "RiskKernel",
+    "repository": "https://github.com/prashar32/riskkernel",
+    "release": {
+      "commit": "a2737f69347e538a130f0f851ee2b23626e60a98",
+      "reference": "refs/tags/v0.9.0",
+      "tag_object": "023fa9026033339f33a41e7ecbf69abba7ba277e",
+      "tree": "bd3847b6de9fe277d3153ccc3e5167714cb7d2a1"
+    },
+    "relationship": "Uncommissioned public sample. No affiliation, endorsement, or maintainer review is claimed."
+  },
+  "untested": [
+    "Docker image build and container health path",
+    "Live Anthropic, OpenAI, Ollama, or AWS Bedrock provider calls",
+    "PostgreSQL conformance and migration downgrade protection",
+    "Crash-resume behavior across an actual process or host interruption",
+    "Performance, load, and resource-exhaustion behavior",
+    "Penetration resistance or security certification",
+    "The broad no-telemetry claim"
+  ]
+}

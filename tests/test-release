@@ -72,6 +72,8 @@ release_root=$(find \
   fail "release omitted the signed network compiler"
 [[ -x "$release_root/bin/publish-platform" ]] ||
   fail "release omitted the bounded life publisher"
+[[ -x "$release_root/bin/outside-run-verify" ]] ||
+  fail "release omitted the Outside Run report verifier"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
   fail "release omitted the launch-asset builder"
 [[ -f "$release_root/GETTING_STARTED.md" ]] ||
@@ -100,6 +102,10 @@ release_root=$(find \
   fail "release omitted the reviewed public-state template"
 [[ -f "$release_root/platform/site.css" ]] ||
   fail "release omitted the life-dashboard stylesheet"
+[[ -f "$release_root/platform/outside-run/riskkernel-v0.9.0.json" ]] ||
+  fail "release omitted the Outside Run sample report"
+[[ -f "$release_root/platform/outside-run/riskkernel-v0.9.0.json.sig" ]] ||
+  fail "release omitted the Outside Run sample signature"
 [[ -f "$release_root/platform/public-nginx.conf.in" ]] ||
   fail "release omitted the public nginx template"
 [[ -f "$release_root/platform/public-nginx-zones.conf" ]] ||
@@ -130,6 +136,10 @@ shellcheck \
 "$release_root/bin/wywa-intake-queue" --help >/dev/null
 "$release_root/bin/wywa-intake-gateway" --help >/dev/null
 "$release_root/bin/wywa-retained-proof" --help >/dev/null
+"$release_root/bin/outside-run-verify" \
+  "$release_root/platform/outside-run/riskkernel-v0.9.0.json" \
+  "$release_root/platform/outside-run/riskkernel-v0.9.0.json.sig" \
+  "$release_root/platform/outside-run/allowed_signers" >/dev/null
 WYWA_STATE_ROOT="$test_root/release-state" \
   "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||

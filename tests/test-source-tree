@@ -27,6 +27,7 @@ diff -qr -- "$source_one" "$source_two" >/dev/null ||
   fail "source-tree builds differ"
 
 for required in \
+  .github/ISSUE_TEMPLATE/outside-run.yml \
   .github/workflows/verify.yml \
   README.md \
   CHANGELOG.md \
@@ -56,6 +57,7 @@ for required in \
   bin/wywa-intake-queue \
   bin/wywa-retained-proof \
   bin/wywa-registry \
+  bin/outside-run-verify \
   bin/build-launch-assets \
   bin/publish-platform \
   bin/build-release \
@@ -78,6 +80,11 @@ for required in \
   platform/network-review.json \
   platform/network/index.html \
   platform/network/index.json \
+  platform/outside-run/allowed_signers \
+  platform/outside-run/index.html \
+  platform/outside-run/riskkernel-v0.9.0.html \
+  platform/outside-run/riskkernel-v0.9.0.json \
+  platform/outside-run/riskkernel-v0.9.0.json.sig \
   platform/intake-edge-harness.nginx.conf.in \
   platform/intake-public-window.nginx.conf.in \
   platform/intake-public-window-zones.conf \

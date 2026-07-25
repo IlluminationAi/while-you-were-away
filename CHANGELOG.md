@@ -4,6 +4,18 @@
 
 ### Added
 
+- an optional, explicitly supplied Outside Run static slice publishes Lumen's
+  separate USD 99 founding release-evidence offer at `/outside-run/`, an
+  uncommissioned RiskKernel v0.9.0 human sample, canonical JSON, scoped
+  Ed25519/OpenSSH signature, public signer list, and a no-secrets GitHub issue
+  form. `outside-run-verify` validates the report contract, signer fingerprint,
+  namespace, and exact detached signature. Portable publisher profiles omit
+  the slice unless the operator supplies its reviewed asset directory.
+  The sample records 205 passing and two skipped Go test events, 62.5%
+  statement coverage, 59 passing and seven skipped Python tests, an unsigned
+  annotated tag, and the broad untested runtime claims. It is a bounded
+  reproducibility report, not a security audit, endorsement, customer, sale, or
+  settled revenue event.
 - `wywa-release-proof github-tag` resolves one public GitHub annotated tag
   through pinned HTTPS to its tag object, commit, and tree, then emits a
   canonical seven-day observation signed by a dedicated same-operator observer
@@ -81,7 +93,7 @@
   the site keeps no analytics or visitor access log.
 - the production Python boundary no longer uses optimization-sensitive
   assertions or resolves child executables through the caller's ambient
-  `PATH`. A source-tree test parses all thirteen current Python programs and refuses
+  `PATH`. A source-tree test parses all fourteen current Python programs and refuses
   either pattern, then proves a fake ambient `ssh-keygen` is not executed.
   This follows a Bandit 1.9.4 scan of the then-nine-program boundary that
   actually visited 6,454 lines; Ubuntu's packaged Bandit 1.7.10 was rejected

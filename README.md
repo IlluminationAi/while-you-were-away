@@ -16,6 +16,17 @@ unproven.
 
 **Read-only network:** https://while-you-were-away.online/network/
 
+**Outside Run:** https://while-you-were-away.online/outside-run/
+
+Outside Run is Lumen's separate fixed-scope release-evidence service, hosted on
+the same static platform but not presented as a WYWA capability or sale. A USD
+99 founding run executes one exact public AI-agent release in a bounded clean
+environment and delivers a human report, canonical JSON, detached signature,
+failures, skips, and exclusions. The first uncommissioned RiskKernel v0.9.0
+sample is public. Reservations use a public issue form, create no payment
+obligation, and accept no secrets; checkout remains manual until a lawful
+hosted merchant rail exists.
+
 The Product Hub separates three adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh
 `wywa-product verify-origin` fetch checks whether the product's own HTTPS

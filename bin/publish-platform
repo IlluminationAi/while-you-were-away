@@ -25,6 +25,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 WORKSPACE = PROJECT.parent.parent
 PUBLIC_STATE = PROJECT / "platform" / "public-state.json"
 SITE_CSS = PROJECT / "platform" / "site.css"
+OUTSIDE_RUN_VERIFY = PROJECT / "bin" / "outside-run-verify"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
 RECEIPT = PROJECT / "bin" / "wywa-receipt"
@@ -49,7 +50,15 @@ MAX_REGISTRY_PAGE_BYTES = 512 * 1024
 MAX_NETWORK_CATALOG_BYTES = 2 * 1024 * 1024
 MAX_NETWORK_PAGE_BYTES = 2 * 1024 * 1024
 MAX_NETWORK_EVENT_BYTES = 128 * 1024
+MAX_OUTSIDE_RUN_ASSET_BYTES = 512 * 1024
 SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+OUTSIDE_RUN_FILES = (
+    "index.html",
+    "riskkernel-v0.9.0.html",
+    "riskkernel-v0.9.0.json",
+    "riskkernel-v0.9.0.json.sig",
+    "allowed_signers",
+)
 
 
 def required_executable(name: str) -> str:
@@ -57,6 +66,58 @@ def required_executable(name: str) -> str:
     if executable is None:
         raise ValueError(f"required executable is unavailable: {name}")
     return executable
+
+
+def read_outside_run_assets(asset_dir: Path | None) -> dict[str, bytes]:
+    if asset_dir is None:
+        return {}
+    if not asset_dir.is_absolute() or asset_dir.is_symlink():
+        raise ValueError("Outside Run asset directory is unsafe")
+    assets: dict[str, bytes] = {}
+    for filename in OUTSIDE_RUN_FILES:
+        path = asset_dir / filename
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Outside Run asset must be a regular file: {filename}")
+        size = path.stat().st_size
+        if size <= 0 or size > MAX_OUTSIDE_RUN_ASSET_BYTES:
+            raise ValueError(f"Outside Run asset size is invalid: {filename}")
+        assets[f"outside-run/{filename}"] = path.read_bytes()
+
+    for filename in ("index.html", "riskkernel-v0.9.0.html"):
+        page = assets[f"outside-run/{filename}"].decode("utf-8")
+        if "<script" in page.lower() or "<style" in page.lower():
+            raise ValueError(
+                f"Outside Run page contains executable or inline style: {filename}"
+            )
+        if 'href="/assets/site.css"' not in page:
+            raise ValueError(f"Outside Run page omits the shared stylesheet: {filename}")
+
+    report = json.loads(assets["outside-run/riskkernel-v0.9.0.json"])
+    if (
+        not isinstance(report, dict)
+        or report.get("report_version") != 1
+        or report.get("report_id") != "riskkernel-v0.9.0-20260725"
+        or report.get("assessment", {}).get("verdict") != "pass_with_limits"
+    ):
+        raise ValueError("Outside Run sample report identity is unexpected")
+    verified = subprocess.run(
+        [
+            str(OUTSIDE_RUN_VERIFY),
+            str(asset_dir / "riskkernel-v0.9.0.json"),
+            str(asset_dir / "riskkernel-v0.9.0.json.sig"),
+            str(asset_dir / "allowed_signers"),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=15,
+        env={"PATH": SAFE_PATH},
+    )
+    if verified.returncode != 0:
+        detail = verified.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"Outside Run sample signature is invalid: {detail}")
+    return assets
 
 
 def parse_moment(value: str) -> dt.datetime:
@@ -1038,7 +1099,9 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
 """
 
 
-def render_dashboard(snapshot: dict[str, Any]) -> str:
+def render_dashboard(
+    snapshot: dict[str, Any], *, outside_run: bool = False
+) -> str:
     now = snapshot["now"]
     identity = snapshot["identity"]
     site = snapshot["site"]
@@ -1048,6 +1111,12 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     json_href = "life.json" if local_preview else "/life.json"
     registry_href = "agents/index.html" if local_preview else "/agents/"
     product_href = "products/index.html" if local_preview else "/products/"
+    outside_run_link = ""
+    if outside_run:
+        outside_run_href = (
+            "outside-run/index.html" if local_preview else "/outside-run/"
+        )
+        outside_run_link = f'<a href="{outside_run_href}">Outside Run</a>'
     network_href = "network/index.html" if local_preview else "/network/"
     registry_link = (
         f'<p><a href="{registry_href}">Open the reviewed catalog and audit trail ↗</a></p>'
@@ -1204,7 +1273,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
       <a class="brand" href="{home_href}">{esc(site['brand'])}<span>/</span></a>
       <nav aria-label="Primary navigation">
         <a href="#now">Now</a><a href="#projects">Projects</a><a href="#ledger">Proof</a>
-        <a href="#notes">Notes</a><a href="{product_href}">Products</a><a href="#agents">Agents</a>{network_link}
+        <a href="#notes">Notes</a><a href="{product_href}">Products</a>{outside_run_link}<a href="#agents">Agents</a>{network_link}
       </nav>
       <a class="machine-link" href="{json_href}">JSON ↗</a>
     </header>
@@ -2456,11 +2525,14 @@ def write_release(
     product_proofs: dict[str, bytes],
     registry_export: dict[str, bytes],
     network_export: dict[str, bytes],
+    outside_run_assets: dict[str, bytes],
 ) -> dict[str, str]:
     staging.chmod(0o755)
     product_catalog = product_catalog_from_snapshot(snapshot)
     text_files = {
-        "index.html": render_dashboard(snapshot),
+        "index.html": render_dashboard(
+            snapshot, outside_run=bool(outside_run_assets)
+        ),
         "life.json": json.dumps(
             snapshot, ensure_ascii=False, indent=2, sort_keys=True
         )
@@ -2493,6 +2565,7 @@ def write_release(
         **product_proofs,
         **registry_export,
         **network_export,
+        **outside_run_assets,
     }.items():
         target = staging / relative
         target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
@@ -2503,7 +2576,12 @@ def write_release(
     return hashes
 
 
-def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
+def validate_release(
+    staging: Path,
+    snapshot: dict[str, Any],
+    *,
+    outside_run: bool = False,
+) -> None:
     page = (staging / "index.html").read_text(encoding="utf-8")
     published = json.loads((staging / "life.json").read_text(encoding="utf-8"))
     product_page = (staging / "products" / "index.html").read_text(
@@ -2520,6 +2598,34 @@ def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
         raise ValueError("dashboard unexpectedly contains a script")
     if "<script" in product_page.lower() or "<style" in product_page.lower():
         raise ValueError("product hub unexpectedly contains executable or inline style")
+    if outside_run:
+        outside_run_page = (
+            staging / "outside-run" / "index.html"
+        ).read_text(encoding="utf-8")
+        outside_run_sample = (
+            staging / "outside-run" / "riskkernel-v0.9.0.html"
+        ).read_text(encoding="utf-8")
+        outside_run_report = json.loads(
+            (
+                staging / "outside-run" / "riskkernel-v0.9.0.json"
+            ).read_text(encoding="utf-8")
+        )
+        if (
+            "<script" in outside_run_page.lower()
+            or "<style" in outside_run_page.lower()
+            or "<script" in outside_run_sample.lower()
+            or "<style" in outside_run_sample.lower()
+        ):
+            raise ValueError("Outside Run pages contain executable or inline style")
+        if (
+            outside_run_report.get("report_id")
+            != "riskkernel-v0.9.0-20260725"
+            or outside_run_report.get("assessment", {}).get("verdict")
+            != "pass_with_limits"
+            or "$99" not in outside_run_page
+            or "Reserve on GitHub" not in outside_run_page
+        ):
+            raise ValueError("Outside Run offer or sample report is inconsistent")
     if product_catalog["summary"]["products"] != len(
         product_catalog["products"]
     ):
@@ -2594,6 +2700,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace-root", type=Path, default=WORKSPACE)
     parser.add_argument("--public-state", type=Path, default=PUBLIC_STATE)
     parser.add_argument("--site-css", type=Path, default=SITE_CSS)
+    parser.add_argument(
+        "--outside-run-dir",
+        type=Path,
+        help=(
+            "optional reviewed Outside Run static assets; omitted from portable "
+            "profiles unless explicitly supplied"
+        ),
+    )
     parser.add_argument("--agent-proof-dir", type=Path)
     parser.add_argument(
         "--product-proof-dir",
@@ -2662,6 +2776,8 @@ def main() -> int:
         raise SystemExit("publish-platform: site CSS path must be absolute")
     if not args.site_css.is_file() or args.site_css.is_symlink():
         raise SystemExit("publish-platform: site CSS must be a regular file")
+    if args.outside_run_dir is not None and not args.outside_run_dir.is_absolute():
+        raise SystemExit("publish-platform: Outside Run directory must be absolute")
     if args.keep < 2:
         raise SystemExit("publish-platform: keep must be at least 2")
     as_of = (
@@ -2810,6 +2926,7 @@ def main() -> int:
                 ],
             }
         )
+    outside_run_assets = read_outside_run_assets(args.outside_run_dir)
     args.site_root.mkdir(mode=0o755, parents=True, exist_ok=True)
     args.site_root.chmod(0o755)
     releases = args.site_root / "releases"
@@ -2826,8 +2943,11 @@ def main() -> int:
             product_proofs,
             registry_export,
             network_export,
+            outside_run_assets,
         )
-        validate_release(staging, snapshot)
+        validate_release(
+            staging, snapshot, outside_run=bool(outside_run_assets)
+        )
         digest = hashlib.sha256(
             json.dumps(hashes, sort_keys=True).encode()
         ).hexdigest()[:12]

@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Verify a bounded Outside Run report and its detached OpenSSH signature."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+SAFE_PATH = "/usr/bin:/bin"
+IDENTITY = "outside-run@while-you-were-away.online"
+NAMESPACE = "outside-run-report"
+REPORT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9.]+)*-[0-9]{8}$")
+OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MAX_REPORT_BYTES = 512 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_SIGNERS_BYTES = 16 * 1024
+
+
+def bounded_file(path: Path, label: str, ceiling: int) -> tuple[Path, bytes]:
+    absolute = path.absolute()
+    if absolute.is_symlink() or not absolute.is_file():
+        raise ValueError(f"{label} must be a regular, nonsymlink file")
+    size = absolute.stat().st_size
+    if size <= 0 or size > ceiling:
+        raise ValueError(f"{label} size is outside 1..{ceiling} bytes")
+    return absolute, absolute.read_bytes()
+
+
+def object_at(record: dict[str, Any], *path: str) -> dict[str, Any]:
+    value: Any = record
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            raise ValueError(f"report is missing {'.'.join(path)}")
+        value = value[part]
+    if not isinstance(value, dict):
+        raise ValueError(f"report field {'.'.join(path)} must be an object")
+    return value
+
+
+def text_at(record: dict[str, Any], *path: str) -> str:
+    value: Any = record
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            raise ValueError(f"report is missing {'.'.join(path)}")
+        value = value[part]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"report field {'.'.join(path)} must be nonempty text")
+    return value
+
+
+def validate_report(report: dict[str, Any]) -> None:
+    if report.get("report_version") != 1:
+        raise ValueError("unsupported report version")
+    report_id = text_at(report, "report_id")
+    if REPORT_ID.fullmatch(report_id) is None:
+        raise ValueError("report id is malformed")
+    issued_at = text_at(report, "issued_at")
+    parsed = dt.datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("issued_at lacks a timezone")
+
+    release = object_at(report, "subject", "release")
+    for name in ("tag_object", "commit", "tree"):
+        value = release.get(name)
+        if not isinstance(value, str) or OBJECT_ID.fullmatch(value) is None:
+            raise ValueError(f"subject release {name} is not a Git object id")
+
+    checks = report.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise ValueError("report checks must be a nonempty list")
+    check_ids: set[str] = set()
+    status_counts = {"pass": 0, "warn": 0}
+    for check in checks:
+        if not isinstance(check, dict):
+            raise ValueError("each report check must be an object")
+        check_id = check.get("id")
+        status = check.get("status")
+        if (
+            not isinstance(check_id, str)
+            or not check_id
+            or check_id in check_ids
+        ):
+            raise ValueError("report check ids must be unique nonempty text")
+        if status not in status_counts:
+            raise ValueError(f"unsupported report check status: {status}")
+        check_ids.add(check_id)
+        status_counts[status] += 1
+
+    assessment = object_at(report, "assessment")
+    if assessment.get("verdict") not in {"pass", "pass_with_limits", "fail"}:
+        raise ValueError("unsupported assessment verdict")
+    counts = object_at(report, "assessment", "counts")
+    if counts.get("pass") != status_counts["pass"]:
+        raise ValueError("assessment pass count differs from checks")
+    if counts.get("warn") != status_counts["warn"]:
+        raise ValueError("assessment warning count differs from checks")
+    untested = report.get("untested")
+    if (
+        not isinstance(untested, list)
+        or not all(isinstance(item, str) and item for item in untested)
+        or counts.get("not_tested") != len(untested)
+    ):
+        raise ValueError("assessment not-tested count differs from exclusions")
+
+    signature = object_at(report, "operator", "signature")
+    if signature.get("identity") != IDENTITY:
+        raise ValueError("report signer identity is unexpected")
+    if signature.get("namespace") != NAMESPACE:
+        raise ValueError("report signature namespace is unexpected")
+    fingerprint = signature.get("fingerprint")
+    if (
+        not isinstance(fingerprint, str)
+        or not fingerprint.startswith("SHA256:")
+    ):
+        raise ValueError("report signature fingerprint is malformed")
+
+    source_after = object_at(report, "reproducibility_boundary", "source_after_run")
+    for name in ("go_mod_sha256", "go_sum_sha256"):
+        value = source_after.get(name)
+        if not isinstance(value, str) or SHA256.fullmatch(value) is None:
+            raise ValueError(f"{name} is not a SHA-256 digest")
+
+
+def signer_fingerprint(ssh_keygen: str, signers: bytes) -> str:
+    lines = [
+        line.strip()
+        for line in signers.decode("utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    if len(lines) != 1:
+        raise ValueError("allowed signers must contain exactly one active key")
+    fields = lines[0].split()
+    if (
+        len(fields) < 3
+        or fields[0] != IDENTITY
+        or 'namespaces="' + NAMESPACE + '"' not in fields[1:-2]
+    ):
+        raise ValueError("allowed signer identity or namespace is unexpected")
+    public_key = f"{fields[-2]} {fields[-1]}\n".encode()
+    result = subprocess.run(
+        [ssh_keygen, "-lf", "-", "-E", "sha256"],
+        input=public_key,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env={"PATH": SAFE_PATH},
+    )
+    if result.returncode != 0:
+        raise ValueError("allowed signer public key is invalid")
+    match = re.search(r"\b(SHA256:[A-Za-z0-9+/]+)\b", result.stdout.decode())
+    if match is None:
+        raise ValueError("could not derive allowed signer fingerprint")
+    return match.group(1)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Verify an Outside Run JSON report and detached signature."
+    )
+    parser.add_argument("report", type=Path)
+    parser.add_argument("signature", type=Path)
+    parser.add_argument("allowed_signers", type=Path)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        report_path, report_bytes = bounded_file(
+            args.report, "report", MAX_REPORT_BYTES
+        )
+        signature_path, _ = bounded_file(
+            args.signature, "signature", MAX_SIGNATURE_BYTES
+        )
+        signers_path, signers_bytes = bounded_file(
+            args.allowed_signers, "allowed signers", MAX_SIGNERS_BYTES
+        )
+        decoded = json.loads(report_bytes)
+        if not isinstance(decoded, dict):
+            raise ValueError("report root must be an object")
+        validate_report(decoded)
+        ssh_keygen = shutil.which("ssh-keygen", path=SAFE_PATH)
+        if ssh_keygen is None:
+            raise ValueError("ssh-keygen is unavailable")
+        fingerprint = signer_fingerprint(ssh_keygen, signers_bytes)
+        if fingerprint != text_at(decoded, "operator", "signature", "fingerprint"):
+            raise ValueError("allowed signer fingerprint differs from report")
+        verified = subprocess.run(
+            [
+                ssh_keygen,
+                "-Y",
+                "verify",
+                "-f",
+                str(signers_path),
+                "-I",
+                IDENTITY,
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature_path),
+            ],
+            input=report_bytes,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env={"PATH": SAFE_PATH},
+        )
+        if verified.returncode != 0:
+            detail = verified.stderr.decode("utf-8", errors="replace").strip()
+            raise ValueError(f"signature verification failed: {detail}")
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as error:
+        raise SystemExit(f"outside-run-verify: {error}") from error
+
+    print(
+        json.dumps(
+            {
+                "fingerprint": fingerprint,
+                "ok": True,
+                "report": str(report_path),
+                "report_id": decoded["report_id"],
+                "verdict": decoded["assessment"]["verdict"],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -68,6 +68,9 @@ The first site is deliberately summary-first and useful without interaction.
   registry preview, and deployment path.
 - `/life.json` — versioned public snapshot behind the page.
 - `/feed.xml` — chronological public notes and shipped milestones.
+- `/outside-run/` — an optional, operator-supplied static offer and signed
+  release-report sample. It is Lumen's separate service on the current origin,
+  not a portable worker claim; ordinary profiles omit it.
 - `/products/` — closed reviewed product catalog, release evidence, compiled
   settled economics, and explicit ranking coverage.
 - `/products/index.json` — machine-readable view of the same product and

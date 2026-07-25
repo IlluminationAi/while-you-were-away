@@ -35,6 +35,7 @@ trap cleanup EXIT
 
 source_root=$staging/while-you-were-away
 mkdir -p -- \
+  "$source_root/.github/ISSUE_TEMPLATE" \
   "$source_root/.github/workflows" \
   "$source_root/bin" \
   "$source_root/launch-assets" \
@@ -43,6 +44,7 @@ mkdir -p -- \
   "$source_root/platform/network" \
   "$source_root/platform/network/events" \
   "$source_root/platform/network-events" \
+  "$source_root/platform/outside-run" \
   "$source_root/platform/product-proofs" \
   "$source_root/platform/release-proofs" \
   "$source_root/platform/registry" \
@@ -52,6 +54,9 @@ mkdir -p -- \
 install -m 0644 -- \
   "$project_dir/.github/workflows/verify.yml" \
   "$source_root/.github/workflows/verify.yml"
+install -m 0644 -- \
+  "$project_dir/.github/ISSUE_TEMPLATE/outside-run.yml" \
+  "$source_root/.github/ISSUE_TEMPLATE/outside-run.yml"
 
 for filename in \
   .gitignore \
@@ -73,6 +78,7 @@ done
 
 for filename in \
   build-launch-assets \
+  outside-run-verify \
   publish-platform \
   build-release \
   build-source-tree \
@@ -94,6 +100,18 @@ for filename in \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
+done
+
+for filename in \
+  allowed_signers \
+  index.html \
+  riskkernel-v0.9.0.html \
+  riskkernel-v0.9.0.json \
+  riskkernel-v0.9.0.json.sig
+do
+  install -m 0644 -- \
+    "$project_dir/platform/outside-run/$filename" \
+    "$source_root/platform/outside-run/$filename"
 done
 
 install -m 0644 -- \

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Outside Run sample report for RiskKernel v0.9.0, executed 2026-07-25 by Lumen.">
+    <title>RiskKernel v0.9.0 / Outside Run sample</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/outside-run/">OUTSIDE RUN<span>/</span></a>
+      <nav aria-label="Report navigation">
+        <a href="#verdict">Verdict</a>
+        <a href="#passed">Passed</a>
+        <a href="#limits">Limits</a>
+        <a href="#verify">Verify</a>
+      </nav>
+      <a class="machine-link" href="/outside-run/riskkernel-v0.9.0.json">JSON ↗</a>
+    </header>
+
+    <main>
+      <section class="hero hub-hero" id="verdict">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="live-dot"></span> Sample report / issued 25 Jul 2026</p>
+          <h1>RiskKernel<br><em>passes with limits.</em></h1>
+          <p class="hero-deck">The exact v0.9.0 source built and passed its offline Go and Python test paths. The tag is unsigned, two PostgreSQL tests and seven optional Python integrations were skipped, and the broad runtime claims were not all exercised.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="/outside-run/riskkernel-v0.9.0.json">Download canonical JSON</a>
+            <a class="button" href="/outside-run/riskkernel-v0.9.0.json.sig">Detached signature</a>
+          </div>
+        </div>
+        <aside class="live-receipt">
+          <p class="panel-label">Report / riskkernel-v0.9.0-20260725</p>
+          <dl>
+            <div><dt>Release</dt><dd>v0.9.0</dd></div>
+            <div><dt>Commit</dt><dd><code>a2737f69347e538a130f0f851ee2b23626e60a98</code></dd></div>
+            <div><dt>Verdict</dt><dd>Pass with limits</dd></div>
+            <div><dt>Relationship</dt><dd>Uncommissioned public sample</dd></div>
+          </dl>
+          <p class="honesty">No affiliation, endorsement, or maintainer review is claimed. This report is a bounded reproducibility run, not a security audit.</p>
+        </aside>
+      </section>
+
+      <section class="metrics hub-metrics" aria-label="Report metrics">
+        <article class="metric cyan"><strong>205</strong><span>Go test passes</span><details><summary>Boundary</summary><p>Test events from <code>go test -race -json ./...</code>.</p></details></article>
+        <article class="metric amber"><strong>62.5%</strong><span>Go statements</span><details><summary>Boundary</summary><p>Total coverage from the race-enabled all-package run.</p></details></article>
+        <article class="metric"><strong>59</strong><span>Python passes</span><details><summary>Boundary</summary><p>66 ran; seven optional integrations skipped.</p></details></article>
+        <article class="metric"><strong>0</strong><span>failed test events</span><details><summary>Not universal</summary><p>Skipped and untested paths remain visible below.</p></details></article>
+      </section>
+
+      <section class="section ledger" id="passed">
+        <div class="section-heading">
+          <div><p class="section-label">01 / passed</p><h2>What actually<br>crossed the machine.</h2></div>
+          <p>Commands ran as <code>nobody:nogroup</code> inside private network and device namespaces, with no new privileges, finite memory, CPU, task, and runtime ceilings.</p>
+        </div>
+        <ol>
+          <li><time datetime="2026-07-25T21:22:42Z">source</time><div><h3>Exact tag, commit, and tree.</h3><p>A full-object depth-one clone passed <code>git fsck --strict</code>. Tag <code>v0.9.0</code> resolves to commit <code>a2737f69347e538a130f0f851ee2b23626e60a98</code> and tree <code>bd3847b6de9fe277d3153ccc3e5167714cb7d2a1</code>. The deterministic commit archive SHA-256 is <code>a001d88be5c06a14229f4e637750c05ececd7b170b02656cc855ce982831be0d</code>.</p></div></li>
+          <li><time datetime="2026-07-25T21:25:48Z">static</time><div><h3>Formatting, vet, and build passed.</h3><p><code>gofmt -l .</code> emitted nothing. Offline <code>go vet ./...</code> and <code>go build ./...</code> completed across 19 packages.</p></div></li>
+          <li><time datetime="2026-07-25T21:34:03Z">race</time><div><h3>Race-enabled Go suite passed.</h3><p>The coverage run reached 62.5% of statements. A separate JSON event run recorded 205 passes, two skips, and zero failures. Both skipped tests were PostgreSQL conformance paths without a database.</p></div></li>
+          <li><time datetime="2026-07-25T21:37:00Z">sdk</time><div><h3>Python SDK unit suite passed.</h3><p>It ran 66 tests in 1.097 seconds: 59 passed, seven optional third-party framework integrations skipped, zero failed.</p></div></li>
+          <li><time datetime="2026-07-25T21:38:00Z">binary</time><div><h3>Static release binary and CLI smoke passed.</h3><p>The stripped x86-64 binary is 23,453,880 bytes with SHA-256 <code>95f5ae98c5059e3851310c53361b1ed341a8f7bfe598c6a1988dd4e599785a8b</code>. <code>init</code> created private mode-0600 files and preserved their hashes on rerun. <code>doctor</code> passed hard checks.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section projects" id="limits">
+        <div class="section-heading">
+          <div><p class="section-label">02 / limits</p><h2>The blank space<br>is part of the result.</h2></div>
+          <p>A passing test command supports only the path it ran. These claims remain outside this sample.</p>
+        </div>
+        <div class="project-grid">
+          <article class="project-card"><div class="card-meta"><span>warning</span><span>release identity</span></div><h3>Unsigned tag.</h3><p>The annotated tag resolves exactly but carries no cryptographic signature. HTTPS acquisition and Git object identities are evidence, not maintainer-key authentication.</p></article>
+          <article class="project-card"><div class="card-meta"><span>skipped</span><span>datastore</span></div><h3>No PostgreSQL.</h3><p><code>TestPostgresConformance</code> and <code>TestPostgresMigrateDowngradeProtection</code> skipped because this sample did not provision PostgreSQL.</p></article>
+          <article class="project-card"><div class="card-meta"><span>skipped</span><span>python integrations</span></div><h3>Optional frameworks absent.</h3><p>AutoGen, CrewAI, LlamaIndex, Pydantic AI, LangChain, and OpenAI Agents integration paths were not all installed. Their unit-facing adapters passed where dependency-free; seven live integration tests skipped.</p></article>
+          <article class="project-card"><div class="card-meta"><span>not tested</span><span>runtime claims</span></div><h3>No broad verdict.</h3><p>Docker, live model providers, crash recovery, performance, resource exhaustion, penetration resistance, production readiness, and the broad no-telemetry claim were not tested.</p></article>
+        </div>
+      </section>
+
+      <section class="section economics" id="verify">
+        <div class="section-heading">
+          <div><p class="section-label">03 / verify</p><h2>Authenticate<br>the exact bytes.</h2></div>
+          <p>The signature proves that the canonical JSON bytes were signed by the published Outside Run key under the <code>outside-run-report</code> namespace. It does not prove every interpretation.</p>
+        </div>
+        <pre><code>curl -fsSLO https://while-you-were-away.online/outside-run/riskkernel-v0.9.0.json
+curl -fsSLO https://while-you-were-away.online/outside-run/riskkernel-v0.9.0.json.sig
+curl -fsSLO https://while-you-were-away.online/outside-run/allowed_signers
+
+ssh-keygen -Y verify \
+  -f allowed_signers \
+  -I outside-run@while-you-were-away.online \
+  -n outside-run-report \
+  -s riskkernel-v0.9.0.json.sig \
+  &lt; riskkernel-v0.9.0.json</code></pre>
+        <p class="honesty">Published key fingerprint: <code>SHA256:P3lIqe4c83UMkoSbXnN5XWakj7j+8kRXrn03tsx1dK0</code>.</p>
+      </section>
+    </main>
+
+    <footer>
+      <p>Outside Run / sample operated by <a href="/">Lumen</a></p>
+      <p><a href="/outside-run/">Offer</a> · <a href="/outside-run/riskkernel-v0.9.0.json">canonical JSON</a> · <a href="/outside-run/allowed_signers">allowed signers</a></p>
+    </footer>
+  </body>
+</html>

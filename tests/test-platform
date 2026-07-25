@@ -12,6 +12,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 PUBLISH = PROJECT / "bin" / "publish-platform"
+OUTSIDE_RUN_VERIFY = PROJECT / "bin" / "outside-run-verify"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
 CURATOR = PROJECT / "bin" / "wywa-curator"
@@ -266,6 +267,8 @@ def main() -> None:
                     str(registry_export),
                     "--network-export-dir",
                     str(PROJECT / "platform" / "network"),
+                    "--outside-run-dir",
+                    str(PROJECT / "platform" / "outside-run"),
                     "--as-of",
                     instant,
                     "--phase",
@@ -299,10 +302,21 @@ def main() -> None:
         product_catalog = json.loads(
             (current / "products" / "index.json").read_text(encoding="utf-8")
         )
+        outside_run_page = (
+            current / "outside-run" / "index.html"
+        ).read_text(encoding="utf-8")
+        outside_run_sample = (
+            current / "outside-run" / "riskkernel-v0.9.0.html"
+        ).read_text(encoding="utf-8")
+        outside_run_report = json.loads(
+            (
+                current / "outside-run" / "riskkernel-v0.9.0.json"
+            ).read_text(encoding="utf-8")
+        )
         assert life["generated_at"] == INSTANTS[-1]
         assert life["phase"] == "active"
         assert life["metrics"]["observed_cycles"] == 3
-        assert life["metrics"]["active_projects"] == 1
+        assert life["metrics"]["active_projects"] == 2
         assert life["metrics"]["verified_agents"] == 1
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1
@@ -372,8 +386,47 @@ def main() -> None:
         assert "public operating system" in page
         assert "/products/" in page
         assert "/network/" in page
+        assert "/outside-run/" in page
         assert "Eight signed events" in page
         assert "$0.00" in page
+        assert "<script" not in outside_run_page.lower()
+        assert "<style" not in outside_run_page.lower()
+        assert "<script" not in outside_run_sample.lower()
+        assert "<style" not in outside_run_sample.lower()
+        assert "Reserve a $99 run" in outside_run_page
+        assert "Checkout status: manual" in outside_run_page
+        assert "Pass with limits" in outside_run_sample
+        assert outside_run_report["report_id"] == "riskkernel-v0.9.0-20260725"
+        assert outside_run_report["assessment"]["verdict"] == "pass_with_limits"
+        verified_outside_run = subprocess.run(
+            [
+                str(OUTSIDE_RUN_VERIFY),
+                str(current / "outside-run" / "riskkernel-v0.9.0.json"),
+                str(current / "outside-run" / "riskkernel-v0.9.0.json.sig"),
+                str(current / "outside-run" / "allowed_signers"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads(verified_outside_run.stdout)["ok"] is True
+        tampered_outside_run = root / "tampered-outside-run.json"
+        tampered_outside_run.write_bytes(
+            (
+                current / "outside-run" / "riskkernel-v0.9.0.json"
+            ).read_bytes().replace(b'"pass_with_limits"', b'"fail"', 1)
+        )
+        refused_tamper = subprocess.run(
+            [
+                str(OUTSIDE_RUN_VERIFY),
+                str(tampered_outside_run),
+                str(current / "outside-run" / "riskkernel-v0.9.0.json.sig"),
+                str(current / "outside-run" / "allowed_signers"),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert refused_tamper.returncode != 0
         assert len(life["activity_24h"]) == 24
         assert sum(row["count"] for row in life["activity_24h"]) == 3
         ET.parse(current / "feed.xml")
@@ -470,6 +523,7 @@ def main() -> None:
             current / "agents",
             current / "network",
             current / "network" / "events",
+            current / "outside-run",
             current / "products",
             current / "products" / "claims",
             current / "products" / "releases",
@@ -493,6 +547,11 @@ def main() -> None:
             current / "agents" / "audit.json",
             current / "network" / "index.html",
             current / "network" / "index.json",
+            current / "outside-run" / "allowed_signers",
+            current / "outside-run" / "index.html",
+            current / "outside-run" / "riskkernel-v0.9.0.html",
+            current / "outside-run" / "riskkernel-v0.9.0.json",
+            current / "outside-run" / "riskkernel-v0.9.0.json.sig",
             current / "products" / "index.html",
             current / "products" / "index.json",
             current / "products" / "claims" / "wywa.json",
@@ -884,6 +943,10 @@ def main() -> None:
         assert not (portable_site / "current" / "network").exists()
         assert (portable_site / "current" / "products" / "index.html").is_file()
         assert (portable_site / "current" / "products" / "index.json").is_file()
+        assert not (portable_site / "current" / "outside-run").exists()
+        assert '<a href="outside-run/index.html">Outside Run</a>' not in (
+            portable_site / "current" / "index.html"
+        ).read_text(encoding="utf-8")
         assert all(
             item["identity_claim"]["status"] == "unverified"
             for item in portable_life["products"]

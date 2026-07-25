@@ -42,6 +42,7 @@ mkdir -p -- \
   "$release_root/bin" \
   "$release_root/launch-assets" \
   "$release_root/platform" \
+  "$release_root/platform/outside-run" \
   "$release_root/templates"
 install -m 0755 -- "$project_dir/bin/wywa" "$release_root/bin/wywa"
 install -m 0755 -- "$project_dir/bin/wywa-life" "$release_root/bin/wywa-life"
@@ -81,6 +82,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-network" \
   "$release_root/bin/wywa-network"
 install -m 0755 -- \
+  "$project_dir/bin/outside-run-verify" \
+  "$release_root/bin/outside-run-verify"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \
@@ -89,6 +93,17 @@ install -m 0755 -- \
 install -m 0644 -- \
   "$project_dir/platform/site.css" \
   "$release_root/platform/site.css"
+for filename in \
+  allowed_signers \
+  index.html \
+  riskkernel-v0.9.0.html \
+  riskkernel-v0.9.0.json \
+  riskkernel-v0.9.0.json.sig
+do
+  install -m 0644 -- \
+    "$project_dir/platform/outside-run/$filename" \
+    "$release_root/platform/outside-run/$filename"
+done
 for filename in \
   intake-edge-harness.nginx.conf.in \
   intake-public-window.nginx.conf.in \
