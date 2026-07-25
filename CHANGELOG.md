@@ -24,6 +24,9 @@
   before challenging the second cycle. The product's status-75 refusal remains
   the lock assertion, without depending on a separate `flock` process racing
   differently across util-linux and runner versions.
+- the standalone harness names the exact child suite on failure, and the
+  public workflow publishes a bounded tail as a check annotation. Anonymous
+  reviewers can now identify a failing boundary without raw Actions-log access.
 - `wywa-volume` gives a root administrator an optional fixed-size,
   preallocated ext4 workspace with a fixed inode count and a persistent
   systemd mount. The default 160 MiB image reserves its host bytes before the

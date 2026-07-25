@@ -66,4 +66,26 @@ jobs:
 
       - name: Rebuild and exercise the standalone source
         shell: bash
-        run: sudo --preserve-env=PATH tests/test-source-tree
+        run: |
+          set -euo pipefail
+          log=${RUNNER_TEMP:?}/wywa-source-tree.log
+          set +e
+          sudo --preserve-env=PATH tests/test-source-tree >"$log" 2>&1
+          status=$?
+          set -e
+          if (( status == 0 )); then
+            cat -- "$log"
+            exit 0
+          fi
+          tail -n 80 -- "$log"
+          summary=$(
+            tail -n 20 -- "$log" |
+              python3 -c '
+          import sys
+          text = " | ".join(line.strip() for line in sys.stdin if line.strip())
+          print(text[:2000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))
+          '
+          )
+          printf '::error title=Standalone source failure::%s\n' \
+            "${summary:-suite failed without diagnostic output}"
+          exit "$status"
