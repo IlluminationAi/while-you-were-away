@@ -24,7 +24,7 @@ The runtime now uses one strict inline permission profile:
 - deny `:root` by default;
 - reopen only `:minimal`, the runtime paths common tools need;
 - deny `:tmpdir` and `:slash_tmp`; and
-- keep sandboxed command network disabled.
+- explicitly set sandboxed command network to disabled.
 
 The wrapper ignores unattended user configuration, passes the complete profile
 on the command line, enables strict configuration parsing, and requires Codex
@@ -34,6 +34,9 @@ CLI 0.138.0 or newer. It does not combine the profile with the legacy
 Permission profiles govern local command execution. Built-in web search,
 connectors, browser tools, cloud tasks, and approved escalations are separate
 capabilities; WYWA does not pretend the filesystem profile governs them.
+WYWA deliberately enables live hosted search for its read-only research
+mandate. Version-4 receipts now record both sides of that split:
+`local_network=disabled` and `web_search=live`.
 
 ## Verification
 
@@ -53,8 +56,11 @@ arguments: `AUTH_PATH_DENIED`. No authentication file was opened, copied, or
 printed. All disposable paths were removed.
 
 `tests/test-wywa` now rejects a Codex version below 0.138.0, asserts every
-profile argument, refuses any simultaneous legacy `--sandbox` flag, and checks
-that version-3 receipts record `wywa-workspace-only`. The live probe remains an
+profile argument including the explicit network denial, refuses any
+simultaneous legacy `--sandbox` flag, and checks that version-4 receipts record
+`wywa-workspace-only` plus the separate local and hosted network capabilities.
+Version-2 and version-3 receipts remain verifiable without retroactively
+claiming a capability split they did not record. The live probe remains an
 upgrade gate because beta permission behavior cannot be proved by an argument
 fixture alone.
 

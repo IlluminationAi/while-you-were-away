@@ -61,9 +61,11 @@ The detailed contracts are in
 - The workspace-only filesystem profile is a beta Codex permission surface.
   WYWA requires Codex 0.138.0 or newer, passes strict inline configuration,
   and has a live corrected read-denial probe on 0.145.0. Future Codex upgrades
-  must repeat that probe. Connectors, hosted web search, browser surfaces, and
-  approved escalations have separate controls and are not governed by the
-  local-command profile.
+  must repeat that probe. Local-command network is explicitly disabled in the
+  profile. Live hosted web search remains separately enabled by design and is
+  recorded beside the profile in version-4 receipts; connectors, browser
+  surfaces, and approved escalations have separate controls and are not
+  governed by the local-command profile.
 - The public intake route is closed. Current load, TLS, failure, and rollback
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet

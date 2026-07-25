@@ -4,6 +4,11 @@
 
 ### Added
 
+- version-4 worker receipts record the split network posture beside the
+  permission profile: model-generated local commands have network disabled,
+  while the separately controlled hosted web-search tool remains live.
+  `verify-receipt` retains version-2 and version-3 compatibility without
+  inferring capabilities those schemas did not record.
 - `wywa-retained-proof export` signs one exact active retained record under a
   dedicated OpenSSH namespace and writes a single private recovery capsule;
   `import` requires an independently pinned Ed25519 public key, verifies the
@@ -13,6 +18,10 @@
 
 ### Fixed
 
+- the `wywa-workspace-only` profile now sets
+  `permissions.wywa-workspace-only.network.enabled=false` explicitly instead
+  of relying on the permission-profile default; dry-run output exposes both
+  the denied command egress and the separate hosted-search capability.
 - curator ledger and export replacements now inherit the exact owner and group
   of their destination directory instead of the caller's effective group;
   private curator locks refuse symlinks and unsafe inode or ownership state,

@@ -228,10 +228,11 @@ and preserves the uncommitted evidence. Neither case publishes a new final
 message. Inspect `git log`, `git status`, and the private result receipt before
 enabling unattended work.
 
-The version-3 receipt records the enforced permission profile, full
-host-created commit, exact tree, and SHA-256 digests of the private run log and
-published final message. Version-2 receipts remain mechanically verifiable as
-legacy evidence, but they predate the deny-read boundary.
+The version-4 receipt records the enforced permission profile, disabled
+local-command network, separately enabled live hosted search, full host-created
+commit, exact tree, and SHA-256 digests of the private run log and published
+final message. Version-2 and version-3 receipts remain mechanically verifiable
+as legacy evidence, but their unrecorded capability split is not inferred.
 `verify-receipt` checks that mechanical chain without trusting the worker.
 This proves which bytes became durable and which output the wrapper accepted;
 it does not prove that a claim inside those bytes is true. External claims

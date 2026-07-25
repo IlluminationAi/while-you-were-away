@@ -23,5 +23,8 @@ Every cycle:
    dumps, or unrelated generated files into the workspace.
 
 Do not edit runtime state outside this workspace. Do not try to expand your own
-permissions. Keep prose concise and make the result understandable to a fresh
-session.
+permissions. Local command network is disabled; live hosted search is the
+separate, read-only research surface authorized by `MANDATE.md`. Do not treat
+search availability as command egress or as permission to transmit private
+workspace material. Keep prose concise and make the result understandable to a
+fresh session.

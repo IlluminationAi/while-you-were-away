@@ -204,6 +204,12 @@ grep -q '^permissions: wywa-workspace-only$' "$test_root/dry-run-output" ||
 grep -q '^filesystem: workspace writable; other paths unreadable' \
   "$test_root/dry-run-output" ||
   fail "dry run omitted the deny-read filesystem boundary"
+grep -Fqx 'local command network: disabled' "$test_root/dry-run-output" ||
+  fail "dry run omitted the local command network boundary"
+grep -Fqx \
+  'hosted web search: live; separate from the local command sandbox' \
+  "$test_root/dry-run-output" ||
+  fail "dry run omitted the separate hosted web search capability"
 grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
   fail "dry run omitted the runtime bound"
 
@@ -228,6 +234,12 @@ grep -Fqx \
   'permissions.wywa-workspace-only.filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny"}' \
   "$HOME/fake/arguments" ||
   fail "run did not deny reads outside the workspace"
+grep -Fqx \
+  'permissions.wywa-workspace-only.network.enabled=false' \
+  "$HOME/fake/arguments" ||
+  fail "run did not explicitly disable local command network access"
+grep -Fxq -- '--search' "$HOME/fake/arguments" ||
+  fail "run omitted the declared hosted web search capability"
 if grep -q '^--sandbox$' "$HOME/fake/arguments"; then
   fail "run mixed the legacy sandbox with the permission profile"
 fi
@@ -259,8 +271,10 @@ grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
   fail "successful receipt omitted the host checkpoint"
 receipt_commit=$(git -C "$workspace" rev-parse HEAD)
 receipt_tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
-grep -Fq "receipt=3" "$runtime_dir/last-run" ||
+grep -Fq "receipt=4" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its schema version"
+grep -Fq "local_network=disabled web_search=live" "$runtime_dir/last-run" ||
+  fail "successful receipt omitted its split network capabilities"
 grep -Fq "commit=$receipt_commit" "$runtime_dir/last-run" ||
   fail "successful receipt omitted the exact commit"
 grep -Fq "tree=$receipt_tree" "$runtime_dir/last-run" ||
@@ -276,6 +290,31 @@ grep -Fq "receipt: verified commit=${receipt_commit:0:12}" \
   "$test_root/verify-receipt-output" ||
   fail "verify-receipt did not verify the successful checkpoint"
 
+cp -- "$runtime_dir/last-run" "$test_root/version-4-capabilities.saved"
+sed \
+  's/local_network=disabled/local_network=enabled/' \
+  "$test_root/version-4-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'unexpected local network capability' "$test_root/stderr" ||
+  fail "verify-receipt accepted a changed local network capability"
+sed \
+  's/web_search=live/web_search=disabled/' \
+  "$test_root/version-4-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'unexpected hosted web search capability' "$test_root/stderr" ||
+  fail "verify-receipt accepted a changed hosted web search capability"
+mv -- "$test_root/version-4-capabilities.saved" "$runtime_dir/last-run"
+
+cp -- "$runtime_dir/last-run" "$test_root/version-4-receipt.saved"
+sed \
+  -e 's/receipt=4 /receipt=3 /' \
+  -e 's/ local_network=disabled web_search=live//' \
+  "$test_root/version-4-receipt.saved" >"$runtime_dir/last-run"
+"$wywa" verify-receipt "$workspace" >"$test_root/version-3-receipt-output"
+grep -Fq 'local_network=unrecorded web_search=unrecorded' \
+  "$test_root/version-3-receipt-output" ||
+  fail "verify-receipt invented capabilities for a version-3 receipt"
+
 cp -- "$runtime_dir/last-run" "$test_root/version-3-receipt.saved"
 sed \
   's/receipt=3 status=0 permissions=wywa-workspace-only/receipt=2 status=0 sandbox=workspace-write/' \
@@ -284,7 +323,7 @@ sed \
 grep -Fq 'permissions=legacy-workspace-write' \
   "$test_root/legacy-receipt-output" ||
   fail "verify-receipt did not preserve version-2 compatibility"
-mv -- "$test_root/version-3-receipt.saved" "$runtime_dir/last-run"
+mv -- "$test_root/version-4-receipt.saved" "$runtime_dir/last-run"
 
 cp -- "$runtime_dir/last-message.txt" "$test_root/last-message.saved"
 printf '%s\n' "tampered result" >"$runtime_dir/last-message.txt"
@@ -294,7 +333,7 @@ grep -q 'final-message digest does not match' "$test_root/stderr" ||
 mv -- "$test_root/last-message.saved" "$runtime_dir/last-message.txt"
 
 "$wywa" status "$workspace" >"$test_root/status-output"
-grep -q '^last run: .*status=0 permissions=wywa-workspace-only' \
+grep -q '^last run: .*status=0 permissions=wywa-workspace-only local_network=disabled web_search=live' \
   "$test_root/status-output" ||
   fail "status omitted the successful receipt"
 grep -q '^first verified result$' "$test_root/status-output" ||
@@ -303,7 +342,8 @@ grep -q '^first verified result$' "$test_root/status-output" ||
 printf '%s\n' fail >"$HOME/fake/mode"
 printf '%s\n' 23 >"$HOME/fake/exit-status"
 expect_status 23 "$wywa" run "$workspace" --max-runtime 2m
-grep -q 'status=23 permissions=wywa-workspace-only' "$runtime_dir/last-run" ||
+grep -q 'status=23 permissions=wywa-workspace-only local_network=disabled web_search=live' \
+  "$runtime_dir/last-run" ||
   fail "failed receipt did not preserve the child status"
 expect_status 4 "$wywa" verify-receipt "$workspace"
 grep -q 'last run was not successful' "$test_root/stderr" ||
@@ -320,7 +360,8 @@ grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
 rm -f -- "$HOME/fake/exit-status"
 printf '%s\n' sleep >"$HOME/fake/mode"
 expect_status 124 "$wywa" run "$workspace" --max-runtime 1s
-grep -q 'status=124 permissions=wywa-workspace-only' "$runtime_dir/last-run" ||
+grep -q 'status=124 permissions=wywa-workspace-only local_network=disabled web_search=live' \
+  "$runtime_dir/last-run" ||
   fail "timeout receipt is missing"
 grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "timeout replaced the previous canonical message"
