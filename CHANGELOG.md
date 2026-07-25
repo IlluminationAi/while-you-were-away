@@ -4,6 +4,13 @@
 
 ### Added
 
+- `wywa-edge-probe` turns the first window's provider-specific shell into one
+  dependency-free Python client for unrelated execution providers. It refuses
+  redirects, mismatched or expired envelope pairs, unexpected brake responses,
+  and responses above 64 KiB; emits one path-free JSON result; and states that
+  its provider label is not provider attestation. A disposable TLS suite
+  covers the pass path, redirect refusal, response drift, wrong-lane input,
+  and non-HTTPS refusal.
 - an explicitly attended-only public-intake nginx template keeps GET/HEAD
   service plus two exact POST lanes, separate per-source request and
   connection budgets, complete body buffering, identity-header stripping, and

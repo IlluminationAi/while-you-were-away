@@ -117,6 +117,7 @@ tests/test-intake-queue
 tests/test-intake-gateway
 tests/test-intake-edge
 tests/test-curator
+tests/test-edge-probe
 ```
 
 The five suites use disposable keys, origins, curator and queue state, ports,

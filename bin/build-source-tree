@@ -70,6 +70,7 @@ for filename in \
   wywa-life-drill \
   wywa-public \
   wywa-curator \
+  wywa-edge-probe \
   wywa-intake \
   wywa-intake-gateway \
   wywa-intake-queue \
@@ -183,6 +184,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-retained-proof" \
   "$source_root/tests/test-retained-proof"
+install -m 0755 -- \
+  "$project_dir/tests/test-edge-probe" \
+  "$source_root/tests/test-edge-probe"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

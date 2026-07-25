@@ -1,0 +1,257 @@
+#!/usr/bin/env python3
+"""Exercise the provider-neutral public-edge probe against disposable TLS."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import ssl
+import subprocess
+import tempfile
+import threading
+from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+
+REPO = Path(__file__).resolve().parent.parent
+PROBE = REPO / "bin" / "wywa-edge-probe"
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    scenario = "good"
+
+    def log_message(self, _format: str, *args: object) -> None:
+        del args
+
+    def send_record(
+        self,
+        status: int,
+        record: dict[str, Any],
+        *,
+        location: str | None = None,
+    ) -> None:
+        body = json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        if location is not None:
+            self.send_header("Location", location)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        self.close_connection = True
+
+    def do_GET(self) -> None:
+        if self.path == "/life.json":
+            if self.scenario == "redirect":
+                self.send_record(302, {"redirected": True}, location="/redirected")
+            else:
+                self.send_record(200, {"ok": True})
+            return
+        if self.path == "/redirected":
+            self.send_record(200, {"ok": True})
+            return
+        if self.path == "/v1/intake/apply":
+            self.send_record(405, {"accepted": False, "error": "method-not-allowed"})
+            return
+        self.send_record(404, {"accepted": False, "error": "route-not-found"})
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length)
+        if self.path == "/v1/intake/apply":
+            if length > 32768:
+                self.send_record(413, {"accepted": False, "error": "body-too-large"})
+                return
+            try:
+                record = json.loads(body)
+            except json.JSONDecodeError:
+                self.send_record(400, {"accepted": False, "error": "invalid-envelope"})
+                return
+            if record["request"]["action"] != "apply":
+                self.send_record(
+                    400,
+                    {"accepted": False, "error": "signed-action-does-not-match-lane"},
+                )
+                return
+            error = (
+                "wrong-application-response"
+                if self.scenario == "bad-apply"
+                else "applications-disabled"
+            )
+            self.send_record(503, {"accepted": False, "error": error})
+            return
+        if self.path == "/v1/intake/withdraw":
+            record = json.loads(body)
+            self.send_record(
+                202,
+                {
+                    "accepted": True,
+                    "action": record["request"]["action"],
+                    "request_id": record["request"]["request_id"],
+                },
+            )
+            return
+        self.send_record(404, {"accepted": False, "error": "route-not-found"})
+
+
+def envelope(action: str, origin: str, request_id: str) -> str:
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    record = {
+        "schema_version": 1,
+        "request": {
+            "schema_version": 1,
+            "request_id": request_id,
+            "action": action,
+            "agent_id": "test-agent",
+            "origin": origin + "/",
+            "manifest_sha256": "a" * 64,
+            "sequence": 2,
+            "issued_at": now.isoformat().replace("+00:00", "Z"),
+            "expires_at": (now + timedelta(minutes=10))
+            .isoformat()
+            .replace("+00:00", "Z"),
+        },
+        "signature_b64": base64.b64encode(b"fixture-signature").decode(),
+    }
+    raw = json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+    return base64.b64encode(raw).decode()
+
+
+def run_probe(
+    origin: str,
+    cert: Path,
+    *,
+    scenario: str = "good",
+    apply_action: str = "apply",
+) -> subprocess.CompletedProcess[str]:
+    Handler.scenario = scenario
+    environment = {
+        **os.environ,
+        "WYWA_EDGE_ORIGIN": origin,
+        "WYWA_EDGE_PROVIDER": "disposable-tls",
+        "WYWA_EDGE_EXECUTION_ID": "fixture-1",
+        "WYWA_EDGE_APPLY_ENVELOPE_B64": envelope(
+            apply_action, origin, "1" * 32
+        ),
+        "WYWA_EDGE_WITHDRAW_ENVELOPE_B64": envelope(
+            "withdraw", origin, "2" * 32
+        ),
+    }
+    return subprocess.run(
+        [str(PROBE), "--ca-file", str(cert), "--timeout", "5"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=20,
+    )
+
+
+def main() -> None:
+    compile(PROBE.read_text(encoding="utf-8"), str(PROBE), "exec")
+    with tempfile.TemporaryDirectory(prefix="wywa-edge-probe-") as temporary:
+        root = Path(temporary)
+        key = root / "key.pem"
+        cert = root / "cert.pem"
+        subprocess.run(
+            [
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-nodes",
+                "-keyout",
+                str(key),
+                "-out",
+                str(cert),
+                "-subj",
+                "/CN=localhost",
+                "-addext",
+                "subjectAltName=DNS:localhost",
+                "-days",
+                "1",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, key)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            origin = f"https://localhost:{server.server_port}"
+            passed = run_probe(origin, cert)
+            assert passed.returncode == 0, passed.stderr
+            result = json.loads(passed.stdout)
+            assert result["result"] == "pass"
+            assert result["provider"] == "disposable-tls"
+            assert result["execution_id"] == "fixture-1"
+            assert result["statuses"] == {
+                "apply": 503,
+                "malformed": 400,
+                "oversized": 413,
+                "static": 200,
+                "withdraw": 202,
+                "wrong_method": 405,
+            }
+            assert result["claims"] == {
+                "client_identity_retained_by_probe": False,
+                "provider_identity_proven_by_output_alone": False,
+            }
+
+            redirected = run_probe(origin, cert, scenario="redirect")
+            assert redirected.returncode == 2
+            assert "returned HTTP 302" in redirected.stderr
+            assert redirected.stdout == ""
+
+            bad_apply = run_probe(origin, cert, scenario="bad-apply")
+            assert bad_apply.returncode == 2
+            assert "application brake returned an unexpected response" in (
+                bad_apply.stderr
+            )
+
+            wrong_lane = run_probe(origin, cert, apply_action="withdraw")
+            assert wrong_lane.returncode == 2
+            assert "apply envelope action does not match its lane" in (
+                wrong_lane.stderr
+            )
+
+            non_https = subprocess.run(
+                [
+                    str(PROBE),
+                    "--origin",
+                    "http://localhost",
+                    "--provider",
+                    "fixture",
+                    "--apply-envelope-b64",
+                    "e30=",
+                    "--withdraw-envelope-b64",
+                    "e30=",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            assert non_https.returncode == 2
+            assert "credential-free HTTPS origin" in non_https.stderr
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    print("PASS: provider-neutral WYWA public-edge probe")
+
+
+if __name__ == "__main__":
+    main()

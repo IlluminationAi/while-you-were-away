@@ -1,0 +1,365 @@
+#!/usr/bin/env python3
+"""Exercise a temporarily exposed WYWA split intake edge from another host."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import binascii
+import json
+import os
+import re
+import ssl
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+MAX_ENVELOPE_BYTES = 64 * 1024
+MAX_RESPONSE_BYTES = 64 * 1024
+DEFAULT_TIMEOUT_SECONDS = 15.0
+PROVIDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+class ProbeError(Exception):
+    """A bounded probe input or response failed review."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Expose redirects as responses instead of silently changing the target."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        del req, fp, code, msg, headers, newurl
+        return None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Verify one bounded public WYWA intake window without retaining "
+            "client identity or signed request bytes."
+        )
+    )
+    parser.add_argument(
+        "--origin",
+        default=os.environ.get("WYWA_EDGE_ORIGIN"),
+        help="public HTTPS origin (or WYWA_EDGE_ORIGIN)",
+    )
+    parser.add_argument(
+        "--apply-envelope-b64",
+        default=os.environ.get("WYWA_EDGE_APPLY_ENVELOPE_B64"),
+        help="base64 signed apply envelope (or WYWA_EDGE_APPLY_ENVELOPE_B64)",
+    )
+    parser.add_argument(
+        "--withdraw-envelope-b64",
+        default=os.environ.get("WYWA_EDGE_WITHDRAW_ENVELOPE_B64"),
+        help=(
+            "base64 signed withdrawal envelope "
+            "(or WYWA_EDGE_WITHDRAW_ENVELOPE_B64)"
+        ),
+    )
+    parser.add_argument(
+        "--provider",
+        default=os.environ.get("WYWA_EDGE_PROVIDER"),
+        help="short execution-provider label (or WYWA_EDGE_PROVIDER)",
+    )
+    parser.add_argument(
+        "--execution-id",
+        default=(
+            os.environ.get("WYWA_EDGE_EXECUTION_ID")
+            or os.environ.get("JOB_ID")
+            or os.environ.get("GITHUB_RUN_ID")
+        ),
+        help="optional provider execution identifier",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="per-request timeout in seconds (default: 15)",
+    )
+    parser.add_argument(
+        "--ca-file",
+        help="optional private CA file for a disposable test fixture",
+    )
+    return parser.parse_args()
+
+
+def normalized_origin(value: str | None) -> str:
+    if not value:
+        raise ProbeError("origin is required")
+    parsed = urllib.parse.urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise ProbeError("origin must be one credential-free HTTPS origin")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ProbeError("origin has an invalid port") from error
+    host = parsed.hostname
+    assert host is not None
+    if ":" in host:
+        host = f"[{host}]"
+    authority = host if port is None else f"{host}:{port}"
+    return f"https://{authority}"
+
+
+def decode_envelope(encoded: str | None, expected_action: str) -> dict[str, Any]:
+    if not encoded:
+        raise ProbeError(f"{expected_action} envelope is required")
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise ProbeError(f"{expected_action} envelope is not valid base64") from error
+    if not 2 <= len(raw) <= MAX_ENVELOPE_BYTES:
+        raise ProbeError(f"{expected_action} envelope has an invalid size")
+    try:
+        record = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProbeError(f"{expected_action} envelope is not valid JSON") from error
+    if not isinstance(record, dict) or record.get("schema_version") != 1:
+        raise ProbeError(f"{expected_action} envelope schema is unsupported")
+    request = record.get("request")
+    if not isinstance(request, dict) or request.get("action") != expected_action:
+        raise ProbeError(f"{expected_action} envelope action does not match its lane")
+    if not isinstance(record.get("signature_b64"), str):
+        raise ProbeError(f"{expected_action} envelope has no detached signature")
+    return record
+
+
+def parse_utc_timestamp(value: object, label: str) -> datetime:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ProbeError(f"{label} must be a UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise ProbeError(f"{label} must be a UTC timestamp") from error
+    return parsed.astimezone(timezone.utc)
+
+
+def validate_envelope_pair(
+    apply: dict[str, Any],
+    withdraw: dict[str, Any],
+    origin: str,
+) -> None:
+    apply_request = apply["request"]
+    withdraw_request = withdraw["request"]
+    assert isinstance(apply_request, dict)
+    assert isinstance(withdraw_request, dict)
+    expected_origin = origin + "/"
+    if (
+        apply_request.get("origin") != expected_origin
+        or withdraw_request.get("origin") != expected_origin
+    ):
+        raise ProbeError("signed envelope origin does not match the probe origin")
+    for key in ("agent_id", "origin", "manifest_sha256", "sequence"):
+        if apply_request.get(key) != withdraw_request.get(key):
+            raise ProbeError(f"signed envelope pair disagrees on {key}")
+    if apply_request.get("request_id") == withdraw_request.get("request_id"):
+        raise ProbeError("apply and withdrawal must use different request IDs")
+    now = datetime.now(timezone.utc)
+    for action, request in (("apply", apply_request), ("withdraw", withdraw_request)):
+        issued = parse_utc_timestamp(request.get("issued_at"), f"{action} issued_at")
+        expires = parse_utc_timestamp(request.get("expires_at"), f"{action} expires_at")
+        if issued > now.replace(microsecond=0):
+            raise ProbeError(f"{action} envelope is issued in the future")
+        if expires <= now:
+            raise ProbeError(f"{action} envelope has expired")
+        if expires <= issued:
+            raise ProbeError(f"{action} envelope validity interval is invalid")
+
+
+def request_once(
+    opener: urllib.request.OpenerDirector,
+    url: str,
+    *,
+    timeout: float,
+    method: str = "GET",
+    body: bytes | None = None,
+) -> tuple[int, bytes]:
+    headers = {
+        "Accept": "application/json",
+        "Connection": "close",
+        "User-Agent": "WYWA-edge-probe/1",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method,
+    )
+    try:
+        response = opener.open(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        response = error
+    except (OSError, urllib.error.URLError) as error:
+        raise ProbeError(f"request failed for {urllib.parse.urlsplit(url).path}") from error
+    with response:
+        payload = response.read(MAX_RESPONSE_BYTES + 1)
+        status = int(response.status)
+    if len(payload) > MAX_RESPONSE_BYTES:
+        raise ProbeError("edge response crossed the 64 KiB probe limit")
+    return status, payload
+
+
+def require_status(label: str, actual: int, expected: set[int]) -> None:
+    if actual not in expected:
+        wanted = ",".join(str(status) for status in sorted(expected))
+        raise ProbeError(f"{label} returned HTTP {actual}, expected {wanted}")
+
+
+def require_json(payload: bytes, label: str) -> dict[str, Any]:
+    try:
+        record = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProbeError(f"{label} returned invalid JSON") from error
+    if not isinstance(record, dict):
+        raise ProbeError(f"{label} returned a non-object JSON value")
+    return record
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        origin = normalized_origin(args.origin)
+        if not args.provider or not PROVIDER_RE.fullmatch(args.provider):
+            raise ProbeError("provider must be a short ASCII label")
+        if args.execution_id is not None and (
+            not isinstance(args.execution_id, str)
+            or len(args.execution_id) > 128
+            or any(ord(character) < 0x20 for character in args.execution_id)
+        ):
+            raise ProbeError("execution ID is invalid")
+        if not 1.0 <= args.timeout <= 60.0:
+            raise ProbeError("timeout must be between 1 and 60 seconds")
+        apply = decode_envelope(args.apply_envelope_b64, "apply")
+        withdraw = decode_envelope(args.withdraw_envelope_b64, "withdraw")
+        validate_envelope_pair(apply, withdraw, origin)
+        apply_bytes = json.dumps(
+            apply, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8") + b"\n"
+        withdraw_bytes = json.dumps(
+            withdraw, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8") + b"\n"
+
+        if args.ca_file is not None:
+            ca_path = Path(args.ca_file)
+            if not ca_path.is_file() or ca_path.is_symlink():
+                raise ProbeError("CA file must be a regular nonsymlink file")
+        try:
+            context = ssl.create_default_context(cafile=args.ca_file)
+        except (OSError, ssl.SSLError) as error:
+            raise ProbeError("CA file could not be loaded") from error
+        opener = urllib.request.build_opener(
+            NoRedirect(),
+            urllib.request.HTTPSHandler(context=context),
+        )
+        started_at = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+        statuses: dict[str, int] = {}
+        statuses["static"], _ = request_once(
+            opener,
+            f"{origin}/life.json",
+            timeout=args.timeout,
+        )
+        require_status("static route", statuses["static"], {200})
+        statuses["wrong_method"], _ = request_once(
+            opener,
+            f"{origin}/v1/intake/apply",
+            timeout=args.timeout,
+        )
+        require_status("wrong method", statuses["wrong_method"], {405})
+        statuses["malformed"], _ = request_once(
+            opener,
+            f"{origin}/v1/intake/apply",
+            timeout=args.timeout,
+            method="POST",
+            body=b'{"schema_version":1',
+        )
+        require_status("malformed body", statuses["malformed"], {400})
+        statuses["oversized"], _ = request_once(
+            opener,
+            f"{origin}/v1/intake/apply",
+            timeout=args.timeout,
+            method="POST",
+            body=b"x" * 32769,
+        )
+        require_status("oversized body", statuses["oversized"], {413})
+        statuses["apply"], apply_response = request_once(
+            opener,
+            f"{origin}/v1/intake/apply",
+            timeout=args.timeout,
+            method="POST",
+            body=apply_bytes,
+        )
+        require_status("signed application", statuses["apply"], {503})
+        apply_record = require_json(apply_response, "signed application")
+        if apply_record != {
+            "accepted": False,
+            "error": "applications-disabled",
+        }:
+            raise ProbeError("application brake returned an unexpected response")
+        statuses["withdraw"], withdraw_response = request_once(
+            opener,
+            f"{origin}/v1/intake/withdraw",
+            timeout=args.timeout,
+            method="POST",
+            body=withdraw_bytes,
+        )
+        require_status("signed withdrawal", statuses["withdraw"], {202, 409})
+        withdraw_record = require_json(withdraw_response, "signed withdrawal")
+        if statuses["withdraw"] == 202 and (
+            withdraw_record.get("accepted") is not True
+            or withdraw_record.get("action") != "withdraw"
+        ):
+            raise ProbeError("accepted withdrawal returned an unexpected response")
+        if statuses["withdraw"] == 409 and withdraw_record.get("accepted") is not False:
+            raise ProbeError("withdrawal replay returned an unexpected response")
+        finished_at = datetime.now(timezone.utc).isoformat(
+            timespec="seconds"
+        ).replace("+00:00", "Z")
+        result = {
+            "schema_version": 1,
+            "result": "pass",
+            "provider": args.provider,
+            "execution_id": args.execution_id,
+            "origin": origin + "/",
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "statuses": statuses,
+            "claims": {
+                "client_identity_retained_by_probe": False,
+                "provider_identity_proven_by_output_alone": False,
+            },
+        }
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
+    except ProbeError as error:
+        print(f"wywa-edge-probe: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

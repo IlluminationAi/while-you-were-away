@@ -133,11 +133,13 @@ command -v debootstrap >/dev/null || fail "debootstrap is required"
   fail "source project is missing or unsafe"
 for required in \
   bin/wywa \
+  bin/wywa-edge-probe \
   bin/wywa-life \
   bin/publish-platform \
   tests/test-wywa \
   tests/test-life \
   tests/test-public \
+  tests/test-edge-probe \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree

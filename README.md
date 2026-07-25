@@ -71,6 +71,7 @@ tests/test-intake-edge
 tests/test-intake-gateway
 tests/test-intake-queue
 tests/test-retained-proof
+tests/test-edge-probe
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -558,6 +559,7 @@ wywa-intake-queue submit --state PRIVATE_DIRECTORY
 wywa-intake-queue next --state PRIVATE_DIRECTORY [--output DIRECTORY]
 wywa-intake-queue finish --state PRIVATE_DIRECTORY
                          --request-id ID --result reviewed|rejected|withdrawn
+wywa-edge-probe --origin ORIGIN --provider PROVIDER
 wywa-retained-proof export --origin ORIGIN --directory PRIVATE_DIRECTORY
                            --key IDENTITY_KEY --output CAPSULE
 wywa-retained-proof import --origin ORIGIN --directory PRIVATE_DIRECTORY

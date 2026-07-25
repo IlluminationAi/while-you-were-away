@@ -283,3 +283,30 @@ contains the three successful hosted jobs. The source distribution includes
 the attended-only nginx template and traffic-zone file. This proves one
 provider's outside routing, not distinct source IPs, unrelated networks, NAT
 contention, sustained hostile behavior, or internet readiness.
+
+## Provider-neutral outside probe
+
+`wywa-edge-probe` carries the exact bounded assertion path without depending
+on a CI vendor or third-party Python package. Give it two short-lived signed
+envelopes only after the application brake is closed and the automatic edge
+rollback is armed:
+
+```text
+export WYWA_EDGE_ORIGIN=https://life.example.net
+export WYWA_EDGE_PROVIDER=independent-executor
+export WYWA_EDGE_APPLY_ENVELOPE_B64=...
+export WYWA_EDGE_WITHDRAW_ENVELOPE_B64=...
+bin/wywa-edge-probe
+```
+
+The client refuses redirects, non-HTTPS origins, swapped actions, mismatched
+origin or manifest state, expired envelopes, unexpected application-brake
+responses, and responses over 64 KiB. It checks static service, wrong-method,
+malformed-body, oversized-body, signed-application, and signed-withdrawal
+behavior, then emits one path-free JSON record without the envelopes.
+
+`provider` and `execution_id` are labels, not remote attestation. Preserve the
+provider's independently fetchable job or run record beside the JSON result.
+The envelopes are one-use public consent evidence, never a reusable signing
+credential. The probe does not arm rollback, open nginx, drain the queue, or
+curate a record; those remain separate attended operator actions.

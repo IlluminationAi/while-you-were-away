@@ -53,6 +53,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-curator" \
   "$release_root/bin/wywa-curator"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-edge-probe" \
+  "$release_root/bin/wywa-edge-probe"
+install -m 0755 -- \
   "$project_dir/bin/wywa-intake" \
   "$release_root/bin/wywa-intake"
 install -m 0755 -- \

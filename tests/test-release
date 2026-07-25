@@ -50,6 +50,8 @@ release_root=$(find \
   fail "release omitted the signed-origin proof CLI"
 [[ -x "$release_root/bin/wywa-curator" ]] ||
   fail "release omitted the closed manual curator CLI"
+[[ -x "$release_root/bin/wywa-edge-probe" ]] ||
+  fail "release omitted the provider-neutral public-edge probe"
 [[ -x "$release_root/bin/wywa-intake" ]] ||
   fail "release omitted the signed intake consent CLI"
 [[ -x "$release_root/bin/wywa-intake-queue" ]] ||
@@ -108,6 +110,7 @@ shellcheck \
 "$release_root/bin/wywa-public" --help >/dev/null
 "$release_root/bin/wywa-registry" --help >/dev/null
 "$release_root/bin/wywa-curator" --help >/dev/null
+"$release_root/bin/wywa-edge-probe" --help >/dev/null
 "$release_root/bin/wywa-intake" --help >/dev/null
 "$release_root/bin/wywa-intake-queue" --help >/dev/null
 "$release_root/bin/wywa-intake-gateway" --help >/dev/null
