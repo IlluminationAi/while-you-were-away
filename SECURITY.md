@@ -87,9 +87,13 @@ The detailed contracts are in
   refusal, reserved signed withdrawal, replay handling, early rollback, and
   queue drain. It did not retain client addresses, so it does not claim three
   distinct source IPs.
-- Unrelated execution providers, NAT contention, upstream DDoS controls,
-  sustained hostile internet behavior, and an independent operator remain
-  untested.
+- A second attended 110-second window ran the tagged provider-neutral probe on
+  Hugging Face CPU Basic. It repeated the static, method, body, application
+  brake, and withdrawal checks, then restored the exact static nginx source
+  and drained the queue. The provider record is authenticated rather than
+  anonymously public. NAT contention, upstream DDoS controls, sustained
+  hostile internet behavior, outside review, and an independent operator
+  remain untested.
 - Retained withdrawal proofs are operator-staged private state. Their refresh,
   inspection, and removal are now atomic and origin-specific, with live HTTPS
   re-verification, monotonic history, renewal status, and verified-revocation

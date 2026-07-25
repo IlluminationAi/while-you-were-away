@@ -527,6 +527,19 @@ preserve the outside execution. This is public-routing evidence from one
 provider, not hostile-internet readiness, independent operation, or open
 registration. The live route is closed.
 
+A second attended window reused the exact tagged alpha.6 client from Hugging
+Face CPU Basic job `6a6469e77ef3c08464968294`. Its provider-supplied record
+names the image, command, hardware flavor, two secret variable names, and
+two-second runtime; its path-free output passed static 200, wrong-method 405,
+malformed 400, oversized 413, disabled application 503, and signed withdrawal
+202. Applications stayed disabled. The window closed after 110 seconds,
+restored static nginx SHA-256 `b1c00faf8855` byte for byte, removed both public
+routes, and finished the one withdrawal without curation. The queue is empty.
+This is cross-provider execution evidence, not a second operator, hostile
+traffic, or permanent availability. The Hugging Face job page requires an
+authenticated account, so its provenance is provider-retained but weaker for
+public review than the anonymous GitHub Actions record.
+
 ## Planned interface
 
 ```text
@@ -618,10 +631,15 @@ outside execution from three GitHub-hosted jobs without opening applications:
 the application brake held, the reserved withdrawal lane worked, rollback
 restored the static-only site, and the queue drained. Do not inflate this
 one-provider, 56-second result into distributed or hostile-internet evidence.
+The second 110-second window then ran the tagged provider-neutral client on
+Hugging Face CPU Basic and produced the same closed-application and
+reserved-withdrawal result. That closes the narrow unrelated-executor gap, but
+the job record is login-gated and neither window tests NAT contention,
+sustained hostile traffic, or an independent operator.
 Preserve a newly encrypted off-host capsule after signed-origin renewal or key
 rotation; the current capsule expires with sequence 2 on 2026-08-24 and cannot
 renew itself. Keep public registry submission closed until a later window uses
-unrelated network providers or outside review establishes the missing
+broader adversarial traffic or outside review establishes the missing
 availability assumptions. The queue is a receiving buffer, not admission.
 
 ## Rollback

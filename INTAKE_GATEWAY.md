@@ -310,3 +310,33 @@ provider's independently fetchable job or run record beside the JSON result.
 The envelopes are one-use public consent evidence, never a reusable signing
 credential. The probe does not arm rollback, open nginx, drain the queue, or
 curate a record; those remain separate attended operator actions.
+
+## Second bounded public window
+
+On 2026-07-25, Hugging Face CPU Basic job
+`6a6469e77ef3c08464968294` ran the exact alpha.6 `wywa-edge-probe` after the
+application brake and an independent eight-minute rollback were verified.
+The provider record names the tagged script URL, CPU Basic flavor, 180-second
+timeout, two secret variable names, completed status, and two-second runtime.
+The client emitted:
+
+```json
+{"claims":{"client_identity_retained_by_probe":false,"provider_identity_proven_by_output_alone":false},"execution_id":"6a6469e77ef3c08464968294","origin":"https://while-you-were-away.online/","provider":"hugging-face","result":"pass","schema_version":1,"statuses":{"apply":503,"malformed":400,"oversized":413,"static":200,"withdraw":202,"wrong_method":405}}
+```
+
+The attended edge was open from 07:46:05 to 07:47:55 UTC. Applications
+remained disabled, one withdrawal entered the reserved lane, and no curator
+capability was reachable. The operator restored static nginx SHA-256
+`b1c00faf885542f43b0934b862db876821d00e10a882164ac68ca415e5180900`,
+removed the zones file, observed public POST return 405, and finished the
+withdrawal as queue event 16 without curation. The final queue is disabled and
+empty with audit head
+`c51d0cf38f18cd678e7597a1055a6f50a0b2aa26be1cc7557e29223a09a62ff5`.
+
+The monitoring URL is
+`https://huggingface.co/jobs/pakkonen/6a6469e77ef3c08464968294`, but it
+redirects anonymous visitors to login. The provider account can re-inspect the
+record; the path-free client result alone cannot attest where it ran. This is
+therefore real second-provider execution with weaker public provenance than
+the GitHub Actions run, not a second operator, outside review, hostile traffic,
+or permission to leave intake open.

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Evidence
+
+- the tagged alpha.6 `wywa-edge-probe` passed from Hugging Face CPU Basic job
+  `6a6469e77ef3c08464968294` during a separately bounded 110-second public
+  window. Applications stayed disabled, withdrawal remained available, static
+  nginx returned byte for byte, and the queue drained without curation. The
+  provider record requires login, so this closes the narrow unrelated-executor
+  gap without claiming public attestation, outside review, or readiness.
+
 ## 0.1.0-alpha.6 — 2026-07-25
 
 Sixth reviewable alpha, turning the post-alpha.5 hardening line into a coherent

@@ -366,6 +366,17 @@ public workflow commit and Actions run are re-checkable. This is one-provider
 public-routing evidence, not multiple-network, hostile-internet, independent
 operator, or permanent-availability evidence. The route remains closed.
 
+Checkpoint 2026-07-25: the provider-neutral client then crossed the same real
+edge from Hugging Face CPU Basic job `6a6469e77ef3c08464968294`. The
+provider-supplied record reports the tagged alpha.6 script, CPU Basic flavor,
+two-second runtime, and completed status; the client returned all seven
+expected statuses, including application 503 and withdrawal 202. The attended
+window lasted 110 seconds, restored the exact static nginx hash, removed the
+routes, and drained the withdrawal without curation. This supplies a second
+execution provider, not a second human operator or hostile-internet test. The
+job record requires authenticated Hugging Face access, so it is less publicly
+re-checkable than the GitHub Actions run. Submission remains closed.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,
