@@ -2,7 +2,7 @@
 
 Working tagline: **Your AI keeps working after you close the tab.**
 
-Status: `0.1.0-alpha.4`, portable runtime plus reversible local and public-host
+Status: `0.1.0-alpha.5`, portable runtime plus reversible local and public-host
 lifecycles implemented; signed-origin, closed curation, signed consent, and a
 private guarded intake queue are on `main`, while public intake,
 independent-operator, and real external-origin launch readiness remain
@@ -81,7 +81,7 @@ review commands are in `SECURITY.md`.
 
 ## Second operator wanted
 
-Alpha.4 needs one honest outside run from a technical maker with an
+Alpha.5 needs one honest outside run from a technical maker with an
 authenticated Codex CLI, a spare systemd-based Linux machine, and a domain they
 control. The useful test is local bootstrap through staging TLS, production
 promotion, backup/restore, version inspection, and uninstall—not a testimonial.
@@ -183,11 +183,15 @@ The portable MVP is deliberately narrower than this machine's owner-authorized
 root deployment:
 
 - it refuses to run as root unless the operator sets an explicit override;
-- Codex receives `workspace-write`, never the dangerous bypass flag;
+- Codex receives the named `wywa-workspace-only` permission profile, which
+  denies reads across the filesystem, reopens only the workspace and Codex's
+  minimal tool runtime, denies system temporary directories, and never uses
+  the dangerous bypass flag;
 - `.git` remains read-only to Codex; after a successful run, the host wrapper
   creates a hooks-disabled checkpoint only from a clean starting tree and
   refuses common credential signatures and unsafe workspace content;
-- the private version-2 receipt binds that host-created commit and exact tree
+- the private version-3 receipt records the enforced permission profile and
+  binds that host-created commit and exact tree
   to SHA-256 digests of the run log and accepted final message, while
   `verify-receipt` re-checks the chain independently of the worker;
 - user Codex configuration is ignored during unattended runs, while existing
@@ -236,8 +240,8 @@ The first useful release is complete only when:
 2. `doctor` proves the workspace, Git, Codex binary, Codex login, private state
    directory, and non-root boundary are ready;
 3. `run` uses an exclusive lock, bounded runtime, signal forwarding, private
-   logs, atomic last-message publication, `workspace-write`, and a guarded
-   host-side Git checkpoint;
+   logs, atomic last-message publication, deny-read workspace-only
+   permissions, and a guarded host-side Git checkpoint;
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
@@ -263,11 +267,11 @@ implemented:
   initial Git checkpoint;
 - `doctor` enforces required files, Git integrity, Codex login, safe runtime
   storage, and the non-root default;
-- `run` uses `workspace-write`, ignores unattended user configuration, scrubs
-  unrelated environment variables, bounds runtime, forwards signals, excludes
-  concurrent cycles, checkpoints successful clean-start runs outside the model
-  sandbox, and atomically publishes success-only final messages plus a result
-  receipt; and
+- `run` uses a Codex 0.138+ deny-read permission profile, ignores unattended
+  user configuration, scrubs unrelated environment variables, bounds runtime,
+  forwards signals, excludes concurrent cycles, checkpoints successful
+  clean-start runs outside the model sandbox, and atomically publishes
+  success-only final messages plus a result receipt; and
 - `status` exposes the receipt without requiring raw-log access; and
 - `verify-receipt` checks the full commit, exact tree, private log digest, and
   accepted-message digest without trusting the worker.
@@ -323,7 +327,7 @@ activation is also injected in tests: unit sources and a newly installed worker
 timer roll back while the initialized snapshot and bundle remain.
 
 `bin/build-release` now produces deterministic
-`while-you-were-away-0.1.0-alpha.4.tar.gz` and SHA-256 artifacts from an
+`while-you-were-away-0.1.0-alpha.5.tar.gz` and SHA-256 artifacts from an
 explicit allowlist. The release test rebuilds twice byte-for-byte, verifies the
 checksum, extracts it, runs ShellCheck, initializes a clean workspace through
 the packaged CLI, and rejects private deployment markers.
@@ -365,7 +369,7 @@ human-led; branded accounts cannot post, comment, or vote. Lumen will not fake
 a human biography to cross that gate. The prepared pack remains reusable if
 an eligible human collaborator independently chooses to participate.
 
-The fourth alpha adds the public-host lifecycle as an explicit second command:
+The fourth alpha added the public-host lifecycle as an explicit second command:
 
 ```text
 sudo bin/wywa-public install "$HOME/my-worker" \

@@ -14,12 +14,13 @@ Every cycle:
    criteria.
 5. Append a concise entry to `memory/daily/YYYY-MM-DD.md`, update
    `state/CURRENT.md`, and preserve the exact next action.
-6. Leave one coherent, verified working-tree change. The `workspace-write`
-   sandbox intentionally protects `.git`; after a successful cycle, the WYWA
-   host runtime checks and commits the change outside the model sandbox. Do not
-   retry a blocked Git commit, weaken the sandbox, or claim that you created
-   the host checkpoint yourself. Never write secrets, private runtime logs, raw
-   source dumps, or unrelated generated files into the workspace.
+6. Leave one coherent, verified working-tree change. The workspace-only
+   permission profile denies reads outside this workspace and keeps `.git`
+   read-only; after a successful cycle, the WYWA host runtime checks and
+   commits the change outside the model sandbox. Do not retry a blocked Git
+   commit, weaken the permission profile, or claim that you created the host
+   checkpoint yourself. Never write secrets, private runtime logs, raw source
+   dumps, or unrelated generated files into the workspace.
 
 Do not edit runtime state outside this workspace. Do not try to expand your own
 permissions. Keep prose concise and make the result understandable to a fresh

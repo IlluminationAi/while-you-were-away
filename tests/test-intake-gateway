@@ -183,6 +183,32 @@ def wait_for_file(path: Path, *, timeout: float = 5.0) -> None:
     raise AssertionError(f"timed out waiting for {path}")
 
 
+def wait_for_idle(path: Path, *, timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError):
+            time.sleep(0.01)
+            continue
+        if record["active"] == 0:
+            return
+        time.sleep(0.01)
+    raise AssertionError("timed out waiting for the gateway to become idle")
+
+
+def idle_request(
+    status_file: Path,
+    port: int,
+    method: str,
+    path: str,
+    record: dict[str, Any] | None = None,
+    **kwargs: object,
+) -> tuple[int, dict[str, Any]]:
+    wait_for_idle(status_file)
+    return http_request(port, method, path, record, **kwargs)
+
+
 def wait_for_glob(root: Path, pattern: str, count: int, *, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -306,16 +332,19 @@ def main() -> None:
             ).hexdigest()
             assert status_file.stat().st_mode & 0o777 == 0o600
 
-            code, health = http_request(port, "GET", "/healthz")
+            code, health = idle_request(status_file, port, "GET", "/healthz")
             assert code == 200 and health["ok"] is True
             assert health["expected_action"] is None
             assert health["retained_proof_directory_configured"] is False
             assert health["executable_sha256"] == gateway_status["executable_sha256"]
-            code, missing = http_request(port, "GET", "/")
+            code, missing = idle_request(status_file, port, "GET", "/")
             assert code == 404 and missing["error"] == "route-not-found"
-            code, wrong_method = http_request(port, "PUT", "/v1/intake", {})
+            code, wrong_method = idle_request(
+                status_file, port, "PUT", "/v1/intake", {}
+            )
             assert code == 405 and wrong_method["error"] == "method-not-allowed"
 
+            wait_for_idle(status_file)
             duplicate_length = raw_request(
                 port,
                 b"POST /v1/intake HTTP/1.1\r\n"
@@ -326,6 +355,7 @@ def main() -> None:
                 b"Connection: close\r\n\r\n{}",
             )
             assert status_code(duplicate_length) == 400, duplicate_length
+            wait_for_idle(status_file)
             chunked = raw_request(
                 port,
                 b"POST /v1/intake HTTP/1.1\r\n"
@@ -335,6 +365,7 @@ def main() -> None:
                 b"Connection: close\r\n\r\n0\r\n\r\n",
             )
             assert status_code(chunked) == 400
+            wait_for_idle(status_file)
             oversized = raw_request(
                 port,
                 b"POST /v1/intake HTTP/1.1\r\n"
@@ -344,6 +375,7 @@ def main() -> None:
                 b"Connection: close\r\n\r\n",
             )
             assert status_code(oversized) == 413
+            wait_for_idle(status_file)
             incomplete = raw_request(
                 port,
                 b"POST /v1/intake HTTP/1.1\r\n"
@@ -353,7 +385,8 @@ def main() -> None:
                 b"Connection: close\r\n\r\n{}",
             )
             assert status_code(incomplete) == 400
-            code, wrong_type = http_request(
+            code, wrong_type = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -361,14 +394,16 @@ def main() -> None:
                 content_type="text/plain",
             )
             assert code == 415
-            code, malformed = http_request(
+            code, malformed = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
                 body=b"{broken",
             )
             assert code == 400 and malformed["error"] == "invalid-envelope"
-            code, duplicate_json = http_request(
+            code, duplicate_json = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -378,7 +413,8 @@ def main() -> None:
                 ),
             )
             assert code == 400 and duplicate_json["error"] == "invalid-envelope"
-            code, extra_field = http_request(
+            code, extra_field = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -390,7 +426,8 @@ def main() -> None:
                 },
             )
             assert code == 400 and extra_field["error"] == "invalid-envelope"
-            code, bad_base64 = http_request(
+            code, bad_base64 = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -411,7 +448,9 @@ def main() -> None:
                 request_id="10000000000000000000000000000000",
                 at=now,
             )
-            code, refused = http_request(port, "POST", "/v1/intake", disabled_apply)
+            code, refused = idle_request(
+                status_file, port, "POST", "/v1/intake", disabled_apply
+            )
             assert code == 503 and refused["error"] == "applications-disabled"
 
             withdrawal = issue(
@@ -423,7 +462,8 @@ def main() -> None:
                 request_id="20000000000000000000000000000000",
                 at=now,
             )
-            code, accepted_withdrawal = http_request(
+            code, accepted_withdrawal = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -450,10 +490,14 @@ def main() -> None:
                 request_id="30000000000000000000000000000000",
                 at=now,
             )
-            code, accepted = http_request(port, "POST", "/v1/intake", accepted_apply)
+            code, accepted = idle_request(
+                status_file, port, "POST", "/v1/intake", accepted_apply
+            )
             assert code == 202 and accepted["accepted"] is True
             assert accepted["request_id"] == "30000000000000000000000000000000"
-            code, replay = http_request(port, "POST", "/v1/intake", accepted_apply)
+            code, replay = idle_request(
+                status_file, port, "POST", "/v1/intake", accepted_apply
+            )
             assert code == 409 and replay["error"] == "request-id-already-seen"
 
             invalid_signature = dict(accepted_apply)
@@ -461,7 +505,8 @@ def main() -> None:
             invalid_signature["request"]["request_id"] = (
                 "40000000000000000000000000000000"
             )
-            code, rejected = http_request(
+            code, rejected = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -547,7 +592,8 @@ def main() -> None:
                 at=now,
             )
             (shadow / "long-sleep").write_text("enabled\n", encoding="utf-8")
-            code, timed_out = http_request(
+            code, timed_out = idle_request(
+                status_file,
                 port,
                 "POST",
                 "/v1/intake",
@@ -561,7 +607,7 @@ def main() -> None:
             assert not Path(f"/proc/{child_pid}").exists()
             (shadow / "long-sleep").unlink()
 
-            code, measured = http_request(port, "GET", "/status")
+            code, measured = idle_request(status_file, port, "GET", "/status")
             assert code == 200
             assert measured["peak_active"] == 2
             assert measured["requests"]["accepted"] == 4
@@ -636,7 +682,7 @@ def main() -> None:
         )
         try:
             wait_for_file(restart_status)
-            code, health = http_request(port, "GET", "/healthz")
+            code, health = idle_request(restart_status, port, "GET", "/healthz")
             assert code == 200 and health["ok"] is True
             assert health["expected_action"] == "withdraw"
             assert health["retained_proof_directory_configured"] is True
@@ -651,7 +697,8 @@ def main() -> None:
                 request_id="90000000000000000000000000000000",
                 at=now,
             )
-            code, accepted = http_request(
+            code, accepted = idle_request(
+                restart_status,
                 port,
                 "POST",
                 "/v1/intake",
@@ -675,7 +722,8 @@ def main() -> None:
                 request_id="91000000000000000000000000000000",
                 at=now,
             )
-            code, unavailable = http_request(
+            code, unavailable = idle_request(
+                restart_status,
                 port,
                 "POST",
                 "/v1/intake",
@@ -693,7 +741,8 @@ def main() -> None:
                 request_id="92000000000000000000000000000000",
                 at=now,
             )
-            code, rejected = http_request(
+            code, rejected = idle_request(
+                restart_status,
                 port,
                 "POST",
                 "/v1/intake",

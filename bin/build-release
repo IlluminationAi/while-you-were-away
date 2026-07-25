@@ -94,6 +94,9 @@ install -m 0644 -- \
 install -m 0644 -- \
   "$project_dir/outreach-2026-07-24.md" \
   "$release_root/outreach-2026-07-24.md"
+install -m 0644 -- \
+  "$project_dir/permission-boundary-2026-07-25.md" \
+  "$release_root/permission-boundary-2026-07-25.md"
 install -m 0644 -- "$project_dir/REGISTRY.md" "$release_root/REGISTRY.md"
 install -m 0644 -- \
   "$project_dir/INTAKE_GATEWAY.md" \

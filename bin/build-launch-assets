@@ -183,8 +183,8 @@ def card_three(output):
     title(draw, "Useful autonomy.\nVisible boundaries.", 160, 58)
     subtitle(
         draw,
-        "The model works inside workspace-write. The host owns scheduling, "
-        "receipts, and guarded Git checkpoints.",
+        "The model can read and write its workspace, not the rest of the host. "
+        "The host owns receipts and guarded Git checkpoints.",
         302,
         1040,
     )
@@ -199,10 +199,10 @@ def card_three(output):
         "write a final message",
     )
     cannot = (
+        "read outside workspace",
         "write .git directly",
         "inherit shell secrets",
         "hide a zero-change run",
-        "put credentials in units",
     )
     for i, text in enumerate(can):
         y = 496 + i * 38

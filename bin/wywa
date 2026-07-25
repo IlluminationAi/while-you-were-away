@@ -5,6 +5,8 @@ program=${0##*/}
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 project_dir=$(cd -- "$script_dir/.." && pwd -P)
 templates_dir=$project_dir/templates
+permission_profile=wywa-workspace-only
+permission_filesystem='permissions.wywa-workspace-only.filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny"}'
 
 usage() {
   cat <<EOF
@@ -20,7 +22,7 @@ Usage:
 Commands:
   init     Create a private, Git-backed persistent-worker workspace.
   doctor   Verify the workspace, non-root boundary, Codex, and login.
-  run      Run one bounded, unattended cycle with workspace-write.
+  run      Run one bounded cycle with workspace-only filesystem access.
   status   Show the last cycle receipt and final message, when available.
   verify-receipt
            Verify the last successful host checkpoint and private evidence.
@@ -103,6 +105,25 @@ resolve_codex_bin() {
   [[ -f "$candidate" && -x "$candidate" ]] ||
     die "Codex CLI is not an executable regular file: $candidate"
   printf '%s\n' "$candidate"
+}
+
+check_codex_permissions_support() {
+  local codex_bin=$1
+  local version_output major minor patch
+  local -a clean_env
+  safe_environment clean_env
+  version_output=$("${clean_env[@]}" "$codex_bin" --version 2>/dev/null) ||
+    die "unable to determine the Codex CLI version"
+  if [[ "$version_output" =~ codex-cli[[:space:]]+([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    major=${BASH_REMATCH[1]}
+    minor=${BASH_REMATCH[2]}
+    patch=${BASH_REMATCH[3]}
+  else
+    die "Codex CLI returned an unrecognized version: $version_output"
+  fi
+  if (( major == 0 && minor < 138 )); then
+    die "Codex CLI 0.138.0 or newer is required for deny-read permission profiles (found $major.$minor.$patch)"
+  fi
 }
 
 safe_environment() {
@@ -373,6 +394,7 @@ doctor_workspace() {
   check_required_workspace_files "$workspace"
   codex_bin=$(resolve_codex_bin)
   safe_environment clean_env
+  check_codex_permissions_support "$codex_bin"
 
   git -C "$workspace" rev-parse --verify HEAD >/dev/null 2>&1 ||
     die "workspace has no initial Git commit"
@@ -436,7 +458,7 @@ cmd_run() {
   local last_run prompt run_stamp run_log message_tmp receipt_tmp
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
   local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
-  local -a clean_env command_line
+  local -a clean_env permission_args command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
   logs_dir=$runtime_dir/logs
@@ -446,13 +468,19 @@ cmd_run() {
   prompt=$(<"$workspace/WAKE.md")
 
   safe_environment clean_env
+  permission_args=(
+    -c "default_permissions=\"$permission_profile\""
+    -c "permissions.$permission_profile.extends=\":workspace\""
+    -c "$permission_filesystem"
+  )
   command_line=(
     "${clean_env[@]}"
     "$codex_bin"
     --search
     exec
     --ignore-user-config
-    --sandbox workspace-write
+    --strict-config
+    "${permission_args[@]}"
     --cd "$workspace"
     --color never
   )
@@ -461,7 +489,8 @@ cmd_run() {
     printf '%s\n' "run: ready"
     printf 'workspace: %s\n' "$workspace"
     printf 'runtime: %s\n' "$runtime_dir"
-    printf 'sandbox: workspace-write\n'
+    printf 'permissions: %s\n' "$permission_profile"
+    printf '%s\n' "filesystem: workspace writable; other paths unreadable except minimal tool runtime"
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -496,9 +525,10 @@ cmd_run() {
       rm -f -- "$message_tmp"
     fi
     log_sha256=$(sha256sum -- "$run_log" | cut -d ' ' -f 1)
-    printf '%s receipt=2 status=%s sandbox=workspace-write checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
+    printf '%s receipt=3 status=%s permissions=%s checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
+      "$permission_profile" \
       "$checkpoint_result" \
       "$checkpoint_commit" \
       "$checkpoint_tree" \
@@ -601,6 +631,7 @@ cmd_verify_receipt() {
   require_single_workspace_arg "$@"
   local workspace runtime_dir receipt line prefix log_path
   local receipt_version='' status='' sandbox='' checkpoint=''
+  local permissions=''
   local commit='' tree='' log_sha256='' message_sha256='' token
   local actual_commit actual_tree actual_log_sha256 actual_message_sha256
   workspace=$(canonical_workspace_path "$1")
@@ -623,6 +654,7 @@ cmd_verify_receipt() {
       receipt=*) receipt_version=${token#receipt=} ;;
       status=*) status=${token#status=} ;;
       sandbox=*) sandbox=${token#sandbox=} ;;
+      permissions=*) permissions=${token#permissions=} ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
@@ -631,15 +663,20 @@ cmd_verify_receipt() {
     esac
   done
 
-  [[ "$receipt_version" == 2 ]] ||
-    die "last-run receipt is not a verifiable version-2 receipt"
+  [[ "$receipt_version" == 2 || "$receipt_version" == 3 ]] ||
+    die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
       "${status:-unknown}" >&2
     return 4
   fi
-  [[ "$sandbox" == workspace-write ]] ||
-    die "last-run receipt records an unexpected sandbox"
+  if [[ "$receipt_version" == 2 ]]; then
+    [[ "$sandbox" == workspace-write ]] ||
+      die "legacy receipt records an unexpected sandbox"
+  else
+    [[ "$permissions" == "$permission_profile" ]] ||
+      die "receipt records an unexpected permission profile"
+  fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
   [[ "$commit" =~ ^[0-9a-f]{40,64}$ ]] ||
@@ -680,8 +717,9 @@ cmd_verify_receipt() {
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s\n' \
-    "${commit:0:12}" "${tree:0:12}"
+  printf 'receipt: verified commit=%s tree=%s permissions=%s\n' \
+    "${commit:0:12}" "${tree:0:12}" \
+    "${permissions:-legacy-workspace-write}"
 }
 
 cmd_run_state() {

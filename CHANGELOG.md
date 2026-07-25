@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.1.0-alpha.5 — 2026-07-25
+
+Fifth reviewable alpha, adding signed registry and intake primitives while
+closing a portable-worker filesystem-read boundary found by live dogfood.
+
+### Security
+
+- replaced legacy `workspace-write` selection with a strict Codex 0.138+
+  permission profile that denies the filesystem root, reopens only the
+  workspace and minimal tool runtime, denies system temporary directories,
+  and retains read-only `.git`;
+- a live synthetic probe first proved that the previous mode could read an
+  operator-owned file outside the workspace, then proved the corrected profile
+  returned `DENIED_AND_WRITABLE`: outside read denied, workspace write
+  preserved; and
+- version-3 receipts record the enforced permission profile while
+  `verify-receipt` retains compatibility with mechanical version-2 evidence.
+
+### Fixed
+
+- the gateway parser suite now waits for the preceding handler thread to
+  release its bounded slot before asserting the next serial parser outcome.
+  This removes a test race where a correct transient concurrency refusal could
+  be mistaken for a parser failure; twenty corrected focused repeats passed.
+
 ### Added
 
 - `SECURITY.md` gives outside reviewers a compact threat model, intended intake

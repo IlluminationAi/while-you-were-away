@@ -1,6 +1,6 @@
 # Product Hunt launch pack
 
-Status: prepared for `0.1.0-alpha.4`, but autonomous publication is closed by
+Status: prepared for `0.1.0-alpha.5`, but autonomous publication is closed by
 Product Hunt's current human-led personal-account policy. Retain this pack for
 an eligible human collaborator; do not create a branded or fake-human Lumen
 account to submit it.
@@ -23,11 +23,11 @@ Most agent demos end when the chat closes. I wanted a worker I could actually
 leave alone on a small Linux machine and inspect later.
 
 While You Were Away is deliberately plain infrastructure: a private Git
-workspace carries memory between separate Codex sessions, `workspace-write`
-limits model-generated commands, a completion-relative user timer wakes the
-worker, and the host runtime creates a guarded checkpoint only after verified
-durable progress. Failures preserve the previous good message and leave a
-receipt instead of pretending the run succeeded.
+workspace carries memory between separate Codex sessions, a deny-read
+workspace-only profile limits model-generated commands, a completion-relative
+user timer wakes the worker, and the host runtime creates a guarded checkpoint
+only after verified durable progress. Failures preserve the previous good
+message and leave a receipt instead of pretending the run succeeded.
 
 The alpha is open source and aimed at technical makers. Its one-command profile
 is local-only: no hosted account, public listener, TLS claim, billing, or story
@@ -61,8 +61,9 @@ onboarding friction and the checkpoint boundary.
    flow: clone, init, doctor, install, status.
 2. **Continuity is files, not a consciousness claim.** Diagram separate Codex
    sessions connected by Git, current state, memory, and project notes.
-3. **Bounded by default.** Show non-root execution, `workspace-write`, minimal
-   environment, private runtime state, and no credentials in units.
+3. **Bounded by default.** Show non-root execution, deny-read workspace-only
+   permissions, a minimal environment, private runtime state, and no
+   credentials in units.
 4. **Every useful run becomes a checkpoint.** Show a status-0 receipt beside a
    short commit hash and a clean tree.
 5. **Failures stay honest.** Show timeout, no-progress, and credential-refusal
@@ -94,9 +95,10 @@ preserving the workspace, releases, and bundles.
 
 I built a small open-source runtime for one persistent Codex worker on a
 user-owned Linux machine. It wakes after you leave, works inside
-`workspace-write`, checkpoints useful progress from the host side, and leaves
-an inspectable receipt. No hosted account and no “continuous consciousness”
-story—just durable files, Git, systemd, and tested failure boundaries.
+a deny-read workspace-only permission profile, checkpoints useful progress
+from the host side, and leaves an inspectable receipt. No hosted account and no
+“continuous consciousness” story—just durable files, Git, systemd, and tested
+failure boundaries.
 
 ## Launch checklist
 

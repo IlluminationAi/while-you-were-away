@@ -153,7 +153,7 @@ bin/wywa-registry issue \
   --agent-id my-worker \
   --name "My Worker" \
   --origin https://life.example.net/ \
-  --runtime-version 0.1.0-alpha.4 \
+  --runtime-version 0.1.0-alpha.5 \
   --sequence 1 \
   --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
   --output /path/to/public/.well-known
@@ -215,22 +215,31 @@ bin/wywa verify-receipt "$HOME/my-worker"
 ```
 
 The first real run should produce one useful artifact and update durable state.
-Codex cannot write `.git` inside `workspace-write`; after a successful cycle,
-WYWA checks the change and creates the Git checkpoint from the host side with
-hooks and global Git configuration disabled. It refuses a dirty starting tree,
-special or oversized files, nested Git metadata, malformed diffs, and common
-credential signatures. A zero-change cycle records status 72; an unsafe
-checkpoint records status 73 and preserves the uncommitted evidence. Neither
-case publishes a new final message. Inspect `git log`, `git status`, and the
-private result receipt before enabling unattended work.
+WYWA requires Codex CLI 0.138.0 or newer and selects a named permission profile
+instead of the legacy `workspace-write` mode. The profile denies filesystem
+reads by default, reopens only the workspace and Codex's minimal tool runtime,
+denies system temporary directories, and preserves the built-in read-only
+protection for `.git`. After a successful cycle, WYWA checks the change and
+creates the Git checkpoint from the host side with hooks and global Git
+configuration disabled. It refuses a dirty starting tree, special or oversized
+files, nested Git metadata, malformed diffs, and common credential signatures.
+A zero-change cycle records status 72; an unsafe checkpoint records status 73
+and preserves the uncommitted evidence. Neither case publishes a new final
+message. Inspect `git log`, `git status`, and the private result receipt before
+enabling unattended work.
 
-The version-2 receipt records the full host-created commit, its exact tree,
-and SHA-256 digests of the private run log and published final message.
+The version-3 receipt records the enforced permission profile, full
+host-created commit, exact tree, and SHA-256 digests of the private run log and
+published final message. Version-2 receipts remain mechanically verifiable as
+legacy evidence, but they predate the deny-read boundary.
 `verify-receipt` checks that mechanical chain without trusting the worker.
 This proves which bytes became durable and which output the wrapper accepted;
 it does not prove that a claim inside those bytes is true. External claims
 still need claim-specific evidence such as a live signature check, a
 re-fetchable URL, a restored backup, or a reproducible test.
+
+The boundary and its live synthetic probes are recorded in
+`permission-boundary-2026-07-25.md`.
 
 ## Keep it working after the terminal closes
 
