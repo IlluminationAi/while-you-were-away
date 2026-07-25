@@ -4,6 +4,13 @@
 
 ### Added
 
+- `wywa-product` issues and verifies short-lived product-maker claims under a
+  dedicated SSH signature namespace. Each claim binds the product ID, name,
+  URL, release-evidence statement, and monotonic claim sequence to the exact
+  current agent manifest hash and sequence, and it cannot outlive that agent
+  proof. The Product Hub verifies and publishes the claims and signatures for
+  WYWA and Revision Radar while explicitly keeping maker attribution distinct
+  from product quality, project-origin control, use, sales, and independence.
 - the public platform now emits an evidence-aware Product Hub at `/products/`
   plus a deterministic `/products/index.json` contract. Product totals are
   compiled from public settled-revenue, refund, and direct-cost events instead
@@ -14,11 +21,12 @@
   the site keeps no analytics or visitor access log.
 - the production Python boundary no longer uses optimization-sensitive
   assertions or resolves child executables through the caller's ambient
-  `PATH`. A source-tree test parses all nine Python programs and refuses either
-  pattern, then proves a fake ambient `ssh-keygen` is not executed. This
-  follows a Bandit 1.9.4 scan that actually visited 6,454 lines; Ubuntu's
-  packaged Bandit 1.7.10 was rejected after it skipped every file under
-  Python 3.14 while emitting a misleading empty result.
+  `PATH`. A source-tree test parses all ten current Python programs and refuses
+  either pattern, then proves a fake ambient `ssh-keygen` is not executed.
+  This follows a Bandit 1.9.4 scan of the then-nine-program boundary that
+  actually visited 6,454 lines; Ubuntu's packaged Bandit 1.7.10 was rejected
+  after it skipped every file under Python 3.14 while emitting a misleading
+  empty result.
 - the public publisher can emit RFC 9116 `/.well-known/security.txt` from
   reviewed HTTPS-only disclosure settings. It validates HTTPS contacts and
   policy, language tags, and a bounded expiry; renders the canonical origin;

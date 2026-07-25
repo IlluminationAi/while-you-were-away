@@ -13,6 +13,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 PUBLISH = PROJECT / "bin" / "publish-platform"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
+PRODUCT = PROJECT / "bin" / "wywa-product"
 CURATOR = PROJECT / "bin" / "wywa-curator"
 INSTANTS = (
     "2026-07-24T17:40:00Z",
@@ -29,6 +30,7 @@ def main() -> None:
         runtime = root / "runtime"
         workspace = root / "workspace"
         proof = root / "proof"
+        product_proof = root / "product-proof"
         registry_state = root / "registry-state"
         registry_export = root / "registry-export"
         key = root / "identity" / "agent_ed25519"
@@ -75,6 +77,46 @@ def main() -> None:
             capture_output=True,
             text=True,
         )
+        public_state = json.loads(
+            (PROJECT / "platform" / "public-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for sequence, product in enumerate(public_state["products"], start=1):
+            release = product["release_evidence"]
+            subprocess.run(
+                [
+                    str(PRODUCT),
+                    "issue",
+                    "--product-id",
+                    product["id"],
+                    "--name",
+                    product["name"],
+                    "--product-url",
+                    product["url"],
+                    "--release-kind",
+                    release["kind"],
+                    "--release-claim",
+                    release["claim"],
+                    "--release-url",
+                    release["url"],
+                    "--agent-manifest",
+                    str(proof / "wywa-agent.json"),
+                    "--agent-signature",
+                    str(proof / "wywa-agent.sig"),
+                    "--key",
+                    str(key),
+                    "--sequence",
+                    str(sequence),
+                    "--issued-at",
+                    "2026-07-24T17:39:10Z",
+                    "--output",
+                    str(product_proof),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
         verification_result = subprocess.run(
             [
                 str(REGISTRY),
@@ -183,6 +225,8 @@ def main() -> None:
                     str(workspace),
                     "--agent-proof-dir",
                     str(proof),
+                    "--product-proof-dir",
+                    str(product_proof),
                     "--registry-export-dir",
                     str(registry_export),
                     "--as-of",
@@ -223,6 +267,7 @@ def main() -> None:
         assert life["metrics"]["verified_revenue_usd"] == "0.00"
         assert life["product_hub"]["admission"] == "reviewed-closed"
         assert life["product_hub"]["ranking"]["status"] == "withheld"
+        assert life["product_hub"]["signed_maker_claims"] == 2
         assert product_catalog["summary"] == life["economics"]["summary"]
         assert product_catalog["summary"]["products"] == 2
         assert product_catalog["summary"]["settled_evidence_events"] == 0
@@ -232,6 +277,10 @@ def main() -> None:
         assert product_catalog["popularity"]["status"] == "not-measured"
         assert all(
             item["economics"]["ranking_eligible"] is False
+            for item in product_catalog["products"]
+        )
+        assert all(
+            item["identity_claim"]["status"] == "verified-maker-signature"
             for item in product_catalog["products"]
         )
         assert life["last_receipt"] == {
@@ -247,6 +296,7 @@ def main() -> None:
         assert "Evidence before" in product_page
         assert "Withheld." in product_page
         assert "empty evidence set" in product_page
+        assert "verified maker signature" in product_page
         assert "public operating system" in page
         assert "/products/" in page
         assert "$0.00" in page
@@ -311,6 +361,7 @@ def main() -> None:
             current / ".well-known",
             current / "agents",
             current / "products",
+            current / "products" / "claims",
         ):
             assert directory.stat().st_mode & 0o777 == 0o755
         for file_path in (
@@ -328,6 +379,10 @@ def main() -> None:
             current / "agents" / "audit.json",
             current / "products" / "index.html",
             current / "products" / "index.json",
+            current / "products" / "claims" / "wywa.json",
+            current / "products" / "claims" / "wywa.sig",
+            current / "products" / "claims" / "revision-radar.json",
+            current / "products" / "claims" / "revision-radar.sig",
         ):
             assert file_path.is_file()
             assert not file_path.is_symlink()
@@ -461,6 +516,10 @@ def main() -> None:
         assert not (portable_site / "current" / "agents").exists()
         assert (portable_site / "current" / "products" / "index.html").is_file()
         assert (portable_site / "current" / "products" / "index.json").is_file()
+        assert all(
+            item["identity_claim"]["status"] == "unverified"
+            for item in portable_life["products"]
+        )
         assert "reviewed catalog and audit trail" not in (
             portable_site / "current" / "index.html"
         ).read_text(encoding="utf-8")

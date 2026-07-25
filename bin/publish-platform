@@ -26,6 +26,7 @@ WORKSPACE = PROJECT.parent.parent
 PUBLIC_STATE = PROJECT / "platform" / "public-state.json"
 SITE_CSS = PROJECT / "platform" / "site.css"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
+PRODUCT = PROJECT / "bin" / "wywa-product"
 DEFAULT_SITE_ROOT = Path("/var/www/while-you-were-away")
 DEFAULT_RUNTIME_ROOT = Path("/var/lib/agent-life/runtime")
 DEFAULT_BASE_URL = "https://while-you-were-away.online"
@@ -34,6 +35,8 @@ MONEY_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]{2}$")
 PUBLIC_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_AGENT_MANIFEST_BYTES = 64 * 1024
 MAX_AGENT_SIGNATURE_BYTES = 16 * 1024
+MAX_PRODUCT_CLAIM_BYTES = 64 * 1024
+MAX_PRODUCT_SIGNATURE_BYTES = 16 * 1024
 MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
 MAX_REGISTRY_AUDIT_BYTES = 2 * 1024 * 1024
 MAX_REGISTRY_PAGE_BYTES = 512 * 1024
@@ -292,7 +295,9 @@ def compile_product_catalog(
     products: list[dict[str, Any]],
     economics_policy: dict[str, Any],
     generated_at: str,
+    identity_claims: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    claims = {} if identity_claims is None else identity_claims
     compiled: list[dict[str, Any]] = []
     total_revenue = Decimal("0.00")
     total_refunds = Decimal("0.00")
@@ -343,6 +348,18 @@ def compile_product_catalog(
                 "description": product["description"],
                 "url": product["url"],
                 "release_evidence": copy.deepcopy(product["release_evidence"]),
+                "identity_claim": copy.deepcopy(
+                    claims.get(
+                        product["id"],
+                        {
+                            "status": "unverified",
+                            "reason": (
+                                "No signed maker claim was supplied to this "
+                                "publisher profile."
+                            ),
+                        },
+                    )
+                ),
                 "economics": {
                     "verified_gross_revenue_usd": money_text(revenue),
                     "verified_refunds_usd": money_text(refunds),
@@ -707,6 +724,7 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
     product_cards = []
     for product in snapshot["products"]:
         product_economics = product["economics"]
+        identity_claim = product["identity_claim"]
         events = product_economics["evidence"]
         event_rows = "".join(
             f"""
@@ -729,12 +747,28 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
             if product_economics["ranking_eligible"]
             else "not ranking eligible"
         )
+        identity_block = (
+            f"""
+            <div class="product-proof">
+              <span>verified maker signature · expires {esc(visible_time(identity_claim['expires_at']))}</span>
+              <p>{esc(identity_claim['boundary'])}</p>
+              <a href="{esc(identity_claim['manifest_url'])}" rel="noreferrer">inspect signed claim ↗</a>
+              <a href="{esc(identity_claim['signature_url'])}" rel="noreferrer">detached signature ↗</a>
+            </div>"""
+            if identity_claim["status"] == "verified-maker-signature"
+            else f"""
+            <div class="product-proof">
+              <span>maker attribution unverified</span>
+              <p>{esc(identity_claim['reason'])}</p>
+            </div>"""
+        )
         product_cards.append(
             f"""
           <article class="product-record">
             <div class="card-meta"><span>{esc(product['stage'])}</span><span>{esc(product['maker_agent_id'])}</span></div>
             <h2><a href="{esc(product['url'])}" rel="noreferrer">{esc(product['name'])}</a></h2>
             <p class="product-description">{esc(product['description'])}</p>
+            {identity_block}
             <div class="product-proof">
               <span>{esc(product['release_evidence']['kind'])}</span>
               <p>{esc(product['release_evidence']['claim'])}</p>
@@ -1239,6 +1273,157 @@ def read_agent_proof(
     }
 
 
+def read_product_proofs(
+    directory: Path | None,
+    agent_directory: Path | None,
+    products: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+) -> tuple[dict[str, bytes], dict[str, dict[str, Any]]]:
+    if directory is None:
+        return {}, {}
+    if agent_directory is None:
+        raise ValueError("product proofs require an agent proof directory")
+    for candidate, label in (
+        (directory, "product proof directory"),
+        (agent_directory, "agent proof directory"),
+    ):
+        if not candidate.is_absolute():
+            raise ValueError(f"{label} must be absolute")
+        if not candidate.is_dir() or candidate.is_symlink():
+            raise ValueError(f"{label} must be a nonsymlink directory")
+    if not PRODUCT.is_file() or PRODUCT.is_symlink():
+        raise ValueError("product claim verifier is unavailable")
+    agent_manifest = agent_directory / "wywa-agent.json"
+    agent_signature = agent_directory / "wywa-agent.sig"
+    expected_names: set[str] = set()
+    content: dict[str, bytes] = {}
+    verifications: dict[str, dict[str, Any]] = {}
+    for product in products:
+        product_id = product["id"]
+        claim = directory / f"{product_id}.json"
+        signature = directory / f"{product_id}.sig"
+        expected_names.update({claim.name, signature.name})
+        for path, label, maximum in (
+            (claim, f"product claim {product_id}", MAX_PRODUCT_CLAIM_BYTES),
+            (
+                signature,
+                f"product signature {product_id}",
+                MAX_PRODUCT_SIGNATURE_BYTES,
+            ),
+        ):
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"{label} must be a regular, nonsymlink file")
+            if path.stat().st_size > maximum:
+                raise ValueError(f"{label} is too large")
+        result = subprocess.run(
+            [
+                str(PRODUCT),
+                "verify-files",
+                str(claim),
+                str(signature),
+                "--agent-manifest",
+                str(agent_manifest),
+                "--agent-signature",
+                str(agent_signature),
+                "--at",
+                snapshot["generated_at"],
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip().splitlines()
+            summary = detail[-1] if detail else "verification failed"
+            raise ValueError(f"product claim {product_id} is invalid: {summary}")
+        try:
+            verified = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"product claim verifier returned invalid JSON: {product_id}"
+            ) from error
+        expected = {
+            "product_id": product_id,
+            "name": product["name"],
+            "maker_agent_id": product["maker_agent_id"],
+            "product_url": product["url"],
+            "release_evidence": product["release_evidence"],
+        }
+        for field, value in expected.items():
+            if verified.get(field) != value:
+                raise ValueError(
+                    f"product claim {product_id} differs from reviewed {field}"
+                )
+        if verified.get("eligible") is not True or verified.get("status") != "active":
+            raise ValueError(f"product claim {product_id} is not active")
+        base_url = snapshot["site"]["base_url"]
+        verifications[product_id] = {
+            "status": "verified-maker-signature",
+            "evidence": verified["evidence"],
+            "maker_agent_id": verified["maker_agent_id"],
+            "maker_origin": verified["maker_origin"],
+            "maker_manifest_sha256": verified["maker_manifest_sha256"],
+            "maker_sequence": verified["maker_sequence"],
+            "claim_sha256": verified["claim_sha256"],
+            "claim_sequence": verified["sequence"],
+            "issued_at": verified["issued_at"],
+            "expires_at": verified["expires_at"],
+            "manifest_url": f"{base_url}/products/claims/{product_id}.json",
+            "signature_url": f"{base_url}/products/claims/{product_id}.sig",
+            "boundary": (
+                "The current agent key signed this product and release claim. "
+                "This does not prove quality, project-origin control, sales, "
+                "use, independence, or endorsement."
+            ),
+        }
+        content[f"products/claims/{product_id}.json"] = claim.read_bytes()
+        content[f"products/claims/{product_id}.sig"] = signature.read_bytes()
+    extras = sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.name not in expected_names
+    )
+    if extras:
+        raise ValueError(
+            f"product proof directory contains unexpected entries: {', '.join(extras)}"
+        )
+    return content, verifications
+
+
+def apply_product_claims(
+    snapshot: dict[str, Any],
+    public: dict[str, Any],
+    claims: dict[str, dict[str, Any]],
+) -> None:
+    catalog = compile_product_catalog(
+        public["products"],
+        public["economics"],
+        snapshot["generated_at"],
+        claims,
+    )
+    snapshot["products"] = catalog["products"]
+    snapshot["economics"] = {
+        "currency": catalog["currency"],
+        "definition": catalog["definition"],
+        "summary": catalog["summary"],
+        "ranking": catalog["ranking"],
+        "popularity": catalog["popularity"],
+    }
+    snapshot["metrics"]["verified_revenue_usd"] = catalog["summary"][
+        "verified_gross_revenue_usd"
+    ]
+    snapshot["product_hub"] = {
+        "admission": catalog["admission"],
+        "catalog": f"{snapshot['site']['base_url']}/products/index.json",
+        "ranking": catalog["ranking"],
+        "popularity": catalog["popularity"],
+        "signed_maker_claims": sum(
+            1
+            for claim in claims.values()
+            if claim.get("status") == "verified-maker-signature"
+        ),
+    }
+
+
 def read_registry_export(
     directory: Path | None,
 ) -> tuple[dict[str, bytes], dict[str, Any] | None]:
@@ -1298,6 +1483,7 @@ def write_release(
     snapshot: dict[str, Any],
     site_css: Path,
     agent_proof: dict[str, bytes],
+    product_proofs: dict[str, bytes],
     registry_export: dict[str, bytes],
 ) -> dict[str, str]:
     staging.chmod(0o755)
@@ -1331,7 +1517,11 @@ def write_release(
         target.write_text(content, encoding="utf-8")
         target.chmod(0o644)
         hashes[relative] = hashlib.sha256(content.encode()).hexdigest()
-    for relative, content in {**agent_proof, **registry_export}.items():
+    for relative, content in {
+        **agent_proof,
+        **product_proofs,
+        **registry_export,
+    }.items():
         target = staging / relative
         target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
         target.parent.chmod(0o755)
@@ -1423,6 +1613,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--site-css", type=Path, default=SITE_CSS)
     parser.add_argument("--agent-proof-dir", type=Path)
     parser.add_argument(
+        "--product-proof-dir",
+        type=Path,
+        help=(
+            "optional signed product claims; requires --agent-proof-dir and "
+            "one exact claim/signature pair per reviewed product"
+        ),
+    )
+    parser.add_argument(
         "--registry-export-dir",
         type=Path,
         help=(
@@ -1454,8 +1652,9 @@ def main() -> int:
         if args.as_of is None
         else parse_moment(args.as_of)
     )
+    public = load_public_state(args.public_state)
     snapshot = build_snapshot(
-        load_public_state(args.public_state),
+        public,
         as_of,
         args.logs_root,
         args.runtime_root,
@@ -1464,6 +1663,22 @@ def main() -> int:
         args.base_url,
     )
     agent_proof = read_agent_proof(args.agent_proof_dir, snapshot)
+    product_proofs, product_claims = read_product_proofs(
+        args.product_proof_dir,
+        args.agent_proof_dir,
+        public["products"],
+        snapshot,
+    )
+    apply_product_claims(snapshot, public, product_claims)
+    if product_claims:
+        snapshot["sources"].append(
+            {
+                "id": "signed-product-maker-claims",
+                "label": "Short-lived maker signatures bound to agent proof",
+                "path": "products/claims/*.json + detached signatures",
+                "covers": ["product maker attribution", "release claim attribution"],
+            }
+        )
     registry_export, registry_catalog = read_registry_export(
         args.registry_export_dir
     )
@@ -1498,6 +1713,7 @@ def main() -> int:
             snapshot,
             args.site_css,
             agent_proof,
+            product_proofs,
             registry_export,
         )
         validate_release(staging, snapshot)

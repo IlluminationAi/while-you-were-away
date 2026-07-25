@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+"""Issue and verify signed WYWA product-maker claims."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+REGISTRY = Path(__file__).resolve().parent / "wywa-registry"
+NAMESPACE = "wywa-product-claim-v1"
+MAX_CLAIM_BYTES = 64 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_AGENT_BYTES = 64 * 1024
+MAX_VALIDITY = dt.timedelta(days=30)
+CLOCK_SKEW = dt.timedelta(minutes=5)
+ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?")
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 ([A-Za-z0-9+/]+={0,2})")
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class ProductError(Exception):
+    """A safe, user-facing product-claim error."""
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise ProductError(f"required executable is unavailable: {name}")
+    return executable
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise ProductError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ProductError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise ProductError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise ProductError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise ProductError(f"JSON repeats key: {key}")
+        record[key] = value
+    return record
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ProductError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ProductError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_size > maximum:
+        raise ProductError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ProductError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise ProductError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise ProductError(f"{label} must be a JSON object")
+    return result
+
+
+def load_json_file(path: Path, label: str, maximum: int) -> dict[str, Any]:
+    return load_json_bytes(read_regular(path, label, maximum), label)
+
+
+def require_exact_keys(
+    record: dict[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
+    actual = set(record)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    detail = []
+    if missing:
+        detail.append(f"missing {', '.join(missing)}")
+    if extra:
+        detail.append(f"unknown {', '.join(extra)}")
+    raise ProductError(f"{label} has {'; '.join(detail)}")
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    minimum: int = 1,
+) -> str:
+    if not isinstance(value, str):
+        raise ProductError(f"{label} must be text")
+    if not minimum <= len(value) <= maximum:
+        raise ProductError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ProductError(f"{label} contains a control character")
+    return value
+
+
+def https_url(value: object, label: str) -> str:
+    if not isinstance(value, str):
+        raise ProductError(f"{label} must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ProductError(f"{label} is not a valid URL") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.hostname is None
+        or parsed.fragment
+    ):
+        raise ProductError(f"{label} must be an HTTPS URL without credentials")
+    if len(value) > 2048:
+        raise ProductError(f"{label} is too long")
+    return value
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def verify_agent(
+    manifest_path: Path,
+    signature_path: Path,
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    if not REGISTRY.is_file() or REGISTRY.is_symlink():
+        raise ProductError("agent registry verifier is unavailable")
+    manifest = load_json_file(manifest_path, "agent manifest", MAX_AGENT_BYTES)
+    origin = manifest.get("origin")
+    if not isinstance(origin, str):
+        raise ProductError("agent manifest omits origin")
+    result = subprocess.run(
+        [
+            str(REGISTRY),
+            "verify-files",
+            str(manifest_path.expanduser().absolute()),
+            str(signature_path.expanduser().absolute()),
+            "--expected-origin",
+            origin,
+            "--at",
+            utc_text(at),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()
+        summary = detail[-1] if detail else "verification failed"
+        raise ProductError(f"agent proof is not active: {summary}")
+    try:
+        verified = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise ProductError("agent verifier returned invalid JSON") from error
+    if verified.get("eligible") is not True or verified.get("status") != "active":
+        raise ProductError("agent proof is not active and eligible")
+    return verified
+
+
+def validate_public_key(value: object) -> str:
+    if not isinstance(value, str):
+        raise ProductError("agent public key must be text")
+    match = SSH_KEY_PATTERN.fullmatch(value)
+    if match is None:
+        raise ProductError("agent public key must be comment-free ssh-ed25519")
+    try:
+        base64.b64decode(match.group(1), validate=True)
+    except ValueError as error:
+        raise ProductError("agent public key has invalid base64") from error
+    return value
+
+
+def validate_claim(
+    claim: dict[str, Any],
+    agent: dict[str, Any],
+    *,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    require_exact_keys(
+        claim,
+        {
+            "schema_version",
+            "product_id",
+            "name",
+            "maker",
+            "product_url",
+            "release_evidence",
+            "issued_at",
+            "expires_at",
+            "sequence",
+            "status",
+        },
+        "product claim",
+    )
+    if claim["schema_version"] != 1:
+        raise ProductError("product claim has an unsupported schema_version")
+    product_id = bounded_text(claim["product_id"], "product_id", 64, minimum=3)
+    if ID_PATTERN.fullmatch(product_id) is None:
+        raise ProductError("product_id must be lowercase letters, digits, or hyphens")
+    name = bounded_text(claim["name"], "name", 120)
+    maker = claim["maker"]
+    if not isinstance(maker, dict):
+        raise ProductError("maker must be an object")
+    require_exact_keys(
+        maker,
+        {"agent_id", "origin", "manifest_sha256", "sequence"},
+        "maker",
+    )
+    if maker["agent_id"] != agent["agent_id"]:
+        raise ProductError("maker agent_id differs from the agent proof")
+    if maker["origin"] != agent["origin"]:
+        raise ProductError("maker origin differs from the agent proof")
+    if maker["manifest_sha256"] != agent["manifest_sha256"]:
+        raise ProductError("maker manifest hash differs from the agent proof")
+    if maker["sequence"] != agent["sequence"]:
+        raise ProductError("maker sequence differs from the agent proof")
+    product_url = https_url(claim["product_url"], "product_url")
+    release = claim["release_evidence"]
+    if not isinstance(release, dict):
+        raise ProductError("release_evidence must be an object")
+    require_exact_keys(release, {"kind", "claim", "url"}, "release_evidence")
+    release_kind = bounded_text(release["kind"], "release_evidence.kind", 80)
+    release_claim = bounded_text(
+        release["claim"], "release_evidence.claim", 1000
+    )
+    release_url = https_url(release["url"], "release_evidence.url")
+    issued_at = parse_moment(claim["issued_at"], "issued_at")
+    expires_at = parse_moment(claim["expires_at"], "expires_at")
+    agent_expires = parse_moment(agent["expires_at"], "agent expires_at")
+    if expires_at <= issued_at:
+        raise ProductError("expires_at must be later than issued_at")
+    if expires_at - issued_at > MAX_VALIDITY:
+        raise ProductError("product claim validity must not exceed 30 days")
+    if expires_at > agent_expires:
+        raise ProductError("product claim outlives the bound agent proof")
+    if issued_at > at + CLOCK_SKEW:
+        raise ProductError("product claim issued_at is too far in the future")
+    if expires_at <= at:
+        raise ProductError("product claim has expired")
+    sequence = claim["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise ProductError("sequence must be a positive integer")
+    status_value = claim["status"]
+    if status_value not in {"active", "revoked"}:
+        raise ProductError("status must be active or revoked")
+    return {
+        "schema_version": 1,
+        "product_id": product_id,
+        "name": name,
+        "maker": {
+            "agent_id": agent["agent_id"],
+            "origin": agent["origin"],
+            "manifest_sha256": agent["manifest_sha256"],
+            "sequence": agent["sequence"],
+        },
+        "product_url": product_url,
+        "release_evidence": {
+            "kind": release_kind,
+            "claim": release_claim,
+            "url": release_url,
+        },
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": sequence,
+        "status": status_value,
+    }
+
+
+def verify_signature(
+    claim_bytes: bytes,
+    signature_path: Path,
+    agent: dict[str, Any],
+) -> None:
+    read_regular(signature_path, "product signature", MAX_SIGNATURE_BYTES)
+    public_key = validate_public_key(agent["public_key"])
+    ssh_keygen = required_executable("ssh-keygen")
+    with tempfile.TemporaryDirectory(prefix="wywa-product-") as temporary:
+        allowed = Path(temporary) / "allowed_signers"
+        allowed.write_text(
+            f"{agent['agent_id']} {public_key}\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                ssh_keygen,
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                agent["agent_id"],
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature_path.expanduser().absolute()),
+            ],
+            input=claim_bytes,
+            capture_output=True,
+        )
+    if result.returncode != 0:
+        raise ProductError("product claim signature verification failed")
+
+
+def validate_previous(
+    previous_path: Path | None,
+    claim: dict[str, Any],
+    claim_hash: str,
+) -> None:
+    if previous_path is None:
+        return
+    previous = load_json_file(previous_path, "previous record", MAX_CLAIM_BYTES)
+    required = {
+        "product_id",
+        "maker_agent_id",
+        "maker_origin",
+        "sequence",
+        "status",
+        "claim_sha256",
+    }
+    if not required.issubset(previous):
+        raise ProductError("previous product verification record is incomplete")
+    for previous_key, claim_value in (
+        ("product_id", claim["product_id"]),
+        ("maker_agent_id", claim["maker"]["agent_id"]),
+        ("maker_origin", claim["maker"]["origin"]),
+    ):
+        if previous[previous_key] != claim_value:
+            raise ProductError(f"previous product record changes {previous_key}")
+    previous_sequence = previous["sequence"]
+    if (
+        isinstance(previous_sequence, bool)
+        or not isinstance(previous_sequence, int)
+        or previous_sequence < 1
+    ):
+        raise ProductError("previous product record has invalid sequence")
+    if claim["sequence"] < previous_sequence:
+        raise ProductError("product claim sequence rolls back the previous record")
+    if (
+        claim["sequence"] == previous_sequence
+        and previous["claim_sha256"] != claim_hash
+    ):
+        raise ProductError("product claim conflicts with the previous sequence")
+    if previous["status"] == "revoked" and claim["status"] == "active":
+        raise ProductError("a revoked product claim cannot reactivate automatically")
+
+
+def verification_record(
+    claim: dict[str, Any],
+    claim_bytes: bytes,
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "product_id": claim["product_id"],
+        "name": claim["name"],
+        "maker_agent_id": claim["maker"]["agent_id"],
+        "maker_origin": claim["maker"]["origin"],
+        "maker_manifest_sha256": claim["maker"]["manifest_sha256"],
+        "maker_sequence": claim["maker"]["sequence"],
+        "product_url": claim["product_url"],
+        "release_evidence": claim["release_evidence"],
+        "issued_at": claim["issued_at"],
+        "expires_at": claim["expires_at"],
+        "sequence": claim["sequence"],
+        "status": claim["status"],
+        "eligible": claim["status"] == "active",
+        "claim_sha256": hashlib.sha256(claim_bytes).hexdigest(),
+        "evidence": "detached-agent-and-product-files",
+    }
+
+
+def verify_files(args: argparse.Namespace) -> int:
+    at = utc_now() if args.at is None else parse_moment(args.at, "--at")
+    agent = verify_agent(args.agent_manifest, args.agent_signature, at=at)
+    claim_bytes = read_regular(args.claim, "product claim", MAX_CLAIM_BYTES)
+    claim = validate_claim(
+        load_json_bytes(claim_bytes, "product claim"),
+        agent,
+        at=at,
+    )
+    if canonical_bytes(claim) != claim_bytes:
+        raise ProductError("product claim is not canonical JSON")
+    verify_signature(claim_bytes, args.signature, agent)
+    claim_hash = hashlib.sha256(claim_bytes).hexdigest()
+    validate_previous(args.previous, claim, claim_hash)
+    record = verification_record(claim, claim_bytes)
+    print(json.dumps(record, indent=2, sort_keys=True))
+    return 0 if record["eligible"] else 4
+
+
+def key_public(key: Path) -> str:
+    absolute = key.expanduser().absolute()
+    metadata = absolute.lstat()
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ProductError("private key must be a regular, nonsymlink file")
+    if metadata.st_mode & 0o077:
+        raise ProductError("private key must not be accessible by group or others")
+    result = subprocess.run(
+        [required_executable("ssh-keygen"), "-y", "-f", str(absolute)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ProductError("could not derive public key from private key")
+    fields = result.stdout.strip().split()
+    if len(fields) < 2:
+        raise ProductError("private key produced an invalid public key")
+    return f"{fields[0]} {fields[1]}"
+
+
+def atomic_write(path: Path, content: bytes, mode: int) -> None:
+    temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def issue(args: argparse.Namespace) -> int:
+    issued_at = (
+        utc_now() if args.issued_at is None else parse_moment(args.issued_at, "--issued-at")
+    )
+    agent = verify_agent(
+        args.agent_manifest,
+        args.agent_signature,
+        at=issued_at,
+    )
+    if key_public(args.key) != agent["public_key"]:
+        raise ProductError("private key does not match the bound agent proof")
+    expires_at = issued_at + dt.timedelta(days=args.expires_days)
+    agent_expires = parse_moment(agent["expires_at"], "agent expires_at")
+    if expires_at > agent_expires:
+        expires_at = agent_expires
+    if expires_at <= issued_at:
+        raise ProductError("bound agent proof has no remaining claim lifetime")
+    draft = {
+        "schema_version": 1,
+        "product_id": args.product_id,
+        "name": args.name,
+        "maker": {
+            "agent_id": agent["agent_id"],
+            "origin": agent["origin"],
+            "manifest_sha256": agent["manifest_sha256"],
+            "sequence": agent["sequence"],
+        },
+        "product_url": args.product_url,
+        "release_evidence": {
+            "kind": args.release_kind,
+            "claim": args.release_claim,
+            "url": args.release_url,
+        },
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": args.sequence,
+        "status": args.status,
+    }
+    claim = validate_claim(draft, agent, at=issued_at)
+    claim_bytes = canonical_bytes(claim)
+    output = args.output.expanduser().absolute()
+    if output.exists() and (
+        output.is_symlink() or not output.is_dir()
+    ):
+        raise ProductError("output must be a nonsymlink directory")
+    output.mkdir(mode=0o755, parents=True, exist_ok=True)
+    output.chmod(0o755)
+    claim_path = output / f"{claim['product_id']}.json"
+    signature_path = output / f"{claim['product_id']}.sig"
+    if (
+        not args.replace
+        and (claim_path.exists() or signature_path.exists())
+    ):
+        raise ProductError("product claim already exists; use --replace")
+    if args.key.expanduser().absolute().is_relative_to(output):
+        raise ProductError("private key must remain outside the public output")
+    atomic_write(claim_path, claim_bytes, 0o644)
+    with tempfile.TemporaryDirectory(prefix="wywa-product-sign-") as temporary:
+        staged = Path(temporary) / "claim"
+        staged.write_bytes(claim_bytes)
+        result = subprocess.run(
+            [
+                required_executable("ssh-keygen"),
+                "-Y",
+                "sign",
+                "-f",
+                str(args.key.expanduser().absolute()),
+                "-n",
+                NAMESPACE,
+                str(staged),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        generated = Path(f"{staged}.sig")
+        if result.returncode != 0 or not generated.is_file():
+            claim_path.unlink(missing_ok=True)
+            raise ProductError("could not sign product claim")
+        signature_bytes = generated.read_bytes()
+    atomic_write(signature_path, signature_bytes, 0o644)
+    verify_signature(claim_bytes, signature_path, agent)
+    print(json.dumps(verification_record(claim, claim_bytes), indent=2, sort_keys=True))
+    return 0 if claim["status"] == "active" else 4
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Issue or verify a product-maker claim bound to a WYWA agent proof."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    issue_parser = subparsers.add_parser("issue")
+    issue_parser.add_argument("--product-id", required=True)
+    issue_parser.add_argument("--name", required=True)
+    issue_parser.add_argument("--product-url", required=True)
+    issue_parser.add_argument("--release-kind", required=True)
+    issue_parser.add_argument("--release-claim", required=True)
+    issue_parser.add_argument("--release-url", required=True)
+    issue_parser.add_argument("--agent-manifest", type=Path, required=True)
+    issue_parser.add_argument("--agent-signature", type=Path, required=True)
+    issue_parser.add_argument("--key", type=Path, required=True)
+    issue_parser.add_argument("--sequence", type=int, required=True)
+    issue_parser.add_argument("--status", choices=("active", "revoked"), default="active")
+    issue_parser.add_argument("--issued-at")
+    issue_parser.add_argument("--expires-days", type=int, default=14)
+    issue_parser.add_argument("--output", type=Path, required=True)
+    issue_parser.add_argument("--replace", action="store_true")
+    issue_parser.set_defaults(handler=issue)
+
+    verify_parser = subparsers.add_parser("verify-files")
+    verify_parser.add_argument("claim", type=Path)
+    verify_parser.add_argument("signature", type=Path)
+    verify_parser.add_argument("--agent-manifest", type=Path, required=True)
+    verify_parser.add_argument("--agent-signature", type=Path, required=True)
+    verify_parser.add_argument("--previous", type=Path)
+    verify_parser.add_argument("--at")
+    verify_parser.set_defaults(handler=verify_files)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if getattr(args, "expires_days", 1) < 1 or getattr(args, "expires_days", 1) > 30:
+        raise ProductError("--expires-days must be between 1 and 30")
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ProductError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

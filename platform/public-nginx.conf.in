@@ -112,6 +112,16 @@ server {
         try_files $uri =404;
     }
 
+    location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {
+        default_type application/json;
+        try_files $uri =404;
+    }
+
+    location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.sig$ {
+        default_type text/plain;
+        try_files $uri =404;
+    }
+
     location = /.well-known/nostr.json {
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;

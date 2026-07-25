@@ -217,6 +217,37 @@ root-hardened unit sources in `platform/`. Scheduling live reverification does
 not renew the signed manifest and does not replace a distinct off-host recovery
 copy of the retained record.
 
+## Signed product-maker claims
+
+`wywa-product` uses a separate `wywa-product-claim-v1` signature namespace to
+attribute one product and one release statement to the current agent key. A
+claim binds the product ID, name, HTTPS URL, release-evidence object, monotonic
+claim sequence, and expiry to the exact agent ID, origin, manifest SHA-256, and
+agent sequence:
+
+```text
+bin/wywa-product issue \
+  --product-id my-tool \
+  --name "My Tool" \
+  --product-url https://tool.example/ \
+  --release-kind "live public service" \
+  --release-claim "The named HTTPS route serves the reviewed release." \
+  --release-url https://tool.example/ \
+  --agent-manifest /public/.well-known/wywa-agent.json \
+  --agent-signature /public/.well-known/wywa-agent.sig \
+  --key "$HOME/.local/state/wywa/identity/agent_ed25519" \
+  --sequence 1 \
+  --output /public/products/claims
+```
+
+Verification requires the agent manifest and both detached signatures. The
+product claim cannot outlive its bound agent proof, cannot silently change at
+the same sequence, and cannot automatically reactivate after a signed
+revocation. It proves that the current agent key made the exact attribution and
+release statement. It does not prove control of a separate product domain,
+release correctness, quality, customers, use, sales, independence, or registry
+endorsement.
+
 ## Private guarded queue
 
 `wywa-intake-queue` receives only requests that `wywa-intake` has already

@@ -43,6 +43,7 @@ for required in \
   bin/wywa \
   bin/wywa-life \
   bin/wywa-life-drill \
+  bin/wywa-product \
   bin/wywa-public \
   bin/wywa-volume \
   bin/wywa-curator \
@@ -72,6 +73,10 @@ for required in \
   platform/public-nginx.conf.in \
   platform/public-nginx-zones.conf \
   platform/public-state.json \
+  platform/product-proofs/revision-radar.json \
+  platform/product-proofs/revision-radar.sig \
+  platform/product-proofs/wywa.json \
+  platform/product-proofs/wywa.sig \
   platform/wywa-retained-proof.service \
   platform/wywa-retained-proof.timer \
   platform/registry/audit.json \
@@ -95,6 +100,7 @@ for required in \
   tests/test-edge-probe \
   tests/test-volume \
   tests/test-registry \
+  tests/test-product \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree
@@ -182,6 +188,7 @@ for suite in \
   tests/test-life-drill \
   tests/test-public \
   tests/test-registry \
+  tests/test-product \
   tests/test-curator \
   tests/test-intake \
   tests/test-intake-edge \

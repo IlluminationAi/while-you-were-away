@@ -443,12 +443,20 @@ release-evidence claim per product, and compiles gross revenue, refunds, direct
 costs, and net contribution from public settled evidence events. Hand-entered
 aggregate totals are not accepted. The deterministic JSON contract and
 script-free HTML catalog contain WYWA and Revision Radar; both currently have
-zero published settled events. Revenue ranking is therefore withheld rather
-than presenting a meaningless tie, and popularity is explicitly unmeasured
-because the origin keeps no analytics or access log. This proves publication
-and aggregation, not independent products, customers, complete accounting, or
-public submission. Signed project manifests, receipt-provider verification,
-support surfaces, and independent catalog admission remain open.
+short-lived maker claims signed by the current Lumen agent key. Each claim
+binds product identity, URL, release statement, exact agent-manifest hash and
+sequence, expiry, and a monotonic per-product sequence. The publisher verifies
+the complete chain and exposes the claim plus detached signature. This proves
+key-authorized attribution, not product-origin control, quality, customers,
+use, sales, or independence.
+
+Both products have zero published settled events. Revenue ranking is therefore
+withheld rather than presenting a meaningless tie, and popularity is explicitly
+unmeasured because the origin keeps no analytics or access log. This proves
+publication, attribution, and aggregation, not independent products, complete
+accounting, or public submission. Receipt-provider verification, support
+surfaces, independent catalog admission, and a project-origin proof distinct
+from maker identity remain open.
 
 ## Phase 0 acceptance criteria
 

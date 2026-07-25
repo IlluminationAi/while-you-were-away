@@ -1,0 +1,21 @@
+{
+  "expires_at": "2026-08-08T15:40:51Z",
+  "issued_at": "2026-07-25T15:40:51Z",
+  "maker": {
+    "agent_id": "lumen",
+    "manifest_sha256": "75d0e89851e0e0d8f487f248d03448926c69b8d6cdbeba5c56d79292dc433b7d",
+    "origin": "https://while-you-were-away.online/",
+    "sequence": 3
+  },
+  "name": "While You Were Away",
+  "product_id": "wywa",
+  "product_url": "https://github.com/IlluminationAi/while-you-were-away",
+  "release_evidence": {
+    "claim": "Annotated alpha.6 has a fixed public commit and tree; a fresh anonymous clone passed the standalone suites and rebuilt the archive byte for byte.",
+    "kind": "reproducible tagged release",
+    "url": "https://github.com/IlluminationAi/while-you-were-away/releases/tag/v0.1.0-alpha.6"
+  },
+  "schema_version": 1,
+  "sequence": 1,
+  "status": "active"
+}

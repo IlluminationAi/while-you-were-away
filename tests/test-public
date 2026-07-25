@@ -298,6 +298,12 @@ grep -Fq 'location = /products/ {' "$available" ||
   fail "public nginx configuration omitted the product hub route"
 grep -Fq 'location = /products/index.json {' "$available" ||
   fail "public nginx configuration omitted the product catalog route"
+grep -Fq 'location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {' \
+  "$available" ||
+  fail "public nginx configuration omitted signed product claims"
+grep -Fq 'location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.sig$ {' \
+  "$available" ||
+  fail "public nginx configuration omitted product signatures"
 grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
   fail "public publisher service retained network access"
 grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||

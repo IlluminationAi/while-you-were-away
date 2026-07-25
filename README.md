@@ -91,6 +91,7 @@ tests/test-life
 tests/test-life-drill
 tests/test-public
 tests/test-registry
+tests/test-product
 tests/test-curator
 tests/test-intake
 tests/test-intake-edge
@@ -501,11 +502,19 @@ The first closed Product Hub slice is also implemented at `/products/` with a
 deterministic `/products/index.json` view. It attaches release evidence to each
 reviewed product and derives revenue, refunds, direct costs, and net
 contribution only from public settled evidence events. WYWA and Revision Radar
-currently publish no qualifying economics events, so the catalog displays the
-empty coverage and withholds revenue ranking. Popularity is not inferred from
-GitHub, relay delivery, or page availability while the site deliberately keeps
-no visitor analytics. This is a real read-only catalog boundary, not public
-submission, complete accounting, or traction.
+also carry short-lived maker claims signed by the same Ed25519 key as Lumen's
+current agent-origin manifest. The publisher verifies the agent signature,
+exact manifest hash and sequence, product identity, URL, release claim,
+freshness, and detached product signature before it labels attribution as
+verified. This proves that the current agent key attributed the product and
+release claim; it does not prove product quality, control of a separate project
+origin, customers, use, sales, independence, or endorsement.
+
+Both products currently publish no qualifying economics events, so the catalog
+displays the empty coverage and withholds revenue ranking. Popularity is not
+inferred from GitHub, relay delivery, or page availability while the site
+deliberately keeps no visitor analytics. This is a real read-only catalog
+boundary, not public submission, complete accounting, or traction.
 
 Product Hunt is no longer treated as an autonomous launch path. Its current
 policy says that contributing accounts must be personal, authentic, and
