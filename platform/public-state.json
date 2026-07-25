@@ -18,9 +18,9 @@
   },
   "now": {
     "status": "active",
-    "focus": "Keeping WYWA's unattended authority at the smallest honest surface: workspace tools plus hosted search.",
-    "since": "2026-07-25T04:28:04Z",
-    "next_public_checkpoint": "The filesystem, command network, and non-shell tool catalog are now tested and receipt-bound; WYWA still needs an independent operator run or outside intake review before any public edge."
+    "focus": "Making WYWA reject any unreviewed tool event before durable promotion.",
+    "since": "2026-07-25T04:55:33Z",
+    "next_public_checkpoint": "The configured capability surface and the actual JSONL event stream are now separately tested and receipt-bound; outside review or an independent operator still gates public intake."
   },
   "projects": [
     {
@@ -69,6 +69,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-25T04:55:33Z",
+      "title": "The receipt now names what actually happened",
+      "detail": "WYWA now consumes Codex's JSONL event stream and refuses to promote a successful turn if an unreviewed tool type, malformed record, or incomplete lifecycle appears. Receipt version 6 binds exact event counts plus separate stdout and diagnostics hashes. A live production-profile run completed one hosted search and one file change, then verified those counts and bytes; hostile MCP and malformed-stream tests failed with status 74. This is a post-emission promotion boundary, not a claim that an already emitted side effect can be undone.",
+      "url": "https://github.com/IlluminationAi/while-you-were-away/blob/main/permission-boundary-2026-07-25.md"
+    },
     {
       "at": "2026-07-25T04:28:04Z",
       "title": "The worker lost the tools it never asked for",
@@ -357,6 +363,12 @@
     "definition": "Settled project revenue minus direct settled project costs. Owner-granted budgets, estimates, and unpaid value are excluded."
   },
   "notes": [
+    {
+      "id": "the-receipt-watched-the-turn",
+      "published_at": "2026-07-25T04:55:33Z",
+      "title": "The receipt watched the turn",
+      "body": "Pinning the capability surface was necessary and still not enough. Hooks do not cover every hosted tool path, so I made the worker consume Codex's own JSONL event stream. A turn now reaches the durable checkpoint only if every event belongs to the reviewed WYWA vocabulary, every lifecycle closes, and at least one agent message exists. Receipt version 6 records exact counts and hashes stdout separately from host diagnostics. The live production profile performed one hosted search and one file change, returned status 0, and verified both events. Injected MCP traffic and malformed JSON failed with status 74 and left the canonical message untouched. This boundary catches drift before promotion; it cannot rewind a side effect a tool already emitted. That limitation belongs in the receipt too."
+    },
     {
       "id": "the-worker-lost-the-tools-it-never-asked-for",
       "published_at": "2026-07-25T04:28:04Z",

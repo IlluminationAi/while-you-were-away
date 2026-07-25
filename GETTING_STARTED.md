@@ -5,8 +5,8 @@ launch-ready.
 
 ## Prerequisites
 
-- Linux with systemd user services, Bash, Git, OpenSSH client tools, Curl,
-  `flock`, `timeout`, `sha256sum`, and an authenticated Codex CLI.
+- Linux with systemd user services, Bash, Git, Python 3, OpenSSH client tools,
+  Curl, `flock`, `timeout`, `sha256sum`, and an authenticated Codex CLI.
 - A normal non-root user. The portable runtime refuses root by default.
 - User lingering if the worker must survive an SSH logout. An administrator
   can inspect it with:
@@ -227,21 +227,31 @@ browser/computer control, image generation, subagents, goals, skill dependency
 installation, and tool suggestions. Live hosted search is the only non-shell
 external tool left enabled.
 
-After a successful cycle, WYWA checks the change and creates the Git checkpoint
-from the host side with hooks and global Git configuration disabled. It refuses
-a dirty starting tree, special or oversized files, nested Git metadata,
+Every unattended run also requests Codex's JSONL event stream. A successful
+turn is accepted only when its thread/turn lifecycle is complete and every item
+is one of the reviewed local, planning, image-view, or hosted-search types.
+Malformed JSON, an MCP call, a collaboration call, or any other unreviewed
+event records status 74 and refuses both checkpointing and final-message
+promotion. This audit happens after Codex emits the event, so it detects
+unexpected hosted-tool use but cannot undo an outside action that already
+happened.
+
+After that audit, WYWA checks the change and creates the Git checkpoint from
+the host side with hooks and global Git configuration disabled. It refuses a
+dirty starting tree, special or oversized files, nested Git metadata,
 workspace-local Codex config, malformed diffs, and common credential
 signatures. A zero-change cycle records status 72; an unsafe checkpoint records
 status 73 and preserves the uncommitted evidence. Neither case publishes a new
 final message. Inspect `git log`, `git status`, and the private result receipt
 before enabling unattended work.
 
-The version-5 receipt records the enforced permission profile, disabled
+The version-6 receipt records the enforced permission profile, disabled
 local-command network, live hosted search, disabled extension surfaces,
-workspace-local config absence, no-approval posture, ephemeral session, full
-host-created commit, exact tree, and SHA-256 digests of the private run log and
-published final message. Version 2–4 receipts remain mechanically verifiable as
-legacy evidence, but their unrecorded capabilities are not inferred.
+workspace-local config absence, no-approval posture, ephemeral session,
+event-audit policy and counts, full host-created commit, exact tree, and
+SHA-256 digests of the JSONL log, separate diagnostics, and published final
+message. Version 2–5 receipts remain mechanically verifiable as legacy
+evidence, but their unrecorded capabilities are not inferred.
 `verify-receipt` checks that mechanical chain without trusting the worker.
 This proves which bytes became durable and which output the wrapper accepted;
 it does not prove that a claim inside those bytes is true. External claims

@@ -36,7 +36,7 @@ Permission profiles govern local command execution. Built-in web search,
 connectors, browser tools, cloud tasks, and approved escalations are separate
 capabilities; WYWA does not pretend the filesystem profile governs them.
 WYWA deliberately enables live hosted search for its read-only research
-mandate. Version-5 receipts record both sides of that split plus the rest of
+mandate. Version-6 receipts record both sides of that split plus the rest of
 the unattended authority surface.
 
 ## Non-shell capability boundary
@@ -75,7 +75,8 @@ printed. All disposable paths were removed.
 `tests/test-wywa` now rejects every Codex version except the reviewed 0.145.0,
 asserts every profile and feature argument, refuses any simultaneous legacy
 `--sandbox` or dangerous bypass, rejects workspace-local Codex configuration,
-and checks that version-5 receipts preserve the full posture. Version 2–4
+and checks that version-6 receipts preserve the full posture and audited event
+counts. Version 2–5
 receipts remain verifiable without retroactively claiming fields they did not
 record.
 
@@ -90,6 +91,36 @@ returned `No such file or directory`, and the model reported
 verified runtime behavior takes precedence over the newer schema. The surviving
 tool therefore remains part of the filesystem upgrade probe.
 
+## Event-stream audit
+
+Feature flags describe intended availability; they do not prove which tool
+items actually appeared in a turn. WYWA now runs `codex exec --json`, keeps its
+JSONL event stream separate from stderr diagnostics, and applies the versioned
+`wywa-v1` policy before checkpointing. The policy requires one complete thread
+and turn, a completed agent message, balanced started/completed items, valid
+UTF-8 JSON objects, and only the reviewed item types: agent messages,
+reasoning, command execution, file changes, hosted search, planning,
+workspace-scoped image view, and context compaction.
+
+A malformed stream or an MCP, dynamic, collaboration, or other unreviewed item
+returns status 74. The wrapper preserves private logs but does not checkpoint
+workspace changes or replace the last accepted message. Version-6 receipts bind
+the exact completed-item counts, JSONL digest, and separate diagnostics digest;
+`verify-receipt` repeats the structural audit.
+
+Two live Codex 0.145.0 probes under the exact production arguments established
+the current wire shapes. One hosted-search turn emitted `web_search`
+`item.started` and `item.completed`. A second turn emitted
+`command_execution` and `file_change` pairs for `pwd` and one `apply_patch`;
+both ended with one `turn.completed` and the expected final message.
+
+This is intentionally described as a post-emission audit. Codex hooks do not
+cover hosted tools, and some specialized paths can opt out of the local hook
+path. The audit can refuse durable promotion after unexpected use; it cannot
+reverse an external action that occurred before the event reached stdout.
+Inline feature controls, the deny-read permission profile, and disabled local
+network remain the primary enforcement layers.
+
 ## Evidence sources
 
 Official OpenAI documentation, accessed 2026-07-25 UTC:
@@ -102,8 +133,14 @@ Official OpenAI documentation, accessed 2026-07-25 UTC:
   separate app, plugin, browser, multi-agent, and hook features:
   https://learn.chatgpt.com/docs/config-file/config-reference#configtoml
 - `codex exec` reference for the exact scope of `--ignore-user-config`,
-  `--ignore-rules`, and `--ephemeral`:
+  `--ignore-rules`, `--ephemeral`, and `--json`, including the documented
+  event and item families:
   https://learn.chatgpt.com/docs/developer-commands#codex-exec
+- Codex non-interactive guide for JSONL lifecycle and item types:
+  https://learn.chatgpt.com/docs/non-interactive-mode
+- Codex hooks guide for `PreToolUse` coverage and the explicit hosted-tool and
+  specialized-path exceptions:
+  https://learn.chatgpt.com/docs/hooks
 
 ## Rollback
 

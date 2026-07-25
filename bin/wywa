@@ -400,6 +400,8 @@ doctor_workspace() {
   validate_workspace_path "$workspace"
   check_root_boundary
   check_required_workspace_files "$workspace"
+  command -v python3 >/dev/null 2>&1 ||
+    die "python3 is required for the Codex JSON event audit"
   codex_bin=$(resolve_codex_bin)
   safe_environment clean_env
   check_codex_permissions_support "$codex_bin"
@@ -427,6 +429,114 @@ cmd_doctor() {
 
 valid_duration() {
   [[ "$1" =~ ^[1-9][0-9]*[smhd]$ ]]
+}
+
+audit_event_log() {
+  local event_log=$1
+  python3 - "$event_log" <<'PY'
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+path = Path(sys.argv[1])
+allowed_events = {
+    "thread.started",
+    "turn.started",
+    "item.started",
+    "item.updated",
+    "item.completed",
+    "turn.completed",
+}
+allowed_items = (
+    "agent_message",
+    "reasoning",
+    "command_execution",
+    "file_change",
+    "web_search",
+    "todo_list",
+    "plan",
+    "image_view",
+    "context_compaction",
+)
+events = []
+item_counts = Counter()
+started_items = {}
+completed_items = set()
+
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except (OSError, UnicodeError) as exc:
+    raise SystemExit(f"event audit: unreadable UTF-8 JSONL: {exc}")
+
+if not lines:
+    raise SystemExit("event audit: empty JSONL stream")
+
+for number, line in enumerate(lines, 1):
+    try:
+        event = json.loads(line)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"event audit: invalid JSON on line {number}: {exc.msg}"
+        )
+    if not isinstance(event, dict):
+        raise SystemExit(f"event audit: line {number} is not a JSON object")
+    event_type = event.get("type")
+    if event_type not in allowed_events:
+        raise SystemExit(
+            f"event audit: unexpected top-level event on line {number}: "
+            f"{event_type!r}"
+        )
+    events.append(event_type)
+    if not event_type.startswith("item."):
+        continue
+    item = event.get("item")
+    if not isinstance(item, dict):
+        raise SystemExit(f"event audit: line {number} has no item object")
+    item_type = item.get("type")
+    if item_type not in allowed_items:
+        raise SystemExit(
+            f"event audit: unexpected item type on line {number}: "
+            f"{item_type!r}"
+        )
+    item_id = item.get("id")
+    if not isinstance(item_id, str) or not item_id:
+        raise SystemExit(f"event audit: line {number} has no item id")
+    if event_type == "item.started":
+        if item_id in started_items:
+            raise SystemExit(
+                f"event audit: duplicate item.started for {item_id}"
+            )
+        started_items[item_id] = item_type
+    elif event_type == "item.completed":
+        if item_id in completed_items:
+            raise SystemExit(
+                f"event audit: duplicate item.completed for {item_id}"
+            )
+        if item_id in started_items and started_items[item_id] != item_type:
+            raise SystemExit(f"event audit: item type changed for {item_id}")
+        completed_items.add(item_id)
+        item_counts[item_type] += 1
+
+if events[:2] != ["thread.started", "turn.started"]:
+    raise SystemExit("event audit: stream did not start with thread and turn")
+if events[-1] != "turn.completed":
+    raise SystemExit("event audit: successful stream did not complete its turn")
+if events.count("thread.started") != 1:
+    raise SystemExit("event audit: stream has an unexpected thread count")
+if events.count("turn.started") != 1 or events.count("turn.completed") != 1:
+    raise SystemExit("event audit: stream has an unexpected turn count")
+unfinished = sorted(set(started_items) - completed_items)
+if unfinished:
+    raise SystemExit(
+        "event audit: unfinished item(s): " + ",".join(unfinished)
+    )
+if item_counts["agent_message"] < 1:
+    raise SystemExit("event audit: stream has no completed agent message")
+
+summary = ",".join(f"{name}:{item_counts[name]}" for name in allowed_items)
+print(f"policy=wywa-v1 item_counts={summary}")
+PY
 }
 
 cmd_run() {
@@ -463,9 +573,10 @@ cmd_run() {
   doctor_workspace "$workspace"
 
   local codex_bin runtime_dir logs_dir lock_file last_message
-  local last_run prompt run_stamp run_log message_tmp receipt_tmp
+  local last_run prompt run_stamp run_log diagnostics_log message_tmp receipt_tmp
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
   local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
+  local event_audit='' event_counts=unverified audit_status=0
   local -a clean_env permission_args capability_args command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
@@ -519,6 +630,7 @@ cmd_run() {
     "${capability_args[@]}"
     --cd "$workspace"
     --color never
+    --json
   )
 
   if (( dry_run == 1 )); then
@@ -532,6 +644,7 @@ cmd_run() {
     printf '%s\n' "extensions: apps, plugins, hooks, browsers, and subagents disabled"
     printf '%s\n' "configuration: user config and project rules ignored; workspace-local .codex forbidden"
     printf '%s\n' "approvals: never; session persistence: ephemeral"
+    printf '%s\n' "event stream: JSONL; reviewed item types required before checkpoint"
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -550,14 +663,17 @@ cmd_run() {
 
   run_stamp=$(date -u +%Y%m%dT%H%M%SZ)
   run_log=$logs_dir/cycle-$run_stamp-$$.log
+  diagnostics_log=$logs_dir/diagnostics-$run_stamp-$$.log
   message_tmp=$(mktemp "$runtime_dir/.last-message.XXXXXX")
   receipt_tmp=$(mktemp "$runtime_dir/.last-run.XXXXXX")
+  : >"$run_log"
+  : >"$diagnostics_log"
 
   # Invoked indirectly by the EXIT trap.
   # shellcheck disable=SC2329
   finalize_run() {
     local final_status=$?
-    local log_sha256 message_sha256=none
+    local log_sha256 diagnostics_sha256 message_sha256=none
     set +e
     if [[ "$final_status" -eq 0 && -s "$message_tmp" ]]; then
       mv -f -- "$message_tmp" "$last_message"
@@ -566,20 +682,27 @@ cmd_run() {
       rm -f -- "$message_tmp"
     fi
     log_sha256=$(sha256sum -- "$run_log" | cut -d ' ' -f 1)
-    printf '%s receipt=5 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
+    diagnostics_sha256=$(
+      sha256sum -- "$diagnostics_log" | cut -d ' ' -f 1
+    )
+    printf '%s receipt=6 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$permission_profile" \
+      "$event_counts" \
       "$checkpoint_result" \
       "$checkpoint_commit" \
       "$checkpoint_tree" \
       "$log_sha256" \
+      "$diagnostics_sha256" \
       "$message_sha256" \
+      "$diagnostics_log" \
       "$run_log" >"$receipt_tmp"
     mv -f -- "$receipt_tmp" "$last_run"
     (
       cd /
       find "$logs_dir" -type f -name 'cycle-*.log' -mtime +30 -delete
+      find "$logs_dir" -type f -name 'diagnostics-*.log' -mtime +30 -delete
     )
   }
   trap finalize_run EXIT
@@ -606,7 +729,7 @@ cmd_run() {
     --signal=TERM \
     --kill-after=30s \
     "$max_runtime" \
-    "${command_line[@]}" >>"$run_log" 2>&1 &
+    "${command_line[@]}" >>"$run_log" 2>>"$diagnostics_log" &
   codex_pid=$!
   if [[ -n "$termination_status" ]]; then
     kill -TERM "$codex_pid" 2>/dev/null || true
@@ -625,20 +748,40 @@ cmd_run() {
   set -e
 
   if [[ "$run_status" -eq 0 && ! -s "$message_tmp" ]]; then
-    printf '%s\n' "run: Codex returned success without a final message" >>"$run_log"
+    printf '%s\n' \
+      "run: Codex returned success without a final message" \
+      >>"$diagnostics_log"
     checkpoint_result=refused
     run_status=70
   fi
 
   if [[ "$run_status" -eq 0 ]]; then
     set +e
-    checkpoint_workspace "$workspace" "$run_stamp" >>"$run_log" 2>&1
+    event_audit=$(audit_event_log "$run_log" 2>>"$diagnostics_log")
+    audit_status=$?
+    set -e
+    if [[ "$audit_status" -ne 0 ]]; then
+      checkpoint_result=refused
+      run_status=74
+      printf 'run: Codex event audit refused; inspect diagnostics: %s\n' \
+        "$diagnostics_log" >&2
+    else
+      event_counts=${event_audit#policy=wywa-v1 item_counts=}
+    fi
+  fi
+
+  if [[ "$run_status" -eq 0 ]]; then
+    set +e
+    checkpoint_workspace \
+      "$workspace" \
+      "$run_stamp" \
+      >>"$diagnostics_log" 2>&1
     checkpoint_status=$?
     set -e
     if [[ "$checkpoint_status" -ne 0 ]]; then
       run_status=$checkpoint_status
-      printf 'run: checkpoint refused; inspect private log: %s\n' \
-        "$run_log" >&2
+      printf 'run: checkpoint refused; inspect diagnostics: %s\n' \
+        "$diagnostics_log" >&2
     fi
   fi
 
@@ -670,13 +813,15 @@ cmd_status() {
 
 cmd_verify_receipt() {
   require_single_workspace_arg "$@"
-  local workspace runtime_dir receipt line prefix log_path
+  local workspace runtime_dir receipt line prefix log_path diagnostics_path=''
   local receipt_version='' status='' sandbox='' checkpoint=''
   local permissions='' local_network='' web_search=''
   local apps='' plugins='' hooks='' subagents='' project_config=''
-  local approval='' persistence=''
-  local commit='' tree='' log_sha256='' message_sha256='' token
-  local actual_commit actual_tree actual_log_sha256 actual_message_sha256
+  local approval='' persistence='' events='' event_counts=''
+  local commit='' tree='' log_sha256='' diagnostics_sha256=''
+  local message_sha256='' token event_audit='' actual_event_counts=''
+  local actual_commit actual_tree actual_log_sha256 actual_diagnostics_sha256
+  local actual_message_sha256
   workspace=$(canonical_workspace_path "$1")
   validate_workspace_path "$workspace"
   runtime_dir=$(runtime_dir_for "$workspace")
@@ -707,18 +852,25 @@ cmd_verify_receipt() {
       project_config=*) project_config=${token#project_config=} ;;
       approval=*) approval=${token#approval=} ;;
       persistence=*) persistence=${token#persistence=} ;;
+      events=*) events=${token#events=} ;;
+      event_counts=*) event_counts=${token#event_counts=} ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
       log_sha256=*) log_sha256=${token#log_sha256=} ;;
+      diagnostics_sha256=*)
+        diagnostics_sha256=${token#diagnostics_sha256=}
+        ;;
       message_sha256=*) message_sha256=${token#message_sha256=} ;;
+      diagnostics=*) diagnostics_path=${token#diagnostics=} ;;
     esac
   done
 
   [[ "$receipt_version" == 2 ||
      "$receipt_version" == 3 ||
      "$receipt_version" == 4 ||
-     "$receipt_version" == 5 ]] ||
+     "$receipt_version" == 5 ||
+     "$receipt_version" == 6 ]] ||
     die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
@@ -738,7 +890,7 @@ cmd_verify_receipt() {
     [[ "$web_search" == live ]] ||
       die "receipt records an unexpected hosted web search capability"
   fi
-  if [[ "$receipt_version" == 5 ]]; then
+  if [[ "$receipt_version" == 5 || "$receipt_version" == 6 ]]; then
     [[ "$local_network" == disabled ]] ||
       die "receipt records an unexpected local network capability"
     [[ "$web_search" == live ]] ||
@@ -757,6 +909,14 @@ cmd_verify_receipt() {
       die "receipt records an unexpected approval posture"
     [[ "$persistence" == ephemeral ]] ||
       die "receipt records unexpected Codex session persistence"
+  fi
+  if [[ "$receipt_version" == 6 ]]; then
+    [[ "$events" == wywa-v1 ]] ||
+      die "receipt records an unexpected event-audit policy"
+    [[ "$event_counts" =~ ^agent_message:[0-9]+,reasoning:[0-9]+,command_execution:[0-9]+,file_change:[0-9]+,web_search:[0-9]+,todo_list:[0-9]+,plan:[0-9]+,image_view:[0-9]+,context_compaction:[0-9]+$ ]] ||
+      die "receipt records malformed event counts"
+    [[ "$diagnostics_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+      die "last-run receipt has an invalid diagnostics digest"
   fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
@@ -792,13 +952,29 @@ cmd_verify_receipt() {
   actual_log_sha256=$(sha256sum -- "$log_path" | cut -d ' ' -f 1)
   [[ "$actual_log_sha256" == "$log_sha256" ]] ||
     die "private log digest does not match the receipt"
+  if [[ "$receipt_version" == 6 ]]; then
+    [[ "$diagnostics_path" == "$runtime_dir/logs/"* ]] ||
+      die "recorded diagnostics are outside the private runtime"
+    [[ -f "$diagnostics_path" && ! -L "$diagnostics_path" ]] ||
+      die "recorded diagnostics are missing or unsafe"
+    actual_diagnostics_sha256=$(
+      sha256sum -- "$diagnostics_path" | cut -d ' ' -f 1
+    )
+    [[ "$actual_diagnostics_sha256" == "$diagnostics_sha256" ]] ||
+      die "private diagnostics digest does not match the receipt"
+    event_audit=$(audit_event_log "$log_path") ||
+      die "private event log no longer passes its recorded policy"
+    actual_event_counts=${event_audit#policy=wywa-v1 item_counts=}
+    [[ "$actual_event_counts" == "$event_counts" ]] ||
+      die "private event counts do not match the receipt"
+  fi
   actual_message_sha256=$(
     sha256sum -- "$runtime_dir/last-message.txt" | cut -d ' ' -f 1
   )
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s\n' \
+  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s\n' \
     "${commit:0:12}" "${tree:0:12}" \
     "${permissions:-legacy-workspace-write}" \
     "${local_network:-unrecorded}" \
@@ -809,7 +985,9 @@ cmd_verify_receipt() {
     "${subagents:-unrecorded}" \
     "${project_config:-unrecorded}" \
     "${approval:-unrecorded}" \
-    "${persistence:-unrecorded}"
+    "${persistence:-unrecorded}" \
+    "${events:-unrecorded}" \
+    "${event_counts:-unrecorded}"
 }
 
 cmd_run_state() {

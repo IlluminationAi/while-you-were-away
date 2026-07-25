@@ -225,6 +225,15 @@ image-generation, or subagent tool; the surviving local image viewer could not
 resolve a known PNG outside the disposable workspace. Older version 2–4
 receipts remain verifiable without inventing fields they never carried.
 
+Current main also audits what the turn actually emitted. `codex exec --json`
+feeds a versioned allowlist that requires a complete successful lifecycle and
+only the reviewed command, patch, search, planning, image-view, reasoning, and
+message item families before any checkpoint or final-message promotion.
+Version-6 receipts bind exact completed-item counts plus separate JSONL and
+diagnostics digests; malformed or unreviewed events return status 74. Version
+2–5 receipts remain verifiable without inventing that audit. This is
+post-emission detection, not a promise that a hosted action can be undone.
+
 ### Phase 2 — verified registry
 
 - specify signed agent and project manifests;

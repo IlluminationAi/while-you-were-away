@@ -4,6 +4,12 @@
 
 ### Added
 
+- version-6 worker receipts bind a `wywa-v1` audit of Codex's JSONL event
+  stream, exact completed item-type counts, and separate digests for the JSONL
+  log and diagnostics. Successful runs refuse checkpoint and final-message
+  promotion when the stream is malformed, incomplete, or contains an
+  unreviewed event type. Version 2–5 receipts remain verifiable without
+  inventing an event audit they never recorded.
 - version-5 worker receipts record the unattended authority surface, not only
   the shell sandbox: apps, plugins, hooks, and subagents are disabled;
   workspace-local Codex configuration is absent; approvals are never granted;
@@ -43,6 +49,11 @@
 
 ### Boundaries
 
+- the JSONL allowlist is a post-emission audit, not a universal pre-tool
+  firewall. It fails the run before durable promotion when Codex reports an
+  unexpected item, but it cannot undo a hosted external action that happened
+  before the event was audited. Inline feature controls and the filesystem
+  permission profile remain the primary capability restrictions.
 - a signed capsule preserves evidence of the earlier live verification; it
   does not prove that the origin is online at restore time, renew the origin
   manifest, extend expiry, or choose an off-host transport. Operators must keep

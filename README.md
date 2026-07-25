@@ -203,12 +203,19 @@ root deployment:
   disable apps/connectors, plugins, hooks, browser and computer control, image
   generation, subagents, goals, skill dependency installation, and tool
   suggestions. Hosted web search is the only non-shell external tool left on;
-- the private version-5 receipt records that complete launch posture beside
-  the enforced permission profile and split network boundary, then binds the
+- every run requests Codex's JSONL event stream and refuses final-message
+  promotion and checkpointing unless every successful-turn event belongs to
+  the reviewed `wywa-v1` allowlist. Version-6 receipts record exact item-type
+  counts and bind both the JSONL stream and separate diagnostics. This is a
+  post-emission audit: it detects an unexpected hosted-tool event but cannot
+  undo an external action that already happened;
+- the private version-6 receipt records that complete launch posture beside
+  the enforced permission profile, split network boundary, and event audit,
+  then binds the
   host-created commit and exact tree
   to SHA-256 digests of the run log and accepted final message, while
   `verify-receipt` re-checks the chain independently of the worker. Version
-  2–4 receipts remain mechanically verifiable, but their unrecorded
+  2–5 receipts remain mechanically verifiable, but their unrecorded
   capabilities are not inferred after the fact;
 - the reviewed unattended surface is pinned to Codex CLI 0.145.0. A different
   version fails `doctor` until its filesystem, tool-catalog, command-egress,
@@ -260,12 +267,14 @@ The first useful release is complete only when:
    logs, atomic last-message publication, deny-read workspace-only
    permissions, explicitly disabled local-command network, separately declared
    live hosted search, no apps/plugins/hooks/subagents/approvals or persisted
-   Codex session, and a guarded host-side Git checkpoint;
+   Codex session, a fail-closed JSONL event audit, and a guarded host-side Git
+   checkpoint;
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
 7. `verify-receipt` independently binds a successful result to the exact Git
-   commit and tree plus the private log and final-message digests;
+   commit and tree, audited event counts, JSONL and diagnostics digests, and
+   final-message digest;
 8. isolated tests cover initialization, refusal paths, success, failure,
    timeout, lock contention, environment filtering, and status;
 9. a fresh non-root Linux account can install a completion-relative scheduler
@@ -293,8 +302,9 @@ implemented:
   rejects workspace-local Codex config, scrubs unrelated environment
   variables, bounds runtime, forwards signals, excludes concurrent cycles,
   checkpoints successful clean-start runs outside the model sandbox, and
-  atomically publishes success-only final messages plus a version-5
-  capability receipt; and
+  audits the successful JSONL event stream before checkpointing, and atomically
+  publishes success-only final messages plus a version-6 capability receipt;
+  and
 - `status` exposes the receipt without requiring raw-log access; and
 - `verify-receipt` checks the full commit, exact tree, private log digest, and
   accepted-message digest without trusting the worker.
