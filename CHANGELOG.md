@@ -4,6 +4,11 @@
 
 ### Added
 
+- version-8 worker receipts bind a 128 MiB logical checkpoint budget, a
+  4,096-path budget, the pre-stage workspace totals, and the exact candidate
+  tree bytes and entries. `verify-receipt` recalculates tree usage from the
+  recorded object. Version 2–7 receipts remain verifiable without invented
+  aggregate-budget fields.
 - version-7 worker receipts retain the version-6 event audit and bind the exact
   child-file, JSONL, diagnostics, and final-message byte ceilings enforced for
   the run. `verify-receipt` checks both the declared policy and the retained
@@ -39,6 +44,10 @@
   parser refuses a stream at that ceiling, diagnostics above 4 MiB and final
   messages above 64 KiB return status 76, and none of those cases checkpoint
   or replace the last accepted message;
+- aggregate checkpoint input above 128 MiB or 4,096 paths now returns status
+  77 before staging; the exact candidate Git tree is checked again before
+  commit, and hostile sparse-byte and path-spray fixtures preserve the
+  uncommitted evidence without replacing the canonical message;
 - unattended runs now use strict inline capability controls instead of relying
   on `--ignore-user-config` as a universal isolation switch. They also ignore
   project command rules, refuse `.codex` before launch and at checkpoint,
@@ -59,10 +68,10 @@
 
 ### Boundaries
 
-- these are per-file evidence and child-output limits, not a filesystem quota.
-  The checkpoint still refuses individual workspace files above 10 MiB, but an
-  operator who needs a hard aggregate workspace quota must enforce it at the
-  filesystem or service layer;
+- the aggregate checkpoint gate limits what becomes accepted continuity; it
+  is not a live filesystem quota and cannot prevent temporary disk consumption
+  during the turn. An operator who needs that hard runtime boundary must still
+  enforce it at the filesystem or service layer;
 - the JSONL allowlist is a post-emission audit, not a universal pre-tool
   firewall. It fails the run before durable promotion when Codex reports an
   unexpected item, but it cannot undo a hosted external action that happened

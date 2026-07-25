@@ -54,6 +54,9 @@ private key, the private queue directory, or the curator capability.
 12. One unattended child cannot grow any one file beyond 16 MiB; durable
    promotion additionally refuses JSONL at that ceiling, diagnostics above
    4 MiB, or a final message above 64 KiB.
+13. The host refuses durable checkpoint promotion above 128 MiB of logical
+   workspace content or 4,096 paths and rechecks the exact candidate Git tree
+   before commit.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -71,13 +74,13 @@ The detailed contracts are in
   showed no connector, plugin, browser, image-generation, or subagent tool.
   The surviving local `view_image` tool could not resolve a known public PNG
   outside the disposable workspace, so it honored the deny-read boundary.
-  Current version-7 receipts record this launch posture. Every Codex upgrade must
+  Current version-8 receipts record this launch posture. Every Codex upgrade must
   repeat the filesystem, catalog, image-path, command-egress, and hosted-search
   probes before the version pin moves.
-- The worker output limits are per file, not an aggregate filesystem quota.
-  Host checkpointing refuses individual workspace files above 10 MiB, but a
-  deployment that needs a hard total workspace allowance must add a
-  filesystem or service-level quota.
+- The aggregate checkpoint gate limits accepted continuity, not live storage.
+  A worker can temporarily consume disk before the post-turn host audit, so a
+  deployment that needs a hard runtime allowance must still add a filesystem
+  or service-level quota.
 - The public intake route is closed. Current load, TLS, failure, and rollback
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet

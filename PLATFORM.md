@@ -229,16 +229,25 @@ Current main also audits what the turn actually emitted. `codex exec --json`
 feeds a versioned allowlist that requires a complete successful lifecycle and
 only the reviewed command, patch, search, planning, image-view, reasoning, and
 message item families before any checkpoint or final-message promotion.
-Version-7 receipts bind exact completed-item counts plus separate JSONL and
+Version-8 receipts bind exact completed-item counts plus separate JSONL and
 diagnostics digests; malformed or unreviewed events return status 74. They
 also bind the host boundary that caps every child-written file at 16 MiB and
 accepts only JSONL below that ceiling, diagnostics no larger than 4 MiB, and
 final messages no larger than 64 KiB. Oversized evidence returns status 76
-without a checkpoint or canonical-message replacement. Version 2–6 receipts
-remain verifiable without inventing missing audit or limit fields. The event
-audit is post-emission detection, not a promise that a hosted action can be
-undone; the byte ceilings close unbounded evidence parsing and per-file output
-growth, not aggregate filesystem use by the worker workspace.
+without a checkpoint or canonical-message replacement. The event audit is
+post-emission detection, not a promise that a hosted action can be undone; the
+byte ceilings close unbounded evidence parsing and per-file output growth.
+
+The same receipt has a separate aggregate checkpoint boundary. Before staging,
+the host accepts at most 128 MiB of logical workspace content and 4,096 paths;
+after staging it rechecks the exact candidate Git tree. Status 77 preserves
+the uncommitted evidence and prior canonical message when either budget is
+crossed. Version-8 receipts bind the configured budgets, inspected input
+totals, and exact tree totals; `verify-receipt` recalculates the latter from
+the recorded tree. Version 2–7 receipts remain verifiable without inventing
+missing audit or budget fields. This limits what becomes durable continuity.
+It does not prevent temporary disk exhaustion during the turn; a hard
+live-storage limit still belongs at the filesystem or service layer.
 
 ### Phase 2 — verified registry
 

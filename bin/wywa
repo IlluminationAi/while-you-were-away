@@ -13,6 +13,8 @@ max_event_log_bytes=$((16 * 1024 * 1024))
 max_diagnostics_log_bytes=$((4 * 1024 * 1024))
 max_final_message_bytes=$((64 * 1024))
 max_child_file_bytes=$((16 * 1024 * 1024))
+max_checkpoint_bytes=$((128 * 1024 * 1024))
+max_checkpoint_paths=4096
 child_file_limit_kib=$((max_child_file_bytes / 1024))
 
 usage() {
@@ -202,10 +204,69 @@ unstage_checkpoint() {
     restore --staged --source=HEAD -- . >/dev/null 2>&1 || true
 }
 
+inspect_checkpoint_budget() {
+  local workspace=$1
+  python3 - \
+    "$workspace" \
+    "$max_checkpoint_bytes" \
+    "$max_checkpoint_paths" <<'PY'
+import os
+import stat
+import sys
+
+root = os.path.abspath(sys.argv[1])
+max_bytes = int(sys.argv[2])
+max_paths = int(sys.argv[3])
+total_bytes = 0
+total_paths = 0
+pending = [root]
+
+while pending:
+    directory = pending.pop()
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            if directory == root and entry.name == ".git":
+                continue
+            metadata = entry.stat(follow_symlinks=False)
+            total_paths += 1
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append(entry.path)
+            elif stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                total_bytes += metadata.st_size
+            if total_bytes > max_bytes or total_paths > max_paths:
+                print(f"over {total_bytes} {total_paths}")
+                raise SystemExit(0)
+
+print(f"within {total_bytes} {total_paths}")
+PY
+}
+
+checkpoint_tree_usage() {
+  local workspace=$1
+  local tree=$2
+  checkpoint_git "$workspace" ls-tree -rl -r -z --full-tree "$tree" |
+    python3 -c '
+import sys
+
+total_bytes = 0
+total_entries = 0
+for entry in sys.stdin.buffer.read().split(b"\0"):
+    if not entry:
+        continue
+    header = entry.split(b"\t", 1)[0].split()
+    if len(header) != 4 or header[1] != b"blob":
+        raise SystemExit("checkpoint: tree contains an unsupported entry")
+    total_bytes += int(header[3])
+    total_entries += 1
+print(f"{total_bytes} {total_entries}")
+'
+}
+
 checkpoint_workspace() {
   local workspace=$1
   local run_stamp=$2
-  local finding scan_status diff_status
+  local finding scan_status diff_status budget_record budget_state
+  local candidate_tree tree_usage
   local secret_pattern
   secret_pattern='(sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----|"(access_token|refresh_token|id_token|client_secret)"[[:space:]]*:[[:space:]]*"[^"]{20,}")'
 
@@ -214,6 +275,21 @@ checkpoint_workspace() {
   if [[ -e "$workspace/.codex" || -L "$workspace/.codex" ]]; then
     printf '%s\n' "checkpoint: refused because workspace-local Codex configuration is present"
     return 73
+  fi
+
+  if ! budget_record=$(inspect_checkpoint_budget "$workspace"); then
+    printf '%s\n' "checkpoint: unable to inspect the aggregate workspace budget"
+    return 73
+  fi
+  read -r budget_state checkpoint_input_bytes checkpoint_input_paths \
+    <<<"$budget_record"
+  if [[ "$budget_state" != within ]]; then
+    printf 'checkpoint: aggregate acceptance budget exceeded: bytes=%s/%s paths=%s/%s\n' \
+      "$checkpoint_input_bytes" \
+      "$max_checkpoint_bytes" \
+      "$checkpoint_input_paths" \
+      "$max_checkpoint_paths"
+    return 77
   fi
 
   if ! finding=$(
@@ -275,6 +351,28 @@ checkpoint_workspace() {
     return 73
   fi
 
+  if ! candidate_tree=$(checkpoint_git "$workspace" write-tree); then
+    printf '%s\n' "checkpoint: unable to materialize the candidate tree"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+  if ! tree_usage=$(checkpoint_tree_usage "$workspace" "$candidate_tree"); then
+    printf '%s\n' "checkpoint: unable to inspect the candidate tree budget"
+    unstage_checkpoint "$workspace"
+    return 73
+  fi
+  read -r checkpoint_tree_bytes checkpoint_tree_entries <<<"$tree_usage"
+  if (( checkpoint_tree_bytes > max_checkpoint_bytes ||
+        checkpoint_tree_entries > max_checkpoint_paths )); then
+    printf 'checkpoint: candidate tree exceeds the acceptance budget: bytes=%s/%s entries=%s/%s\n' \
+      "$checkpoint_tree_bytes" \
+      "$max_checkpoint_bytes" \
+      "$checkpoint_tree_entries" \
+      "$max_checkpoint_paths"
+    unstage_checkpoint "$workspace"
+    return 77
+  fi
+
   if ! checkpoint_git "$workspace" diff --cached --check; then
     printf '%s\n' "checkpoint: refused because git diff --check failed"
     unstage_checkpoint "$workspace"
@@ -310,6 +408,10 @@ checkpoint_workspace() {
 
   checkpoint_commit=$(checkpoint_git "$workspace" rev-parse HEAD)
   checkpoint_tree=$(checkpoint_git "$workspace" rev-parse 'HEAD^{tree}')
+  if [[ "$checkpoint_tree" != "$candidate_tree" ]]; then
+    printf '%s\n' "checkpoint: committed tree differs from the inspected candidate"
+    return 73
+  fi
   checkpoint_result=${checkpoint_commit:0:12}
   if [[ -n "$(checkpoint_git "$workspace" status --porcelain)" ]]; then
     printf '%s\n' "checkpoint: working tree changed during checkpoint creation"
@@ -587,6 +689,8 @@ cmd_run() {
   local last_run prompt run_stamp run_log diagnostics_log message_tmp receipt_tmp
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
   local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
+  local checkpoint_input_bytes=unverified checkpoint_input_paths=unverified
+  local checkpoint_tree_bytes=unverified checkpoint_tree_entries=unverified
   local event_audit='' event_counts=unverified audit_status=0
   local output_size output_bound_failure=0
   local -a clean_env permission_args capability_args command_line
@@ -661,6 +765,9 @@ cmd_run() {
       "$max_event_log_bytes" \
       "$max_diagnostics_log_bytes" \
       "$max_final_message_bytes"
+    printf 'checkpoint acceptance: at most %s logical bytes and %s workspace paths\n' \
+      "$max_checkpoint_bytes" \
+      "$max_checkpoint_paths"
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -701,7 +808,7 @@ cmd_run() {
     diagnostics_sha256=$(
       sha256sum -- "$diagnostics_log" | cut -d ' ' -f 1
     )
-    printf '%s receipt=7 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
+    printf '%s receipt=8 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral events=wywa-v1 event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s checkpoint=%s commit=%s tree=%s log_sha256=%s diagnostics_sha256=%s message_sha256=%s diagnostics=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$permission_profile" \
@@ -710,6 +817,12 @@ cmd_run() {
       "$max_event_log_bytes" \
       "$max_diagnostics_log_bytes" \
       "$max_final_message_bytes" \
+      "$max_checkpoint_bytes" \
+      "$max_checkpoint_paths" \
+      "$checkpoint_input_bytes" \
+      "$checkpoint_input_paths" \
+      "$checkpoint_tree_bytes" \
+      "$checkpoint_tree_entries" \
       "$checkpoint_result" \
       "$checkpoint_commit" \
       "$checkpoint_tree" \
@@ -868,10 +981,13 @@ cmd_verify_receipt() {
   local approval='' persistence='' events='' event_counts=''
   local child_file_bytes_max='' event_bytes_max=''
   local diagnostics_bytes_max='' message_bytes_max=''
+  local checkpoint_bytes_max='' checkpoint_paths_max=''
+  local input_bytes='' input_paths='' tree_bytes='' tree_entries=''
   local commit='' tree='' log_sha256='' diagnostics_sha256=''
   local message_sha256='' token event_audit='' actual_event_counts=''
   local actual_commit actual_tree actual_log_sha256 actual_diagnostics_sha256
-  local actual_message_sha256
+  local actual_message_sha256 actual_tree_usage actual_tree_bytes
+  local actual_tree_entries
   workspace=$(canonical_workspace_path "$1")
   validate_workspace_path "$workspace"
   runtime_dir=$(runtime_dir_for "$workspace")
@@ -912,6 +1028,16 @@ cmd_verify_receipt() {
         diagnostics_bytes_max=${token#diagnostics_bytes_max=}
         ;;
       message_bytes_max=*) message_bytes_max=${token#message_bytes_max=} ;;
+      checkpoint_bytes_max=*)
+        checkpoint_bytes_max=${token#checkpoint_bytes_max=}
+        ;;
+      checkpoint_paths_max=*)
+        checkpoint_paths_max=${token#checkpoint_paths_max=}
+        ;;
+      input_bytes=*) input_bytes=${token#input_bytes=} ;;
+      input_paths=*) input_paths=${token#input_paths=} ;;
+      tree_bytes=*) tree_bytes=${token#tree_bytes=} ;;
+      tree_entries=*) tree_entries=${token#tree_entries=} ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
@@ -929,7 +1055,8 @@ cmd_verify_receipt() {
      "$receipt_version" == 4 ||
      "$receipt_version" == 5 ||
      "$receipt_version" == 6 ||
-     "$receipt_version" == 7 ]] ||
+     "$receipt_version" == 7 ||
+     "$receipt_version" == 8 ]] ||
     die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
@@ -951,7 +1078,8 @@ cmd_verify_receipt() {
   fi
   if [[ "$receipt_version" == 5 ||
         "$receipt_version" == 6 ||
-        "$receipt_version" == 7 ]]; then
+        "$receipt_version" == 7 ||
+        "$receipt_version" == 8 ]]; then
     [[ "$local_network" == disabled ]] ||
       die "receipt records an unexpected local network capability"
     [[ "$web_search" == live ]] ||
@@ -971,7 +1099,9 @@ cmd_verify_receipt() {
     [[ "$persistence" == ephemeral ]] ||
       die "receipt records unexpected Codex session persistence"
   fi
-  if [[ "$receipt_version" == 6 || "$receipt_version" == 7 ]]; then
+  if [[ "$receipt_version" == 6 ||
+        "$receipt_version" == 7 ||
+        "$receipt_version" == 8 ]]; then
     [[ "$events" == wywa-v1 ]] ||
       die "receipt records an unexpected event-audit policy"
     [[ "$event_counts" =~ ^agent_message:[0-9]+,reasoning:[0-9]+,command_execution:[0-9]+,file_change:[0-9]+,web_search:[0-9]+,todo_list:[0-9]+,plan:[0-9]+,image_view:[0-9]+,context_compaction:[0-9]+$ ]] ||
@@ -979,7 +1109,7 @@ cmd_verify_receipt() {
     [[ "$diagnostics_sha256" =~ ^[0-9a-f]{64}$ ]] ||
       die "last-run receipt has an invalid diagnostics digest"
   fi
-  if [[ "$receipt_version" == 7 ]]; then
+  if [[ "$receipt_version" == 7 || "$receipt_version" == 8 ]]; then
     [[ "$child_file_bytes_max" == "$max_child_file_bytes" ]] ||
       die "receipt records an unexpected child file ceiling"
     [[ "$event_bytes_max" == "$max_event_log_bytes" ]] ||
@@ -988,6 +1118,28 @@ cmd_verify_receipt() {
       die "receipt records an unexpected diagnostics ceiling"
     [[ "$message_bytes_max" == "$max_final_message_bytes" ]] ||
       die "receipt records an unexpected final-message ceiling"
+  fi
+  if [[ "$receipt_version" == 8 ]]; then
+    [[ "$checkpoint_bytes_max" == "$max_checkpoint_bytes" ]] ||
+      die "receipt records an unexpected checkpoint byte budget"
+    [[ "$checkpoint_paths_max" == "$max_checkpoint_paths" ]] ||
+      die "receipt records an unexpected checkpoint path budget"
+    [[ "$input_bytes" =~ ^[0-9]+$ ]] ||
+      die "receipt records malformed checkpoint input bytes"
+    [[ "$input_paths" =~ ^[0-9]+$ ]] ||
+      die "receipt records malformed checkpoint input paths"
+    [[ "$tree_bytes" =~ ^[0-9]+$ ]] ||
+      die "receipt records malformed checkpoint tree bytes"
+    [[ "$tree_entries" =~ ^[0-9]+$ ]] ||
+      die "receipt records malformed checkpoint tree entries"
+    (( input_bytes <= max_checkpoint_bytes )) ||
+      die "receipt records checkpoint input above its byte budget"
+    (( input_paths <= max_checkpoint_paths )) ||
+      die "receipt records checkpoint input above its path budget"
+    (( tree_bytes <= max_checkpoint_bytes )) ||
+      die "receipt records a tree above its byte budget"
+    (( tree_entries <= max_checkpoint_paths )) ||
+      die "receipt records a tree above its entry budget"
   fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
@@ -1012,6 +1164,15 @@ cmd_verify_receipt() {
   ) || die "recorded checkpoint tree is unavailable"
   [[ "$actual_tree" == "$tree" ]] ||
     die "recorded tree does not match the checkpoint commit"
+  if [[ "$receipt_version" == 8 ]]; then
+    actual_tree_usage=$(checkpoint_tree_usage "$workspace" "$tree") ||
+      die "recorded checkpoint tree budget cannot be inspected"
+    read -r actual_tree_bytes actual_tree_entries <<<"$actual_tree_usage"
+    [[ "$actual_tree_bytes" == "$tree_bytes" ]] ||
+      die "checkpoint tree bytes do not match the receipt"
+    [[ "$actual_tree_entries" == "$tree_entries" ]] ||
+      die "checkpoint tree entries do not match the receipt"
+  fi
 
   [[ "$log_path" == "$runtime_dir/logs/"* ]] ||
     die "recorded log is outside the private runtime"
@@ -1023,7 +1184,9 @@ cmd_verify_receipt() {
   actual_log_sha256=$(sha256sum -- "$log_path" | cut -d ' ' -f 1)
   [[ "$actual_log_sha256" == "$log_sha256" ]] ||
     die "private log digest does not match the receipt"
-  if [[ "$receipt_version" == 6 || "$receipt_version" == 7 ]]; then
+  if [[ "$receipt_version" == 6 ||
+        "$receipt_version" == 7 ||
+        "$receipt_version" == 8 ]]; then
     [[ "$diagnostics_path" == "$runtime_dir/logs/"* ]] ||
       die "recorded diagnostics are outside the private runtime"
     [[ -f "$diagnostics_path" && ! -L "$diagnostics_path" ]] ||
@@ -1033,7 +1196,7 @@ cmd_verify_receipt() {
     )
     [[ "$actual_diagnostics_sha256" == "$diagnostics_sha256" ]] ||
       die "private diagnostics digest does not match the receipt"
-    if [[ "$receipt_version" == 7 ]]; then
+    if [[ "$receipt_version" == 7 || "$receipt_version" == 8 ]]; then
       (( $(stat -c %s -- "$log_path") < max_event_log_bytes )) ||
         die "private event log exceeds its recorded ceiling"
       (( $(stat -c %s -- "$diagnostics_path") <=
@@ -1055,7 +1218,7 @@ cmd_verify_receipt() {
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s\n' \
+  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s events=%s event_counts=%s child_file_bytes_max=%s event_bytes_max=%s diagnostics_bytes_max=%s message_bytes_max=%s checkpoint_bytes_max=%s checkpoint_paths_max=%s input_bytes=%s input_paths=%s tree_bytes=%s tree_entries=%s\n' \
     "${commit:0:12}" "${tree:0:12}" \
     "${permissions:-legacy-workspace-write}" \
     "${local_network:-unrecorded}" \
@@ -1072,7 +1235,13 @@ cmd_verify_receipt() {
     "${child_file_bytes_max:-unrecorded}" \
     "${event_bytes_max:-unrecorded}" \
     "${diagnostics_bytes_max:-unrecorded}" \
-    "${message_bytes_max:-unrecorded}"
+    "${message_bytes_max:-unrecorded}" \
+    "${checkpoint_bytes_max:-unrecorded}" \
+    "${checkpoint_paths_max:-unrecorded}" \
+    "${input_bytes:-unrecorded}" \
+    "${input_paths:-unrecorded}" \
+    "${tree_bytes:-unrecorded}" \
+    "${tree_entries:-unrecorded}"
 }
 
 cmd_run_state() {

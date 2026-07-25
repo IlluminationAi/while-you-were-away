@@ -213,14 +213,20 @@ root deployment:
   additionally requires JSONL below 16 MiB, diagnostics at or below 4 MiB, and
   a final message at or below 64 KiB. Status 76 preserves partial private
   evidence but refuses checkpointing and canonical-message replacement. This
-  bounds individual evidence channels, not aggregate workspace storage;
-- the private version-7 receipt records that complete launch posture beside
+  bounds individual evidence channels;
+- the host checkpoint gate separately accepts at most 128 MiB of logical
+  workspace content and 4,096 workspace paths. It inspects the workspace
+  before staging and the exact candidate Git tree afterward; status 77 keeps
+  the oversized work uncommitted and preserves the prior canonical message.
+  This is a durable-acceptance budget, not a filesystem quota that prevents
+  temporary disk consumption during the turn;
+- the private version-8 receipt records that complete launch posture beside
   the enforced permission profile, split network boundary, and event audit,
-  then binds the
-  host-created commit and exact tree
+  then binds the host-created commit, exact tree, checkpoint-input totals, and
+  exact tree totals
   to SHA-256 digests of the run log and accepted final message, while
   `verify-receipt` re-checks the chain independently of the worker. Version
-  2–6 receipts remain mechanically verifiable, but their unrecorded
+  2–7 receipts remain mechanically verifiable, but their unrecorded
   capabilities are not inferred after the fact;
 - the reviewed unattended surface is pinned to Codex CLI 0.145.0. A different
   version fails `doctor` until its filesystem, tool-catalog, command-egress,
@@ -274,7 +280,7 @@ The first useful release is complete only when:
    live hosted search, no apps/plugins/hooks/subagents/approvals or persisted
    Codex session, a fail-closed and byte-bounded JSONL event audit, bounded
    diagnostics and final-message promotion, and a guarded host-side Git
-   checkpoint;
+   checkpoint with aggregate byte and path acceptance budgets;
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
@@ -309,9 +315,10 @@ implemented:
   variables, bounds runtime, forwards signals, excludes concurrent cycles,
   caps child-written files at 16 MiB and refuses oversized JSONL,
   diagnostics, or final messages,
+  refuses checkpoint inputs above 128 MiB or 4,096 paths,
   checkpoints successful clean-start runs outside the model sandbox, and
   audits the successful JSONL event stream before checkpointing, and atomically
-  publishes success-only final messages plus a version-7 capability receipt;
+  publishes success-only final messages plus a version-8 capability receipt;
   and
 - `status` exposes the receipt without requiring raw-log access; and
 - `verify-receipt` checks the full commit, exact tree, private log digest, and

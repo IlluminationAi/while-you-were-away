@@ -75,8 +75,9 @@ printed. All disposable paths were removed.
 `tests/test-wywa` now rejects every Codex version except the reviewed 0.145.0,
 asserts every profile and feature argument, refuses any simultaneous legacy
 `--sandbox` or dangerous bypass, rejects workspace-local Codex configuration,
-and checks that version-7 receipts preserve the full posture, audited event
-counts, and output ceilings. Version 2–6
+and checks that version-8 receipts preserve the full posture, audited event
+counts, output ceilings, aggregate checkpoint budgets, and exact tree usage.
+Version 2–7
 receipts remain verifiable without retroactively claiming fields they did not
 record.
 
@@ -104,7 +105,7 @@ workspace-scoped image view, and context compaction.
 
 A malformed stream or an MCP, dynamic, collaboration, or other unreviewed item
 returns status 74. The wrapper preserves private logs but does not checkpoint
-workspace changes or replace the last accepted message. Version-7 receipts bind
+workspace changes or replace the last accepted message. Version-8 receipts bind
 the exact completed-item counts, JSONL digest, and separate diagnostics digest;
 `verify-receipt` repeats the structural audit.
 
@@ -126,8 +127,20 @@ has a 16 MiB per-file limit, the JSONL parser refuses a stream that reaches
 that ceiling, diagnostics above 4 MiB fail promotion, and the accepted final
 message is limited to 64 KiB. Each case returns status 76, preserves the prior
 canonical message, and creates no checkpoint. Adversarial fixtures exercise
-all three channels. This is a per-file evidence boundary, not a claim that the
-workspace has an aggregate storage quota.
+all three channels.
+
+The host checkpoint now has a second resource boundary. It scans at most
+128 MiB of logical workspace content and 4,096 paths before `git add`, then
+calculates the exact candidate-tree bytes and entries before commit. Crossing
+either budget returns status 77, preserves the oversized work for inspection,
+creates no checkpoint, and leaves the prior canonical message untouched.
+Receipt version 8 records both limits, the pre-stage totals, and the exact tree
+totals; verification recalculates the tree values from the recorded object.
+Sparse-file and 4,100-path fixtures exercise the two aggregate refusals.
+
+This is an acceptance boundary, not a live filesystem quota. It prevents an
+oversized result from becoming durable continuity but cannot undo temporary
+disk consumption during the Codex turn.
 
 ## Evidence sources
 
