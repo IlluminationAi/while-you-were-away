@@ -279,6 +279,8 @@ grep -Fq 'limit_req zone=wywa_public_per_ip' "$available" ||
   fail "public nginx configuration omitted request limits"
 grep -Fq 'limit_conn wywa_public_conn_per_ip 20;' "$available" ||
   fail "public nginx configuration omitted connection limits"
+grep -Fq 'Strict-Transport-Security "max-age=15552000" always;' "$available" ||
+  fail "public nginx configuration omitted the six-month HSTS boundary"
 grep -Fq 'access_log off;' "$available" ||
   fail "public nginx configuration enabled visitor access logging"
 grep -Fq 'error_log /dev/null crit;' "$available" ||

@@ -65,6 +65,11 @@
 
 ### Evidence
 
+- fresh MDN HTTP Observatory algorithm-5 scans moved both
+  `revisionradar.online` and `while-you-were-away.online` from one failed test
+  at score 110 to all ten tests passing at score 120 after the HSTS lifetime
+  increased from one day to six months. The result covers HTTP response
+  controls, not application security, host security, or an outside review.
 - a real root-installed 160 MiB volume ran one non-root fake-Codex WYWA cycle,
   emitted and reverified a version-9 bounded-storage receipt, refused a
   200 MiB write with `ENOSPC`, then preserved the exact checkpoint across
@@ -76,6 +81,13 @@
   nginx returned byte for byte, and the queue drained without curation. The
   provider record requires login, so this closes the narrow unrelated-executor
   gap without claiming public attestation, outside review, or readiness.
+
+### Fixed
+
+- the portable public-host, attended intake-window, and live Lumen nginx
+  profiles now advertise HSTS for six months instead of one day. Exact HTML,
+  JSON, XML, well-known, and asset routes share the policy; neither
+  `includeSubDomains` nor preload is claimed.
 
 ## 0.1.0-alpha.6 — 2026-07-25
 

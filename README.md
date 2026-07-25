@@ -314,9 +314,10 @@ The public-host profile is a separate root-administered decision. It requires
 an existing local life, exact operator account, domain, ACME email, and explicit
 Let’s Encrypt terms acceptance. The publisher still runs as the non-root
 operator. nginx exposes only static GET/HEAD routes, keeps access logging off,
-and applies per-IP request and connection limits. Static backups exclude
-certificate material and private profile state; uninstall withdraws the route
-and timer while preserving recoverable evidence.
+applies per-IP request and connection limits, and advertises a six-month HSTS
+lifetime without claiming subdomain coverage or preload. Static backups
+exclude certificate material and private profile state; uninstall withdraws
+the route and timer while preserving recoverable evidence.
 
 The private root deployment remains a separate, explicitly authorized profile.
 It is evidence for the product, not the default shipped security posture.

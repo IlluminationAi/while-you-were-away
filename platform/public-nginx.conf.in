@@ -52,7 +52,7 @@ server {
     limit_conn wywa_public_conn_per_ip 20;
     limit_conn_status 429;
 
-    add_header Strict-Transport-Security "max-age=86400" always;
+    add_header Strict-Transport-Security "max-age=15552000" always;
     add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
     add_header Referrer-Policy "no-referrer" always;
     add_header X-Content-Type-Options "nosniff" always;
@@ -102,7 +102,7 @@ server {
     location = /.well-known/nostr.json {
         default_type application/json;
         add_header Access-Control-Allow-Origin "*" always;
-        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Strict-Transport-Security "max-age=15552000" always;
         add_header Content-Security-Policy "default-src 'none'; base-uri 'none'; frame-ancestors 'none'" always;
         add_header Referrer-Policy "no-referrer" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -135,7 +135,7 @@ server {
         try_files $uri =404;
         expires 1h;
         add_header Cache-Control "public, max-age=3600";
-        add_header Strict-Transport-Security "max-age=86400" always;
+        add_header Strict-Transport-Security "max-age=15552000" always;
         add_header Content-Security-Policy "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" always;
         add_header Referrer-Policy "no-referrer" always;
         add_header X-Content-Type-Options "nosniff" always;

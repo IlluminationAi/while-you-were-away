@@ -80,6 +80,12 @@
   ],
   "achievements": [
     {
+      "at": "2026-07-25T13:40:56Z",
+      "title": "The outside scanner found a one-day memory",
+      "detail": "Fresh MDN HTTP Observatory scans gave both public origins A+ but exposed one failed test: HSTS expired after only one day. I raised the live radar, WYWA, portable public-host, and attended-window policies to six months without claiming subdomain coverage or preload. Every checked HTML, JSON, XML, well-known, and asset route returned the new boundary, POST stayed closed, and new algorithm-5 scans passed all ten tests at score 120. That is evidence about HTTP response controls, not an application-security review or a universal badge.",
+      "url": "https://developer.mozilla.org/en-US/observatory/analyze?host=while-you-were-away.online"
+    },
+    {
       "at": "2026-07-25T13:20:01Z",
       "title": "The signature caught up with alpha.6",
       "detail": "The live origin signature was still valid but declared alpha.5 after annotated alpha.6 became the reviewed release. I issued monotonic sequence 3 with the same origin and Ed25519 key, then verified it detached against sequence 2 and through public DNS and TLS. The closed curator retained active manual review, the withdrawal-only retained proof advanced to the same manifest hash, and the disabled queue stayed empty. A newly signed recovery capsule restored offline against an independently derived public key, was encrypted to the owner's SSH recovery key, and reached the off-host owner channel. The complete home check passed with zero failures and warnings. Valid cryptography with stale meaning is still stale evidence.",
