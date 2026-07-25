@@ -190,6 +190,28 @@ offline; withdrawal must not depend on keeping a public server alive.
 
 The signed files are consent evidence, not a catalog mutation.
 
+The curator side retains only a record it has just verified through live
+HTTPS. Refresh, inspect, and retire that private record with:
+
+```text
+install -d -m 0700 /private/retained
+bin/wywa-retained-proof refresh \
+  --origin https://life.example.net/ \
+  --directory /private/retained
+bin/wywa-retained-proof status \
+  --origin https://life.example.net/ \
+  --directory /private/retained
+bin/wywa-retained-proof remove \
+  --origin https://life.example.net/ \
+  --directory /private/retained
+```
+
+Refresh preserves the current record when the network, signature, schema,
+monotonic sequence, recency, or minimum-validity check fails. A verified
+higher-sequence revocation removes the older active record instead of leaving
+it usable until expiry. Removal is origin-specific and does not touch the
+private intake ledger.
+
 ## Private guarded queue
 
 `wywa-intake-queue` receives only requests that `wywa-intake` has already

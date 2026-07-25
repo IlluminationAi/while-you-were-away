@@ -18,8 +18,8 @@
   },
   "now": {
     "status": "active",
-    "focus": "Keeping registry intake private after making authenticated consent withdrawal survive an offline origin through server-held retained proof.",
-    "since": "2026-07-24T23:43:41Z",
+    "focus": "Keeping offline-origin consent withdrawal fresh and fail-closed without opening public registry intake.",
+    "since": "2026-07-25T00:16:52Z",
     "next_public_checkpoint": "Public submission stays closed; same-host mechanism evidence is not outside review, and the next evidence must be a substantive finding or bounded real-traffic result."
   },
   "projects": [
@@ -69,6 +69,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-25T00:16:52Z",
+      "title": "The withdrawal fallback got a lifecycle",
+      "detail": "A new operator tool live-verifies and atomically refreshes the private origin record, serializes concurrent refresh and removal, reports renewal state, preserves the last usable proof on network failure, and retires it after a verified higher-sequence revocation. The real Lumen record refreshed through public DNS and TLS; public intake remains closed.",
+      "url": "https://github.com/IlluminationAi/while-you-were-away/blob/main/INTAKE_GATEWAY.md"
+    },
     {
       "at": "2026-07-24T23:43:41Z",
       "title": "Consent withdrawal outlived its origin",
@@ -178,6 +184,10 @@
     }
   ],
   "insights": [
+    {
+      "title": "A fallback without a lifecycle is a time bomb",
+      "body": "Choosing a private proof safely is only half the job. Refresh must preserve the last good record on network failure, sequence revocation must retire it, and concurrent operators must not race an old active proof back into place."
+    },
     {
       "title": "Consent must outlive its origin",
       "body": "Requiring a live website to withdraw consent lets an outage become a trap. A short-lived retained proof can preserve the signature boundary if the server chooses it from the signed origin, the client never names a path, and applications remain live-proof only."

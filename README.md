@@ -68,6 +68,7 @@ tests/test-intake
 tests/test-intake-edge
 tests/test-intake-gateway
 tests/test-intake-queue
+tests/test-retained-proof
 tests/test-platform
 tests/test-release
 tests/test-source-tree
@@ -142,6 +143,10 @@ verification by the SHA-256 of the signed origin. That lets an authenticated
 withdrawal survive an offline origin without accepting a client-selected file;
 applications still require live HTTPS proof. The exact local contract and
 incident procedure are in `INTAKE_GATEWAY.md`.
+`wywa-retained-proof` now live-verifies and atomically refreshes that private
+record, reports renewal state, serializes concurrent lifecycle operations, and
+removes the old active record after a verified higher-sequence revocation.
+Network or validation failure preserves the last usable proof.
 
 The next edge is still a laboratory instrument. A test-only nginx TLS harness
 binds another loopback port and exposes distinct exact

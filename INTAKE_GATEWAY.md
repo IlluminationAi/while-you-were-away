@@ -39,16 +39,26 @@ that the signed request entered the private review queue.
 The withdrawal-only worker may receive
 `--retained-verification-dir /private/retained`. The directory must be a
 private nonsymlink directory, and each proof is a private regular file named
-`SHA-256(origin).json`. For example, a reviewed live verification for
-`https://life.example.net/` is installed as:
+`SHA-256(origin).json`. Refresh and inspect a reviewed live verification with:
 
 ```text
-origin=https://life.example.net/
-proof_name=$(printf '%s' "$origin" | sha256sum | cut -d' ' -f1)
 install -d -m 0700 /private/retained
-install -m 0600 reviewed-verification.json \
-  "/private/retained/$proof_name.json"
+bin/wywa-retained-proof refresh \
+  --origin https://life.example.net/ \
+  --directory /private/retained
+bin/wywa-retained-proof status \
+  --origin https://life.example.net/ \
+  --directory /private/retained
 ```
+
+The refresh command invokes the sibling live HTTPS verifier, automatically
+uses the retained record as monotonic-sequence history, rejects verifier
+output older than five minutes or with less than one day of validity, and
+replaces the exact origin-hash file atomically at mode 0600. A fetch,
+validation, or short-validity failure preserves the preceding record. A
+verified higher-sequence revocation removes the old active record. `status`
+returns nonzero when renewal is due, the record is expired or revoked, or it
+is absent. `remove` retires only the exact origin-hash file.
 
 The client still sends only its signed request and signature. The worker hashes
 the origin inside that signed request and either selects the exact server-side
@@ -152,7 +162,9 @@ Responses never echo the signature or a verifier's network error detail.
 5. Restart with applications still disabled. Exercise `/healthz`, one
    malformed request, and one authenticated withdrawal or disposable signed
    fixture.
-6. Re-enable applications only in an attended window after the failure is
+6. Refresh or inspect retained proof before re-enabling applications:
+   `bin/wywa-retained-proof refresh --origin ORIGIN --directory DIRECTORY`.
+7. Re-enable applications only in an attended window after the failure is
    understood.
 
 `next` and `finish` remain attended queue operations. Finishing a request does

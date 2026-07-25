@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""Exercise the private retained-proof lifecycle without public network use."""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import shutil
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+TOOL = PROJECT / "bin" / "wywa-retained-proof"
+ORIGIN = "https://life.example.net/"
+OTHER_ORIGIN = "https://other.example/"
+
+
+def run(
+    tool: Path,
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(tool), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def moment(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def record(
+    *,
+    now: dt.datetime,
+    origin: str = ORIGIN,
+    sequence: int = 1,
+    status: str = "active",
+    manifest_hash: str | None = None,
+    expires_in: int = 7 * 24 * 60 * 60,
+) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "verified_at": moment(now),
+        "evidence": "live-https-origin",
+        "eligible": status == "active",
+        "manifest_sha256": manifest_hash
+        or hashlib.sha256(f"{origin}:{sequence}:{status}".encode()).hexdigest(),
+        "agent_id": "test-worker",
+        "name": "Test Worker",
+        "origin": origin,
+        "public_key": (
+            "ssh-ed25519 "
+            "AAAAC3NzaC1lZDI1NTE5AAAAIE4RGvV6vsBTyHK0MX6+"
+            "8Kb9MmJSrCmy6iTlQxw7uI0a"
+        ),
+        "runtime": {
+            "name": "While You Were Away",
+            "version": "0.1.0-alpha.4",
+        },
+        "issued_at": moment(now - dt.timedelta(hours=1)),
+        "expires_at": moment(now + dt.timedelta(seconds=expires_in)),
+        "sequence": sequence,
+        "status": status,
+    }
+
+
+def write_fake_registry(
+    path: Path,
+    response: dict[str, object],
+    code: int = 0,
+) -> None:
+    payload = json.dumps(response, separators=(",", ":"), sort_keys=True)
+    path.write_text(
+        "#!/usr/bin/env python3\n"
+        f"print({payload!r})\n"
+        f"raise SystemExit({code})\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def refresh(
+    tool: Path,
+    directory: Path,
+    *,
+    expected: int = 0,
+    origin: str = ORIGIN,
+    minimum: int = 3600,
+) -> dict[str, object]:
+    result = run(
+        tool,
+        "refresh",
+        "--origin",
+        origin,
+        "--directory",
+        str(directory),
+        "--minimum-valid-seconds",
+        str(minimum),
+        expected=expected,
+    )
+    return json.loads(result.stdout) if result.stdout else {}
+
+
+def main() -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="wywa-retained-proof-test-"
+    ) as temporary:
+        root = Path(temporary)
+        tools = root / "bin"
+        tools.mkdir(mode=0o700)
+        tool = tools / "wywa-retained-proof"
+        registry = tools / "wywa-registry"
+        shutil.copy2(TOOL, tool)
+        tool.chmod(0o755)
+        retained = root / "retained"
+        retained.mkdir(mode=0o700)
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+        initial = record(now=now)
+        write_fake_registry(registry, initial)
+        refreshed = refresh(tool, retained)
+        assert refreshed["state"] == "fresh"
+        assert refreshed["sequence"] == 1
+        proof = retained / (
+            hashlib.sha256(ORIGIN.encode()).hexdigest() + ".json"
+        )
+        assert proof.is_file() and not proof.is_symlink()
+        assert proof.stat().st_mode & 0o777 == 0o600
+        assert proof.stat().st_uid == retained.stat().st_uid
+        assert proof.stat().st_gid == retained.stat().st_gid
+        lock = retained / ".wywa-retained-proof.lock"
+        assert lock.is_file() and not lock.is_symlink()
+        assert lock.stat().st_mode & 0o777 == 0o600
+        assert lock.stat().st_uid == retained.stat().st_uid
+        assert lock.stat().st_gid == retained.stat().st_gid
+        stored = json.loads(proof.read_text(encoding="utf-8"))
+        assert stored == initial
+        assert proof.read_bytes().endswith(b"\n")
+
+        fresh = json.loads(
+            run(
+                tool,
+                "status",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+                "--renew-within-seconds",
+                "60",
+            ).stdout
+        )
+        assert fresh["state"] == "fresh"
+        assert fresh["sequence"] == 1
+
+        due_at = moment(now + dt.timedelta(days=7, seconds=-30))
+        due = json.loads(
+            run(
+                tool,
+                "status",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+                "--renew-within-seconds",
+                "60",
+                "--at",
+                due_at,
+                expected=4,
+            ).stdout
+        )
+        assert due["state"] == "renewal-due"
+        assert due["remaining_seconds"] == 30
+
+        old_bytes = proof.read_bytes()
+        too_short = record(now=now, sequence=2, expires_in=120)
+        write_fake_registry(registry, too_short)
+        refused = run(
+            tool,
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--minimum-valid-seconds",
+            "3600",
+            expected=2,
+        )
+        assert "remaining validity" in refused.stderr
+        assert proof.read_bytes() == old_bytes
+
+        changed = record(now=now, sequence=2)
+        write_fake_registry(registry, changed)
+        refreshed_two = refresh(tool, retained)
+        assert refreshed_two["sequence"] == 2
+        assert json.loads(proof.read_text(encoding="utf-8"))["sequence"] == 2
+
+        stale = record(
+            now=now - dt.timedelta(minutes=10),
+            sequence=3,
+        )
+        write_fake_registry(registry, stale)
+        stale_result = run(
+            tool,
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--minimum-valid-seconds",
+            "0",
+            expected=2,
+        )
+        assert "too old" in stale_result.stderr
+        assert json.loads(proof.read_text(encoding="utf-8"))["sequence"] == 2
+
+        detached = record(now=now, sequence=3)
+        detached["evidence"] = "detached-files-only"
+        write_fake_registry(registry, detached)
+        detached_result = run(
+            tool,
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--minimum-valid-seconds",
+            "0",
+            expected=2,
+        )
+        assert "requires live HTTPS" in detached_result.stderr
+
+        wrong_origin = record(now=now, origin=OTHER_ORIGIN, sequence=3)
+        write_fake_registry(registry, wrong_origin)
+        wrong_result = run(
+            tool,
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--minimum-valid-seconds",
+            "0",
+            expected=2,
+        )
+        assert "differs from the requested origin" in wrong_result.stderr
+
+        registry.write_text(
+            "#!/bin/sh\nprintf '%s\\n' 'network unavailable' >&2\nexit 2\n",
+            encoding="utf-8",
+        )
+        registry.chmod(0o755)
+        network_failure = run(
+            tool,
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            expected=2,
+        )
+        assert "network unavailable" in network_failure.stderr
+        assert json.loads(proof.read_text(encoding="utf-8"))["sequence"] == 2
+
+        revoked = record(now=now, sequence=3, status="revoked")
+        write_fake_registry(registry, revoked, code=4)
+        revoked_result = refresh(tool, retained, expected=4)
+        assert revoked_result["state"] == "revoked"
+        assert revoked_result["retained_proof_removed"] is True
+        assert not proof.exists()
+
+        absent = json.loads(
+            run(
+                tool,
+                "status",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+                expected=4,
+            ).stdout
+        )
+        assert absent["state"] == "absent"
+
+        write_fake_registry(registry, record(now=now, sequence=4))
+        refresh(tool, retained)
+        removed = json.loads(
+            run(
+                tool,
+                "remove",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+            ).stdout
+        )
+        assert removed["state"] == "removed"
+        removed_again = json.loads(
+            run(
+                tool,
+                "remove",
+                "--origin",
+                ORIGIN,
+                "--directory",
+                str(retained),
+            ).stdout
+        )
+        assert removed_again["state"] == "absent"
+
+        response_path = tools / "registry-response.json"
+        marker = tools / "registry-started"
+        registry.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import time\n"
+            "from pathlib import Path\n"
+            "root = Path(__file__).parent\n"
+            "payload = json.loads((root / 'registry-response.json').read_text())\n"
+            "(root / 'registry-started').write_text("
+            "str(payload['record']['sequence']))\n"
+            "time.sleep(payload['sleep'])\n"
+            "print(json.dumps(payload['record'], sort_keys=True))\n"
+            "raise SystemExit(payload['code'])\n",
+            encoding="utf-8",
+        )
+        registry.chmod(0o755)
+        response_path.write_text(
+            json.dumps(
+                {
+                    "record": record(now=now, sequence=5),
+                    "sleep": 0.5,
+                    "code": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        refresh_command = [
+            str(tool),
+            "refresh",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            "--minimum-valid-seconds",
+            "3600",
+        ]
+        first = subprocess.Popen(
+            refresh_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _attempt in range(200):
+            if marker.exists() and marker.read_text(encoding="utf-8") == "5":
+                break
+            time.sleep(0.01)
+        else:
+            first.kill()
+            raise AssertionError("first concurrent refresh did not start")
+        response_path.write_text(
+            json.dumps(
+                {
+                    "record": record(now=now, sequence=6, status="revoked"),
+                    "sleep": 0,
+                    "code": 4,
+                }
+            ),
+            encoding="utf-8",
+        )
+        second = subprocess.Popen(
+            refresh_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        first_stdout, first_stderr = first.communicate(timeout=5)
+        second_stdout, second_stderr = second.communicate(timeout=5)
+        assert first.returncode == 0, (first_stdout, first_stderr)
+        assert second.returncode == 4, (second_stdout, second_stderr)
+        assert json.loads(second_stdout)["state"] == "revoked"
+        assert not proof.exists()
+
+        proof.symlink_to(root / "missing-proof")
+        broken_link = run(
+            tool,
+            "status",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            expected=2,
+        )
+        assert "regular, nonsymlink" in broken_link.stderr
+        proof.unlink()
+
+        retained.chmod(0o755)
+        loose = run(
+            tool,
+            "status",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(retained),
+            expected=2,
+        )
+        assert "mode 0700" in loose.stderr
+        retained.chmod(0o700)
+
+        target = root / "target"
+        target.mkdir(mode=0o700)
+        symlinked = root / "linked"
+        symlinked.symlink_to(target, target_is_directory=True)
+        linked = run(
+            tool,
+            "status",
+            "--origin",
+            ORIGIN,
+            "--directory",
+            str(symlinked),
+            expected=2,
+        )
+        assert "symbolic link" in linked.stderr
+
+        invalid_origin = run(
+            tool,
+            "status",
+            "--origin",
+            "http://life.example.net/",
+            "--directory",
+            str(retained),
+            expected=2,
+        )
+        assert "HTTPS domain root" in invalid_origin.stderr
+
+    print("PASS private retained-proof lifecycle")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,680 @@
+#!/usr/bin/env python3
+"""Refresh, inspect, and remove private live-origin verification records."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+import re
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlsplit
+
+
+PROGRAM = Path(__file__).name
+REGISTRY = Path(__file__).resolve().with_name("wywa-registry")
+MAX_RECORD_BYTES = 128 * 1024
+MAX_REGISTRY_OUTPUT_BYTES = 256 * 1024
+DEFAULT_MINIMUM_VALID_SECONDS = 24 * 60 * 60
+DEFAULT_RENEW_WITHIN_SECONDS = 48 * 60 * 60
+MAX_SECONDS = 30 * 24 * 60 * 60
+MAX_VERIFICATION_AGE = dt.timedelta(minutes=5)
+MAX_FUTURE_SKEW = dt.timedelta(minutes=5)
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
+AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
+DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+RECORD_KEYS = {
+    "schema_version",
+    "verified_at",
+    "evidence",
+    "eligible",
+    "manifest_sha256",
+    "agent_id",
+    "name",
+    "origin",
+    "public_key",
+    "runtime",
+    "issued_at",
+    "expires_at",
+    "sequence",
+    "status",
+}
+
+
+class RetainedProofError(Exception):
+    """A bounded, user-facing retained-proof error."""
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise RetainedProofError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RetainedProofError(
+            f"{label} is not a valid RFC 3339 timestamp"
+        ) from error
+    if parsed.tzinfo is None:
+        raise RetainedProofError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise RetainedProofError(
+            f"{label} must use UTC whole seconds ending in Z"
+        )
+    return normalized
+
+
+def parse_at(value: str | None) -> dt.datetime:
+    return utc_now() if value is None else parse_moment(value, "--at")
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RetainedProofError(f"JSON repeats key: {key}")
+        result[key] = value
+    return result
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def normalize_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise RetainedProofError("origin must be text")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise RetainedProofError("origin is not a valid URL") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+        or parsed.hostname is None
+    ):
+        raise RetainedProofError(
+            "origin must be an HTTPS domain root on the standard port"
+        )
+    try:
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as error:
+        raise RetainedProofError(
+            "origin has an invalid internationalized domain"
+        ) from error
+    if host.endswith(".") or len(host) > 253:
+        raise RetainedProofError("origin has an invalid DNS name")
+    labels = host.split(".")
+    if (
+        len(labels) < 2
+        or any(DNS_LABEL_PATTERN.fullmatch(label) is None for label in labels)
+    ):
+        raise RetainedProofError("origin has an invalid DNS name")
+    return f"https://{host}/"
+
+
+def bounded_text(
+    value: object,
+    label: str,
+    maximum: int,
+    *,
+    minimum: int = 1,
+) -> str:
+    if not isinstance(value, str):
+        raise RetainedProofError(f"{label} must be text")
+    if not minimum <= len(value) <= maximum:
+        raise RetainedProofError(
+            f"{label} must contain between {minimum} and {maximum} characters"
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise RetainedProofError(f"{label} contains a control character")
+    return value
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise RetainedProofError(f"{label} is not UTF-8") from error
+    try:
+        record = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise RetainedProofError(f"{label} is not valid JSON") from error
+    if not isinstance(record, dict):
+        raise RetainedProofError(f"{label} must be a JSON object")
+    return record
+
+
+def read_regular(path: Path, label: str) -> bytes:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError as error:
+        raise RetainedProofError(f"{label} does not exist") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RetainedProofError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_uid != os.geteuid():
+        raise RetainedProofError(f"{label} must be owned by the current user")
+    if metadata.st_mode & 0o077:
+        raise RetainedProofError(f"{label} must use private permissions")
+    if metadata.st_size > MAX_RECORD_BYTES:
+        raise RetainedProofError(f"{label} exceeds its size limit")
+    return path.read_bytes()
+
+
+def normalize_record(
+    raw: dict[str, Any],
+    *,
+    expected_origin: str,
+    at: dt.datetime,
+    require_recent: bool,
+) -> dict[str, Any]:
+    if set(raw) != RECORD_KEYS:
+        raise RetainedProofError(
+            "verification record fields do not match schema version 1"
+        )
+    if raw["schema_version"] != 1:
+        raise RetainedProofError("verification record has an unsupported schema")
+    if raw["evidence"] != "live-https-origin":
+        raise RetainedProofError(
+            "retained proof requires live HTTPS origin evidence"
+        )
+    origin = normalize_origin(raw["origin"])
+    if origin != expected_origin:
+        raise RetainedProofError(
+            "verification record differs from the requested origin"
+        )
+    agent_id = bounded_text(raw["agent_id"], "agent_id", 48, minimum=3)
+    if AGENT_ID_PATTERN.fullmatch(agent_id) is None:
+        raise RetainedProofError(
+            "agent_id must be lowercase letters, digits, or hyphens"
+        )
+    name = bounded_text(raw["name"], "name", 80)
+    public_key = bounded_text(raw["public_key"], "public_key", 512)
+    if not public_key.startswith("ssh-ed25519 "):
+        raise RetainedProofError("public_key must be one Ed25519 SSH key")
+    runtime = raw["runtime"]
+    if not isinstance(runtime, dict) or set(runtime) != {"name", "version"}:
+        raise RetainedProofError("runtime fields do not match schema version 1")
+    runtime_name = bounded_text(runtime["name"], "runtime.name", 80)
+    runtime_version = bounded_text(runtime["version"], "runtime.version", 64)
+    verified_at = parse_moment(raw["verified_at"], "verified_at")
+    issued_at = parse_moment(raw["issued_at"], "issued_at")
+    expires_at = parse_moment(raw["expires_at"], "expires_at")
+    if expires_at <= issued_at:
+        raise RetainedProofError("verification expiry must follow issuance")
+    if verified_at > at + MAX_FUTURE_SKEW:
+        raise RetainedProofError("verification record is from the future")
+    if require_recent and at - verified_at > MAX_VERIFICATION_AGE:
+        raise RetainedProofError(
+            "verification record is too old to refresh retained proof"
+        )
+    manifest_hash = raw["manifest_sha256"]
+    if (
+        not isinstance(manifest_hash, str)
+        or HASH_PATTERN.fullmatch(manifest_hash) is None
+    ):
+        raise RetainedProofError("manifest_sha256 is invalid")
+    sequence = raw["sequence"]
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+        raise RetainedProofError("sequence must be a positive integer")
+    status_value = raw["status"]
+    eligible = raw["eligible"]
+    if status_value == "active" and eligible is not True:
+        raise RetainedProofError("active verification must be eligible")
+    if status_value == "revoked" and eligible is not False:
+        raise RetainedProofError("revoked verification must not be eligible")
+    if status_value not in {"active", "revoked"}:
+        raise RetainedProofError("verification status is invalid")
+    return {
+        "schema_version": 1,
+        "verified_at": utc_text(verified_at),
+        "evidence": "live-https-origin",
+        "eligible": eligible,
+        "manifest_sha256": manifest_hash,
+        "agent_id": agent_id,
+        "name": name,
+        "origin": origin,
+        "public_key": public_key,
+        "runtime": {
+            "name": runtime_name,
+            "version": runtime_version,
+        },
+        "issued_at": utc_text(issued_at),
+        "expires_at": utc_text(expires_at),
+        "sequence": sequence,
+        "status": status_value,
+    }
+
+
+def reject_symlink_ancestors(path: Path) -> None:
+    current = path
+    while True:
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(metadata.st_mode):
+                raise RetainedProofError(
+                    "retained directory path must not contain a symbolic link"
+                )
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def private_directory(value: str) -> Path:
+    directory = Path(value).expanduser().absolute()
+    if directory == Path("/"):
+        raise RetainedProofError(
+            "refusing to use the filesystem root as retained directory"
+        )
+    reject_symlink_ancestors(directory)
+    try:
+        metadata = directory.lstat()
+    except FileNotFoundError as error:
+        raise RetainedProofError("retained directory does not exist") from error
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise RetainedProofError(
+            "retained directory must be a nonsymlink directory"
+        )
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o777 != 0o700:
+        raise RetainedProofError(
+            "retained directory must be current-user-owned mode 0700"
+        )
+    return directory
+
+
+def proof_path(directory: Path, origin: str) -> Path:
+    digest = hashlib.sha256(origin.encode("utf-8")).hexdigest()
+    return directory / f"{digest}.json"
+
+
+@contextlib.contextmanager
+def directory_lock(
+    directory: Path,
+    *,
+    exclusive: bool,
+) -> Any:
+    lock_path = directory / ".wywa-retained-proof.lock"
+    flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise RetainedProofError("could not open the private lifecycle lock") from error
+    try:
+        metadata = os.fstat(descriptor)
+        directory_metadata = directory.stat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != directory_metadata.st_uid
+            or metadata.st_mode & 0o077
+        ):
+            raise RetainedProofError(
+                "private lifecycle lock has unsafe ownership or type"
+            )
+        try:
+            os.fchmod(descriptor, 0o600)
+            os.fchown(
+                descriptor,
+                directory_metadata.st_uid,
+                directory_metadata.st_gid,
+            )
+        except OSError as error:
+            raise RetainedProofError(
+                "could not match the private lifecycle lock ownership"
+            ) from error
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        fcntl.flock(descriptor, operation)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def load_retained(
+    path: Path,
+    *,
+    origin: str,
+    at: dt.datetime,
+) -> dict[str, Any]:
+    return normalize_record(
+        load_json_bytes(read_regular(path, "retained proof"), "retained proof"),
+        expected_origin=origin,
+        at=at,
+        require_recent=False,
+    )
+
+
+def atomic_write(directory: Path, destination: Path, data: bytes) -> None:
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{destination.name}.",
+        dir=directory,
+        delete=False,
+    ) as handle:
+        temporary = Path(handle.name)
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+    try:
+        os.chmod(temporary, 0o600)
+        directory_metadata = directory.stat()
+        try:
+            os.chown(
+                temporary,
+                directory_metadata.st_uid,
+                directory_metadata.st_gid,
+            )
+        except OSError as error:
+            raise RetainedProofError(
+                "could not match retained directory ownership"
+            ) from error
+        os.replace(temporary, destination)
+        directory_fd = os.open(
+            directory,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def remove_path(directory: Path, destination: Path) -> bool:
+    try:
+        metadata = destination.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RetainedProofError(
+            "refusing to remove a retained path that is not a regular file"
+        )
+    if metadata.st_uid != os.geteuid():
+        raise RetainedProofError(
+            "refusing to remove a retained proof owned by another user"
+        )
+    destination.unlink()
+    directory_fd = os.open(
+        directory,
+        os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    return True
+
+
+def registry_refresh(origin: str, previous: Path | None) -> tuple[int, bytes]:
+    try:
+        metadata = REGISTRY.lstat()
+    except FileNotFoundError as error:
+        raise RetainedProofError("sibling wywa-registry is missing") from error
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+        or not os.access(REGISTRY, os.X_OK)
+    ):
+        raise RetainedProofError(
+            "sibling wywa-registry must be owned by the current user, "
+            "non-writable by group or others, and executable"
+        )
+    command = [str(REGISTRY), "verify-origin", origin]
+    if previous is not None:
+        command.extend(["--previous", str(previous)])
+    process = subprocess.Popen(
+        command,
+        cwd="/",
+        env={
+            "PATH": SAFE_PATH,
+            "LC_ALL": "C.UTF-8",
+            "TZ": "UTC",
+            "HOME": "/nonexistent",
+        },
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=90)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.communicate()
+        raise RetainedProofError("live origin verification timed out") from None
+    if (
+        len(stdout) > MAX_REGISTRY_OUTPUT_BYTES
+        or len(stderr) > MAX_REGISTRY_OUTPUT_BYTES
+    ):
+        raise RetainedProofError("live origin verifier exceeded its output limit")
+    if process.returncode not in {0, 4}:
+        lines = stderr.decode("utf-8", errors="replace").strip().splitlines()
+        detail = lines[-1] if lines else "live origin verification failed"
+        raise RetainedProofError(detail)
+    return process.returncode, stdout
+
+
+def emit(record: dict[str, Any]) -> None:
+    print(json.dumps(record, ensure_ascii=False, sort_keys=True))
+
+
+def refresh(arguments: argparse.Namespace) -> int:
+    at = utc_now()
+    origin = normalize_origin(arguments.origin)
+    directory = private_directory(arguments.directory)
+    destination = proof_path(directory, origin)
+    with directory_lock(directory, exclusive=True):
+        try:
+            destination.lstat()
+        except FileNotFoundError:
+            previous = None
+        else:
+            load_retained(destination, origin=origin, at=at)
+            previous = destination
+        _status, stdout = registry_refresh(origin, previous)
+        record = normalize_record(
+            load_json_bytes(stdout, "live verification"),
+            expected_origin=origin,
+            at=at,
+            require_recent=True,
+        )
+        if record["status"] == "revoked":
+            removed = remove_path(directory, destination)
+            emit(
+                {
+                    "schema_version": 1,
+                    "state": "revoked",
+                    "origin": origin,
+                    "sequence": record["sequence"],
+                    "retained_proof_removed": removed,
+                }
+            )
+            return 4
+        expires_at = parse_moment(record["expires_at"], "expires_at")
+        minimum = dt.timedelta(seconds=arguments.minimum_valid_seconds)
+        if expires_at <= at + minimum:
+            raise RetainedProofError(
+                "live proof does not have the required remaining validity"
+            )
+        atomic_write(directory, destination, canonical_bytes(record))
+    emit(
+        {
+            "schema_version": 1,
+            "state": "fresh",
+            "origin": origin,
+            "agent_id": record["agent_id"],
+            "sequence": record["sequence"],
+            "verified_at": record["verified_at"],
+            "expires_at": record["expires_at"],
+            "manifest_sha256": record["manifest_sha256"],
+        }
+    )
+    return 0
+
+
+def status(arguments: argparse.Namespace) -> int:
+    at = parse_at(arguments.at)
+    origin = normalize_origin(arguments.origin)
+    directory = private_directory(arguments.directory)
+    destination = proof_path(directory, origin)
+    with directory_lock(directory, exclusive=False):
+        try:
+            destination.lstat()
+        except FileNotFoundError:
+            emit(
+                {
+                    "schema_version": 1,
+                    "state": "absent",
+                    "origin": origin,
+                }
+            )
+            return 4
+        record = load_retained(destination, origin=origin, at=at)
+    expires_at = parse_moment(record["expires_at"], "expires_at")
+    remaining = int((expires_at - at).total_seconds())
+    if record["status"] != "active" or record["eligible"] is not True:
+        state = "revoked"
+    elif remaining <= 0:
+        state = "expired"
+    elif remaining <= arguments.renew_within_seconds:
+        state = "renewal-due"
+    else:
+        state = "fresh"
+    emit(
+        {
+            "schema_version": 1,
+            "state": state,
+            "origin": origin,
+            "agent_id": record["agent_id"],
+            "sequence": record["sequence"],
+            "verified_at": record["verified_at"],
+            "expires_at": record["expires_at"],
+            "remaining_seconds": max(remaining, 0),
+            "manifest_sha256": record["manifest_sha256"],
+        }
+    )
+    return 0 if state == "fresh" else 4
+
+
+def remove(arguments: argparse.Namespace) -> int:
+    origin = normalize_origin(arguments.origin)
+    directory = private_directory(arguments.directory)
+    with directory_lock(directory, exclusive=True):
+        removed = remove_path(directory, proof_path(directory, origin))
+    emit(
+        {
+            "schema_version": 1,
+            "state": "removed" if removed else "absent",
+            "origin": origin,
+        }
+    )
+    return 0
+
+
+def bounded_seconds(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be an integer") from error
+    if not 0 <= parsed <= MAX_SECONDS:
+        raise argparse.ArgumentTypeError(f"must be between 0 and {MAX_SECONDS}")
+    return parsed
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        prog=PROGRAM,
+        description=(
+            "Refresh, inspect, or remove private live-origin verification "
+            "records used for offline-origin consent withdrawal."
+        ),
+    )
+    subcommands = result.add_subparsers(dest="command", required=True)
+
+    refresh_parser = subcommands.add_parser(
+        "refresh",
+        help="live-verify an origin and atomically retain the fresh record",
+    )
+    refresh_parser.add_argument("--origin", required=True)
+    refresh_parser.add_argument("--directory", required=True)
+    refresh_parser.add_argument(
+        "--minimum-valid-seconds",
+        type=bounded_seconds,
+        default=DEFAULT_MINIMUM_VALID_SECONDS,
+    )
+
+    status_parser = subcommands.add_parser(
+        "status",
+        help="inspect one retained record without network access",
+    )
+    status_parser.add_argument("--origin", required=True)
+    status_parser.add_argument("--directory", required=True)
+    status_parser.add_argument(
+        "--renew-within-seconds",
+        type=bounded_seconds,
+        default=DEFAULT_RENEW_WITHIN_SECONDS,
+    )
+    status_parser.add_argument("--at")
+
+    remove_parser = subcommands.add_parser(
+        "remove",
+        help="remove the exact retained record for one origin",
+    )
+    remove_parser.add_argument("--origin", required=True)
+    remove_parser.add_argument("--directory", required=True)
+    return result
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    if arguments.command == "refresh":
+        return refresh(arguments)
+    if arguments.command == "status":
+        return status(arguments)
+    if arguments.command == "remove":
+        return remove(arguments)
+    raise RetainedProofError("unknown command")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except RetainedProofError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

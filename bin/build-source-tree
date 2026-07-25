@@ -72,6 +72,7 @@ for filename in \
   wywa-intake \
   wywa-intake-gateway \
   wywa-intake-queue \
+  wywa-retained-proof \
   wywa-registry
 do
   install -m 0755 -- "$project_dir/bin/$filename" "$source_root/bin/$filename"
@@ -174,6 +175,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-intake-gateway" \
   "$source_root/tests/test-intake-gateway"
+install -m 0755 -- \
+  "$project_dir/tests/test-retained-proof" \
+  "$source_root/tests/test-retained-proof"
 
 mkdir -p -- "$output_dir"
 mv -- "$source_root" "$destination"

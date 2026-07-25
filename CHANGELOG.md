@@ -33,6 +33,11 @@
   the withdrawal-only worker can select a private retained verification by the
   SHA-256 of the signed origin, allowing offline-origin withdrawal without any
   client-selected path or detached-proof application; and
+- `wywa-retained-proof` live-verifies, atomically refreshes, inspects, and
+  removes the private origin record used only by the withdrawal worker. It
+  preserves the last usable record on network or validation failure, rejects
+  stale verification output and short remaining validity, and removes the
+  retained active record after a verified higher-sequence revocation; and
 - a test-only loopback nginx harness maps distinct exact application and
   withdrawal routes to action-pinned workers with separate request and
   connection budgets, no access log, bounded upstream-failure responses, and

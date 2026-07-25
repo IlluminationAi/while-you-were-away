@@ -62,6 +62,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-intake-gateway" \
   "$release_root/bin/wywa-intake-gateway"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-retained-proof" \
+  "$release_root/bin/wywa-retained-proof"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \

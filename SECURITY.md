@@ -55,10 +55,12 @@ The detailed contracts are in
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet
   behavior, and an independent operator remain untested.
-- Retained withdrawal proofs are operator-staged private state. Their expiry,
-  replacement, removal, and recovery need an operational refresh procedure;
-  a present but stale or malformed selected proof fails closed instead of
-  silently changing evidence paths.
+- Retained withdrawal proofs are operator-staged private state. Their refresh,
+  inspection, and removal are now atomic and origin-specific, with live HTTPS
+  re-verification, monotonic history, renewal status, and verified-revocation
+  retirement. Scheduling and off-host recovery of that private state remain
+  operational work; a present but stale or malformed selected proof fails
+  closed instead of silently changing evidence paths.
 - Queue completion and curation are intentionally separate manual actions.
   There is no automatic admission and no public registration claim.
 - The current release tag predates the intake work. Review intake on public
