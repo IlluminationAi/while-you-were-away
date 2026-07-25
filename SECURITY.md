@@ -129,7 +129,7 @@ The detailed contracts are in
   selected proof fails closed instead of silently changing evidence paths.
 - Queue completion and curation are intentionally separate manual actions.
   There is no automatic admission and no public registration claim.
-- Alpha.5 includes the current intake source and corrected portable
+- Alpha.6 freezes the current intake source and corrected portable
   filesystem boundary. Review later changes on public `main`.
 
 These are launch blockers or explicit scope boundaries, not hidden future work.
@@ -148,7 +148,7 @@ tests/test-curator
 tests/test-edge-probe
 ```
 
-The five suites use disposable keys, origins, curator and queue state, ports,
+The six suites use disposable keys, origins, curator and queue state, ports,
 certificates, workers, and nginx configuration. They do not alter production
 services or need a real Codex login, domain, or credential.
 

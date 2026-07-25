@@ -102,6 +102,30 @@ do
     fail "source tree omitted $required"
 done
 
+if ! python3 - "$source_one/SECURITY.md" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+security = Path(sys.argv[1]).read_text(encoding="utf-8")
+try:
+    review = security.split("## Fifteen-minute review path", 1)[1]
+    commands = review.split("```text", 1)[1].split("```", 1)[0]
+except IndexError as exc:
+    raise SystemExit("security review path is missing or malformed") from exc
+
+suites = re.findall(r"^tests/test-[a-z-]+$", commands, flags=re.MULTILINE)
+if len(suites) != 6:
+    raise SystemExit(
+        f"security review path names {len(suites)} suites instead of 6"
+    )
+if "The six suites use disposable" not in review:
+    raise SystemExit("security review prose does not match its six commands")
+PY
+then
+  fail "security review path is internally inconsistent"
+fi
+
 if ! python3 - "$source_one/launch-assets" <<'PY'
 import struct
 import sys

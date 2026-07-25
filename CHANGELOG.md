@@ -84,6 +84,9 @@
 
 ### Fixed
 
+- the public security-review map now describes its actual six-suite quick
+  path and the current alpha.6 boundary. The standalone-source regression
+  counts the published commands and refuses prose that drifts from them.
 - the portable public-host, attended intake-window, and live Lumen nginx
   profiles now advertise HSTS for six months instead of one day. Exact HTML,
   JSON, XML, well-known, and asset routes share the policy; neither
