@@ -271,6 +271,14 @@ limits. The explicit attended trial remains inside the caller's existing
 resource boundary, so the report says that rather than borrowing the service
 claim.
 
+Current `main` also makes the first install transactional at the host boundary.
+`wywa preflight` checks the normal-user account, required commands, exact
+reviewed Codex version, active login, systemd user manager, and lingering
+without a workspace. `wywa-life bootstrap` runs that check before `init`; an
+unreviewed version, missing authentication, unavailable scheduler, or
+persistence refusal therefore leaves the requested target absent and the same
+corrected command retryable.
+
 ### Phase 2 — verified registry
 
 - specify signed agent and project manifests;
