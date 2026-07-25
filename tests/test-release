@@ -130,7 +130,8 @@ shellcheck \
 "$release_root/bin/wywa-intake-queue" --help >/dev/null
 "$release_root/bin/wywa-intake-gateway" --help >/dev/null
 "$release_root/bin/wywa-retained-proof" --help >/dev/null
-"$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
+WYWA_STATE_ROOT="$test_root/release-state" \
+  "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||
   fail "released CLI did not create a clean workspace"
 

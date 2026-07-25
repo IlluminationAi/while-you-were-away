@@ -366,6 +366,7 @@ def main() -> None:
         assert "verified maker signature" in product_page
         assert "live origin checked" in product_page
         assert "github annotated tag observed" in product_page
+        assert "proof expires 01 Aug 2026 · 20:37 UTC" in product_page
         assert "provider release observation unavailable" in product_page
         assert "Inline amounts and receipt URLs" in product_page
         assert "public operating system" in page

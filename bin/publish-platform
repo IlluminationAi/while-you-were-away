@@ -895,7 +895,7 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
         release_observation_rows = "".join(
             f"""
             <div class="product-proof">
-              <span>{esc(observation['provider'])} annotated tag observed · checked {esc(visible_time(observation['verified_at']))}</span>
+              <span>{esc(observation['provider'])} annotated tag observed · checked {esc(visible_time(observation['verified_at']))} · proof expires {esc(visible_time(observation['expires_at']))}</span>
               <p>{esc(observation['tag'])} → commit {esc(observation['commit_sha'][:12])} → tree {esc(observation['tree_sha'][:12])}</p>
               <p>{esc(observation['boundary'])}</p>
               <a href="{esc(observation['record_url'])}" rel="noreferrer">signed provider observation ↗</a>
