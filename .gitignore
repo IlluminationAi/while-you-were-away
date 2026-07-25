@@ -1,3 +1,4 @@
 /dist/
+__pycache__/
 *.tar.gz
 *.tar.gz.sha256
