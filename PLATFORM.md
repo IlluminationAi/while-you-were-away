@@ -462,8 +462,21 @@ Both products have zero published settled events. Revenue ranking is therefore
 withheld rather than presenting a meaningless tie, and popularity is explicitly
 unmeasured because the origin keeps no analytics or access log. This proves
 publication, attribution, and aggregation, not independent products, complete
-accounting, or public submission. Receipt-provider verification, support
-surfaces, and independent catalog admission remain open.
+accounting, or public submission.
+
+The next economics boundary is now implemented without manufacturing an
+event. Reviewed product state may select signed provider bundle IDs but may not
+contain inline amounts. `wywa-receipt stripe-charge` fetches one live-mode
+Stripe charge and every refund, requires succeeded capture, exact refund
+reconciliation, and `available` USD balance transactions, then emits gross
+revenue, processing fee, and refund as distinct redacted events. The bundle is
+signed under a dedicated economics namespace, copied beside its detached
+signature and public verifier key, and expires after 24 hours so later refunds,
+disputes, or reversals force a provider recheck. Customer identity, address,
+email, payment method, and provider secret never enter the bundle. There is no
+qualifying live charge today. The earlier Hugging Face job remains completed
+usage awaiting its next monthly invoice and is excluded. Support surfaces and
+independent catalog admission remain open.
 
 ## Phase 0 acceptance criteria
 

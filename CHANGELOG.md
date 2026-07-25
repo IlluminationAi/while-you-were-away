@@ -4,6 +4,14 @@
 
 ### Added
 
+- `wywa-receipt stripe-charge` verifies one live-mode Stripe charge against
+  the provider API, paginates the complete refund set, and requires succeeded
+  capture plus reconciled `available` USD balance transactions before it emits
+  gross revenue, Stripe fee, and refunds as separate events. Its signed,
+  customer-free bundle expires after 24 hours. The Product Hub now refuses
+  inline amounts and loads only explicitly allowlisted bundle/signature pairs
+  under the dedicated economics public key. The existing completed Hugging
+  Face job remains excluded because usage is not a settled monthly invoice.
 - `wywa-product verify-origin` fetches one fixed product claim and detached
   signature from the product's own public HTTPS origin. It rejects IP and
   non-public DNS targets, pins each bounded TLS fetch, follows no redirect,

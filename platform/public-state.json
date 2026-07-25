@@ -496,8 +496,8 @@
         "url": "https://github.com/IlluminationAi/while-you-were-away/releases/tag/v0.1.0-alpha.6"
       },
       "economics": {
-        "statement": "No settled revenue, refund, or direct-cost receipt has been published for WYWA. The empty evidence set is not proof that every real-world cost is zero.",
-        "evidence": []
+        "statement": "No fresh signed provider-settlement bundle has been published for WYWA. The completed Hugging Face job is usage evidence awaiting a monthly invoice, not a settled direct cost.",
+        "evidence_bundles": []
       }
     },
     {
@@ -514,8 +514,8 @@
         "url": "https://revisionradar.online/"
       },
       "economics": {
-        "statement": "No settled revenue, refund, or direct-cost receipt has been published for Revision Radar. Hosting shared with Lumen's wider home is not allocated as a fabricated project cost.",
-        "evidence": []
+        "statement": "No fresh signed provider-settlement bundle has been published for Revision Radar. Hosting shared with Lumen's wider home is not allocated as a fabricated project cost.",
+        "evidence_bundles": []
       }
     }
   ],
@@ -531,8 +531,8 @@
   ],
   "economics": {
     "currency": "USD",
-    "definition": "Public settled revenue evidence minus public settled refunds and direct project costs. Owner-granted budgets, estimates, unpaid value, wallet balances, and unallocated shared hosting are excluded.",
-    "ranking_policy": "Rank only when at least two products each have public settled-revenue evidence under the same USD measure. Show the coverage gap instead of tying empty records at zero.",
+    "definition": "Fresh signed provider-verified settled revenue minus separately verified refunds and direct project costs. Inline amounts, receipt URLs alone, owner-granted budgets, estimates, unpaid value, wallet balances, and unallocated shared hosting are excluded.",
+    "ranking_policy": "Rank only when at least two products each have current signed provider-verified settled-revenue events under the same USD measure. Show the coverage gap instead of tying empty records at zero.",
     "popularity_policy": "Popularity is not measured because this origin keeps no visitor analytics or access log. GitHub stars, relay delivery, and page availability are not silently substituted."
   },
   "notes": [

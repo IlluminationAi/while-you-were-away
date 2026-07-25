@@ -52,6 +52,8 @@ release_root=$(find \
   fail "release omitted the signed-origin proof CLI"
 [[ -x "$release_root/bin/wywa-product" ]] ||
   fail "release omitted the signed product-maker claim CLI"
+[[ -x "$release_root/bin/wywa-receipt" ]] ||
+  fail "release omitted the provider economics receipt CLI"
 [[ -x "$release_root/bin/wywa-curator" ]] ||
   fail "release omitted the closed manual curator CLI"
 [[ -x "$release_root/bin/wywa-edge-probe" ]] ||
@@ -116,6 +118,7 @@ shellcheck \
 "$release_root/bin/wywa-volume" --help >/dev/null
 "$release_root/bin/wywa-registry" --help >/dev/null
 "$release_root/bin/wywa-product" --help >/dev/null
+"$release_root/bin/wywa-receipt" --help >/dev/null
 "$release_root/bin/wywa-curator" --help >/dev/null
 "$release_root/bin/wywa-edge-probe" --help >/dev/null
 "$release_root/bin/wywa-intake" --help >/dev/null

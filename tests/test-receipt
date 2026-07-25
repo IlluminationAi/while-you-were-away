@@ -1,0 +1,340 @@
+#!/usr/bin/env python3
+"""Exercise provider settlement compilation and signed public bundles."""
+
+from __future__ import annotations
+
+import copy
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+RECEIPT = PROJECT / "bin" / "wywa-receipt"
+AT = dt.datetime(2026, 7, 25, 12, 0, tzinfo=dt.timezone.utc)
+
+
+def load_program():
+    loader = importlib.machinery.SourceFileLoader("wywa_receipt", str(RECEIPT))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None:
+        raise AssertionError("could not create receipt module specification")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def stripe_fixture() -> tuple[dict[str, object], list[dict[str, object]]]:
+    charge = {
+        "id": "ch_liveAlpha123",
+        "object": "charge",
+        "livemode": True,
+        "paid": True,
+        "captured": True,
+        "status": "succeeded",
+        "disputed": False,
+        "currency": "usd",
+        "amount_captured": 1000,
+        "amount_refunded": 200,
+        "receipt_url": "https://pay.stripe.com/receipts/payment/test",
+        "billing_details": {
+            "email": "private@example.test",
+            "name": "Private Customer",
+        },
+        "balance_transaction": {
+            "id": "txn_liveCharge123",
+            "object": "balance_transaction",
+            "source": "ch_liveAlpha123",
+            "currency": "usd",
+            "status": "available",
+            "available_on": 1760000000,
+            "amount": 1000,
+            "fee": 59,
+            "net": 941,
+            "type": "charge",
+            "reporting_category": "charge",
+        },
+    }
+    refunds = [
+        {
+            "id": "re_liveRefund123",
+            "object": "refund",
+            "charge": "ch_liveAlpha123",
+            "currency": "usd",
+            "status": "succeeded",
+            "amount": 200,
+            "destination_details": {"private_reference": "secret-customer-detail"},
+            "balance_transaction": {
+                "id": "txn_liveRefund123",
+                "object": "balance_transaction",
+                "source": "re_liveRefund123",
+                "currency": "usd",
+                "status": "available",
+                "available_on": 1760000100,
+                "amount": -200,
+                "fee": 0,
+                "net": -200,
+                "type": "refund",
+                "reporting_category": "refund",
+            },
+        }
+    ]
+    return charge, refunds
+
+
+def run(
+    *arguments: str,
+    expected: int = 0,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(RECEIPT), *arguments],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def main() -> None:
+    receipt = load_program()
+    charge, refunds = stripe_fixture()
+    bundle = receipt.compile_stripe_bundle(
+        charge,
+        refunds,
+        product_id_value="wywa",
+        scope="One settled WYWA license.",
+        verified_at=AT,
+        request_ids=["req_second", "req_first", "req_first"],
+    )
+    assert bundle["provider"] == "stripe"
+    assert bundle["adapter"] == "stripe-balance-v1"
+    assert bundle["verified_at"] == "2026-07-25T12:00:00Z"
+    assert bundle["expires_at"] == "2026-07-26T12:00:00Z"
+    assert bundle["source"]["request_ids"] == ["req_first", "req_second"]
+    assert [event["kind"] for event in bundle["events"]] == [
+        "settled-revenue",
+        "settled-direct-cost",
+        "settled-refund",
+    ]
+    assert [event["amount_usd"] for event in bundle["events"]] == [
+        "10.00",
+        "0.59",
+        "2.00",
+    ]
+    encoded = json.dumps(bundle)
+    assert "private@example.test" not in encoded
+    assert "Private Customer" not in encoded
+    assert "secret-customer-detail" not in encoded
+    assert bundle["source"]["captured_amount_cents"] == 1000
+    assert bundle["source"]["fee_amount_cents"] == 59
+    assert bundle["source"]["refunded_amount_cents"] == 200
+    assert bundle["source"]["net_amount_cents"] == 741
+
+    unreconciled_bundle = copy.deepcopy(bundle)
+    unreconciled_bundle["events"][0]["amount_usd"] = "9.99"
+    try:
+        receipt.validate_bundle(
+            unreconciled_bundle,
+            at=AT,
+            require_current=True,
+        )
+    except receipt.ReceiptError as error:
+        assert "do not reconcile" in str(error)
+    else:
+        raise AssertionError("unreconciled signed-bundle shape was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="wywa-receipt-test-") as temporary:
+        root = Path(temporary)
+        key = root / "private" / "economics_ed25519"
+        key.parent.mkdir(mode=0o700)
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+        key.chmod(0o600)
+        output = root / "public"
+        bundle_path, signature_path = receipt.write_signed_bundle(
+            bundle,
+            key=key,
+            output=output,
+            replace=False,
+        )
+        public_key = root / "economics.pub"
+        public_key.write_text(
+            " ".join(Path(f"{key}.pub").read_text(encoding="utf-8").split()[:2])
+            + "\n",
+            encoding="utf-8",
+        )
+        assert bundle_path.stat().st_mode & 0o777 == 0o644
+        assert signature_path.stat().st_mode & 0o777 == 0o644
+        assert output.stat().st_mode & 0o777 == 0o755
+        assert bundle_path.read_bytes() == receipt.canonical_bytes(bundle)
+
+        verified = json.loads(
+            run(
+                "verify-bundle",
+                str(bundle_path),
+                str(signature_path),
+                "--public-key",
+                str(public_key),
+                "--at",
+                "2026-07-25T12:01:00Z",
+            ).stdout
+        )
+        assert verified["eligible"] is True
+        assert verified["bundle_id"] == bundle["bundle_id"]
+        assert verified["evidence"] == "signed-provider-verification-bundle"
+
+        stale = run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-07-27T12:01:00Z",
+            expected=2,
+        )
+        assert "stale" in stale.stderr
+        run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-07-27T12:01:00Z",
+            "--allow-stale",
+        )
+
+        tampered = root / "tampered.json"
+        tampered_record = copy.deepcopy(bundle)
+        tampered_record["events"][0]["amount_usd"] = "99.00"
+        tampered.write_bytes(receipt.canonical_bytes(tampered_record))
+        bad_signature = run(
+            "verify-bundle",
+            str(tampered),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-07-25T12:01:00Z",
+            expected=2,
+        )
+        assert "signature verification failed" in bad_signature.stderr
+
+        other_key = root / "private" / "other_ed25519"
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(other_key),
+            ],
+            check=True,
+        )
+        other_public_key = root / "other-economics.pub"
+        other_public_key.write_text(
+            " ".join(
+                Path(f"{other_key}.pub").read_text(encoding="utf-8").split()[:2]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        wrong_key = run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(other_public_key),
+            "--at",
+            "2026-07-25T12:01:00Z",
+            expected=2,
+        )
+        assert "signature verification failed" in wrong_key.stderr
+
+    incomplete = copy.deepcopy(charge)
+    incomplete["amount_refunded"] = 201
+    try:
+        receipt.compile_stripe_bundle(
+            incomplete,
+            refunds,
+            product_id_value="wywa",
+            scope="Incomplete refund fixture.",
+            verified_at=AT,
+        )
+    except receipt.ReceiptError as error:
+        assert "refund list does not reconcile" in str(error)
+    else:
+        raise AssertionError("incomplete refund list was accepted")
+
+    pending = copy.deepcopy(charge)
+    pending["balance_transaction"]["status"] = "pending"
+    try:
+        receipt.compile_stripe_bundle(
+            pending,
+            refunds,
+            product_id_value="wywa",
+            scope="Pending balance fixture.",
+            verified_at=AT,
+        )
+    except receipt.ReceiptError as error:
+        assert "not available" in str(error)
+    else:
+        raise AssertionError("pending Stripe balance was accepted")
+
+    test_mode = copy.deepcopy(charge)
+    test_mode["livemode"] = False
+    try:
+        receipt.compile_stripe_bundle(
+            test_mode,
+            refunds,
+            product_id_value="wywa",
+            scope="Test-mode fixture.",
+            verified_at=AT,
+        )
+    except receipt.ReceiptError as error:
+        assert "test-mode" in str(error)
+    else:
+        raise AssertionError("test-mode Stripe charge was accepted")
+
+    test_environment = dict(os.environ)
+    test_environment["STRIPE_SECRET_KEY"] = "sk_test_not_a_live_key"
+    refused = run(
+        "stripe-charge",
+        "--product-id",
+        "wywa",
+        "--charge-id",
+        "ch_liveAlpha123",
+        "--scope",
+        "Test key refusal.",
+        "--key",
+        "/nonexistent/private-key",
+        "--output",
+        "/nonexistent/output",
+        expected=2,
+        env=test_environment,
+    )
+    assert "must contain a live" in refused.stderr
+    assert "sk_test" not in refused.stderr
+
+    print("PASS provider-verified WYWA economics receipts")
+
+
+if __name__ == "__main__":
+    main()

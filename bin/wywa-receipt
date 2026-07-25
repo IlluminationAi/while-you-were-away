@@ -1,0 +1,967 @@
+#!/usr/bin/env python3
+"""Verify provider settlement and emit a signed, redacted WYWA economics bundle."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import ssl
+import stat
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+PROGRAM = Path(__file__).name
+NAMESPACE = "wywa-economics-receipt-v1"
+SIGNER_IDENTITY = "wywa-economics"
+STRIPE_API_VERSION = "2026-02-25.clover"
+STRIPE_ORIGIN = "https://api.stripe.com"
+MAX_PROVIDER_BYTES = 2 * 1024 * 1024
+MAX_BUNDLE_BYTES = 256 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_SCOPE_CHARS = 500
+MAX_BUNDLE_VALIDITY = dt.timedelta(hours=24)
+CLOCK_SKEW = dt.timedelta(minutes=5)
+PUBLIC_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+STRIPE_ID_PATTERN = re.compile(r"(?:ch|re|txn)_[A-Za-z0-9]+")
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 ([A-Za-z0-9+/]+={0,2})")
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+class ReceiptError(Exception):
+    """A bounded user-facing receipt error."""
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so provider identity cannot drift."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise ReceiptError(f"required executable is unavailable: {name}")
+    return executable
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise ReceiptError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ReceiptError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise ReceiptError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise ReceiptError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def unix_moment(value: object, label: str) -> dt.datetime:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ReceiptError(f"{label} must be a nonnegative Unix timestamp")
+    try:
+        return dt.datetime.fromtimestamp(value, tz=dt.timezone.utc).replace(
+            microsecond=0
+        )
+    except (OverflowError, OSError, ValueError) as error:
+        raise ReceiptError(f"{label} is outside the supported range") from error
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise ReceiptError(f"JSON repeats key: {key}")
+        record[key] = value
+    return record
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ReceiptError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ReceiptError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_nlink != 1:
+        raise ReceiptError(f"{label} must have exactly one hard link")
+    if metadata.st_size > maximum:
+        raise ReceiptError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReceiptError(f"{label} is not UTF-8") from error
+    try:
+        record = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise ReceiptError(f"{label} is not valid JSON") from error
+    if not isinstance(record, dict):
+        raise ReceiptError(f"{label} must be a JSON object")
+    return record
+
+
+def load_json_file(path: Path, label: str, maximum: int) -> dict[str, Any]:
+    return load_json_bytes(read_regular(path, label, maximum), label)
+
+
+def require_exact_keys(
+    record: dict[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
+    actual = set(record)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    detail = []
+    if missing:
+        detail.append(f"missing {', '.join(missing)}")
+    if extra:
+        detail.append(f"unknown {', '.join(extra)}")
+    raise ReceiptError(f"{label} has {'; '.join(detail)}")
+
+
+def public_id(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 96
+        or PUBLIC_ID_PATTERN.fullmatch(value) is None
+    ):
+        raise ReceiptError(f"{label} must be a lowercase hyphenated identifier")
+    return value
+
+
+def stripe_id(value: object, label: str, prefix: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith(f"{prefix}_")
+        or STRIPE_ID_PATTERN.fullmatch(value) is None
+        or len(value) > 128
+    ):
+        raise ReceiptError(f"{label} is not a valid Stripe {prefix} id")
+    return value
+
+
+def bounded_text(value: object, label: str, maximum: int) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= maximum:
+        raise ReceiptError(f"{label} must contain between 1 and {maximum} characters")
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ReceiptError(f"{label} contains a control character")
+    return value
+
+
+def positive_integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ReceiptError(f"{label} must be a positive integer")
+    return value
+
+
+def nonnegative_integer(value: object, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ReceiptError(f"{label} must be a nonnegative integer")
+    return value
+
+
+def cents_text(value: int) -> str:
+    if value <= 0:
+        raise ReceiptError("public economics events must have a positive amount")
+    return f"{value // 100}.{value % 100:02d}"
+
+
+def amount_cents(value: object, label: str) -> int:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(
+            r"[1-9][0-9]*\.[0-9]{2}|0\.(?:0[1-9]|[1-9][0-9])",
+            value,
+        )
+        is None
+    ):
+        raise ReceiptError(f"{label} must be positive USD cents")
+    whole, fraction = value.split(".", 1)
+    return int(whole) * 100 + int(fraction)
+
+
+def receipt_url(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 4096:
+        raise ReceiptError("Stripe charge omits a bounded receipt URL")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ReceiptError("Stripe receipt URL is invalid") from error
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "pay.stripe.com"
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or not parsed.path.startswith("/receipts/")
+    ):
+        raise ReceiptError("Stripe receipt URL is outside pay.stripe.com/receipts")
+    return value
+
+
+def event_id(provider_id: str, kind: str) -> str:
+    digest = hashlib.sha256(f"{provider_id}\0{kind}".encode()).hexdigest()[:20]
+    return f"stripe-{kind}-{digest}"
+
+
+def validate_balance_transaction(
+    value: object,
+    *,
+    source_id: str,
+    amount: int,
+    at: dt.datetime,
+    refund: bool,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise ReceiptError("Stripe balance transaction was not expanded")
+    transaction_id = stripe_id(value.get("id"), "balance transaction id", "txn")
+    if value.get("object") != "balance_transaction":
+        raise ReceiptError("Stripe balance transaction has the wrong object type")
+    if value.get("source") != source_id:
+        raise ReceiptError("Stripe balance transaction source does not match")
+    if value.get("currency") != "usd":
+        raise ReceiptError("Stripe balance transaction is not denominated in USD")
+    if value.get("status") != "available":
+        raise ReceiptError("Stripe balance transaction is not available")
+    available_on = unix_moment(
+        value.get("available_on"), "balance transaction available_on"
+    )
+    if available_on > at + CLOCK_SKEW:
+        raise ReceiptError("Stripe balance transaction is future-available")
+    transaction_amount = value.get("amount")
+    expected_amount = -amount if refund else amount
+    if transaction_amount != expected_amount:
+        raise ReceiptError("Stripe balance transaction amount does not match")
+    fee = nonnegative_integer(value.get("fee"), "Stripe balance transaction fee")
+    net = value.get("net")
+    if isinstance(net, bool) or not isinstance(net, int):
+        raise ReceiptError("Stripe balance transaction net must be an integer")
+    if net != transaction_amount - fee:
+        raise ReceiptError("Stripe balance transaction net does not reconcile")
+    accepted_types = {"refund", "payment_refund"} if refund else {"charge", "payment"}
+    accepted_categories = {"refund"} if refund else {"charge"}
+    if value.get("type") not in accepted_types:
+        raise ReceiptError("Stripe balance transaction has an unexpected type")
+    if value.get("reporting_category") not in accepted_categories:
+        raise ReceiptError(
+            "Stripe balance transaction has an unexpected reporting category"
+        )
+    return {
+        "id": transaction_id,
+        "available_at": utc_text(available_on),
+        "fee": fee,
+        "net": net,
+    }
+
+
+def compile_stripe_bundle(
+    charge: dict[str, Any],
+    refunds: list[dict[str, Any]],
+    *,
+    product_id_value: str,
+    scope: str,
+    verified_at: dt.datetime,
+    request_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    product = public_id(product_id_value, "product id")
+    public_scope = bounded_text(scope, "scope", MAX_SCOPE_CHARS)
+    charge_id = stripe_id(charge.get("id"), "charge id", "ch")
+    if charge.get("object") != "charge":
+        raise ReceiptError("Stripe charge has the wrong object type")
+    if charge.get("livemode") is not True:
+        raise ReceiptError("Stripe test-mode charges cannot become public economics")
+    if (
+        charge.get("paid") is not True
+        or charge.get("captured") is not True
+        or charge.get("status") != "succeeded"
+    ):
+        raise ReceiptError("Stripe charge is not paid, captured, and succeeded")
+    if charge.get("disputed") is not False:
+        raise ReceiptError("Stripe disputed charges are not settled evidence")
+    if charge.get("currency") != "usd":
+        raise ReceiptError("Stripe charge is not denominated in USD")
+    amount = positive_integer(charge.get("amount_captured"), "captured amount")
+    hosted_receipt = receipt_url(charge.get("receipt_url"))
+    balance = validate_balance_transaction(
+        charge.get("balance_transaction"),
+        source_id=charge_id,
+        amount=amount,
+        at=verified_at,
+        refund=False,
+    )
+
+    refund_records: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    refund_total = 0
+    seen_refunds: set[str] = set()
+    for refund in refunds:
+        if not isinstance(refund, dict) or refund.get("object") != "refund":
+            raise ReceiptError("Stripe refund list contains an invalid object")
+        refund_id = stripe_id(refund.get("id"), "refund id", "re")
+        if refund_id in seen_refunds:
+            raise ReceiptError("Stripe refund list repeats a refund id")
+        seen_refunds.add(refund_id)
+        if (
+            refund.get("charge") != charge_id
+            or refund.get("currency") != "usd"
+            or refund.get("status") != "succeeded"
+        ):
+            raise ReceiptError("Stripe refund is not a succeeded USD refund")
+        refund_amount = positive_integer(refund.get("amount"), "refund amount")
+        refund_balance = validate_balance_transaction(
+            refund.get("balance_transaction"),
+            source_id=refund_id,
+            amount=refund_amount,
+            at=verified_at,
+            refund=True,
+        )
+        refund_records.append((refund, refund_balance))
+        refund_total += refund_amount
+    reported_refunds = nonnegative_integer(
+        charge.get("amount_refunded"), "charge amount_refunded"
+    )
+    if refund_total != reported_refunds:
+        raise ReceiptError("complete Stripe refund list does not reconcile")
+
+    events: list[dict[str, Any]] = [
+        {
+            "id": event_id(charge_id, "revenue"),
+            "kind": "settled-revenue",
+            "amount_usd": cents_text(amount),
+            "settled_at": balance["available_at"],
+            "receipt_url": hosted_receipt,
+            "scope": public_scope,
+            "provider_reference": {
+                "object": "charge",
+                "id": charge_id,
+                "balance_transaction_id": balance["id"],
+            },
+        }
+    ]
+    if balance["fee"] > 0:
+        events.append(
+            {
+                "id": event_id(charge_id, "fee"),
+                "kind": "settled-direct-cost",
+                "amount_usd": cents_text(balance["fee"]),
+                "settled_at": balance["available_at"],
+                "receipt_url": hosted_receipt,
+                "scope": bounded_text(
+                    f"Stripe processing fee for {public_scope}",
+                    "fee scope",
+                    MAX_SCOPE_CHARS,
+                ),
+                "provider_reference": {
+                    "object": "charge-fee",
+                    "id": charge_id,
+                    "balance_transaction_id": balance["id"],
+                },
+            }
+        )
+    for refund, refund_balance in sorted(
+        refund_records, key=lambda pair: str(pair[0]["id"])
+    ):
+        refund_id = str(refund["id"])
+        events.append(
+            {
+                "id": event_id(refund_id, "refund"),
+                "kind": "settled-refund",
+                "amount_usd": cents_text(int(refund["amount"])),
+                "settled_at": refund_balance["available_at"],
+                "receipt_url": hosted_receipt,
+                "scope": bounded_text(
+                    f"Stripe refund for {public_scope}",
+                    "refund scope",
+                    MAX_SCOPE_CHARS,
+                ),
+                "provider_reference": {
+                    "object": "refund",
+                    "id": refund_id,
+                    "balance_transaction_id": refund_balance["id"],
+                },
+            }
+        )
+
+    digest = hashlib.sha256(charge_id.encode()).hexdigest()[:20]
+    checked = verified_at.astimezone(dt.timezone.utc).replace(microsecond=0)
+    request_id_values = sorted(
+        {
+            bounded_text(value, "Stripe request id", 128)
+            for value in (request_ids or [])
+        }
+    )
+    return {
+        "schema_version": 1,
+        "bundle_id": f"stripe-charge-{digest}",
+        "product_id": product,
+        "provider": "stripe",
+        "adapter": "stripe-balance-v1",
+        "verified_at": utc_text(checked),
+        "expires_at": utc_text(checked + MAX_BUNDLE_VALIDITY),
+        "source": {
+            "object": "charge",
+            "id": charge_id,
+            "livemode": True,
+            "balance_transaction_id": balance["id"],
+            "captured_amount_cents": amount,
+            "fee_amount_cents": balance["fee"],
+            "refunded_amount_cents": refund_total,
+            "net_amount_cents": amount - balance["fee"] - refund_total,
+            "receipt_url": hosted_receipt,
+            "request_ids": request_id_values,
+            "boundary": (
+                "The live Stripe API reported a succeeded captured charge, "
+                "a complete reconciled refund list, and available balance "
+                "transactions at verification time. Later refunds, disputes, "
+                "or reversals require a fresh bundle."
+            ),
+        },
+        "events": events,
+    }
+
+
+def validate_bundle(
+    bundle: dict[str, Any],
+    *,
+    at: dt.datetime,
+    require_current: bool,
+) -> dict[str, Any]:
+    require_exact_keys(
+        bundle,
+        {
+            "schema_version",
+            "bundle_id",
+            "product_id",
+            "provider",
+            "adapter",
+            "verified_at",
+            "expires_at",
+            "source",
+            "events",
+        },
+        "economics bundle",
+    )
+    if bundle["schema_version"] != 1:
+        raise ReceiptError("economics bundle has an unsupported schema")
+    public_id(bundle["bundle_id"], "bundle id")
+    public_id(bundle["product_id"], "product id")
+    if bundle["provider"] != "stripe" or bundle["adapter"] != "stripe-balance-v1":
+        raise ReceiptError("economics bundle uses an unsupported provider adapter")
+    verified_at = parse_moment(bundle["verified_at"], "bundle verified_at")
+    expires_at = parse_moment(bundle["expires_at"], "bundle expires_at")
+    if expires_at <= verified_at or expires_at - verified_at > MAX_BUNDLE_VALIDITY:
+        raise ReceiptError("economics bundle has an invalid validity interval")
+    if verified_at > at + CLOCK_SKEW:
+        raise ReceiptError("economics bundle is future-dated")
+    if require_current and expires_at <= at:
+        raise ReceiptError("economics bundle is stale and must be reverified")
+    source = bundle["source"]
+    if not isinstance(source, dict):
+        raise ReceiptError("economics bundle source must be an object")
+    require_exact_keys(
+        source,
+        {
+            "object",
+            "id",
+            "livemode",
+            "balance_transaction_id",
+            "captured_amount_cents",
+            "fee_amount_cents",
+            "refunded_amount_cents",
+            "net_amount_cents",
+            "receipt_url",
+            "request_ids",
+            "boundary",
+        },
+        "economics bundle source",
+    )
+    if source["object"] != "charge" or source["livemode"] is not True:
+        raise ReceiptError("economics bundle source is not a live Stripe charge")
+    stripe_id(source["id"], "source charge id", "ch")
+    stripe_id(
+        source["balance_transaction_id"],
+        "source balance transaction id",
+        "txn",
+    )
+    captured_amount = positive_integer(
+        source["captured_amount_cents"], "source captured amount"
+    )
+    fee_amount = nonnegative_integer(
+        source["fee_amount_cents"], "source fee amount"
+    )
+    refunded_amount = nonnegative_integer(
+        source["refunded_amount_cents"], "source refunded amount"
+    )
+    net_amount = source["net_amount_cents"]
+    if isinstance(net_amount, bool) or not isinstance(net_amount, int):
+        raise ReceiptError("source net amount must be an integer")
+    if net_amount != captured_amount - fee_amount - refunded_amount:
+        raise ReceiptError("economics bundle source amounts do not reconcile")
+    receipt_url(source["receipt_url"])
+    bounded_text(source["boundary"], "source boundary", 1000)
+    request_ids = source["request_ids"]
+    if not isinstance(request_ids, list) or any(
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 128
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        for value in request_ids
+    ) or request_ids != sorted(set(request_ids)):
+        raise ReceiptError("economics bundle has invalid Stripe request ids")
+    events = bundle["events"]
+    if not isinstance(events, list) or not events:
+        raise ReceiptError("economics bundle must contain at least one event")
+    seen: set[str] = set()
+    revenue_total = 0
+    fee_total = 0
+    refund_total = 0
+    revenue_events = 0
+    fee_events = 0
+    for event in events:
+        if not isinstance(event, dict):
+            raise ReceiptError("economics bundle contains an invalid event")
+        require_exact_keys(
+            event,
+            {
+                "id",
+                "kind",
+                "amount_usd",
+                "settled_at",
+                "receipt_url",
+                "scope",
+                "provider_reference",
+            },
+            "economics event",
+        )
+        identifier = public_id(event["id"], "economics event id")
+        if identifier in seen:
+            raise ReceiptError("economics bundle repeats an event id")
+        seen.add(identifier)
+        if event["kind"] not in {
+            "settled-revenue",
+            "settled-refund",
+            "settled-direct-cost",
+        }:
+            raise ReceiptError("economics bundle has an invalid event kind")
+        event_amount = amount_cents(event["amount_usd"], "economics event amount")
+        settled_at = parse_moment(event["settled_at"], "event settled_at")
+        if settled_at > verified_at + CLOCK_SKEW:
+            raise ReceiptError("economics event settled after provider verification")
+        receipt_url(event["receipt_url"])
+        bounded_text(event["scope"], "event scope", MAX_SCOPE_CHARS)
+        reference = event["provider_reference"]
+        if not isinstance(reference, dict):
+            raise ReceiptError("economics event provider reference must be an object")
+        require_exact_keys(
+            reference,
+            {"object", "id", "balance_transaction_id"},
+            "economics event provider reference",
+        )
+        if reference["object"] not in {"charge", "charge-fee", "refund"}:
+            raise ReceiptError("economics event has an invalid provider object")
+        expected_prefix = "re" if reference["object"] == "refund" else "ch"
+        stripe_id(reference["id"], "provider object id", expected_prefix)
+        stripe_id(
+            reference["balance_transaction_id"],
+            "provider balance transaction id",
+            "txn",
+        )
+        if event["kind"] == "settled-revenue":
+            revenue_events += 1
+            revenue_total += event_amount
+            if (
+                reference["object"] != "charge"
+                or reference["id"] != source["id"]
+                or reference["balance_transaction_id"]
+                != source["balance_transaction_id"]
+            ):
+                raise ReceiptError(
+                    "settled revenue does not match the source charge"
+                )
+        elif event["kind"] == "settled-direct-cost":
+            fee_events += 1
+            fee_total += event_amount
+            if (
+                reference["object"] != "charge-fee"
+                or reference["id"] != source["id"]
+                or reference["balance_transaction_id"]
+                != source["balance_transaction_id"]
+            ):
+                raise ReceiptError(
+                    "settled direct cost does not match the source charge fee"
+                )
+        else:
+            refund_total += event_amount
+            if reference["object"] != "refund":
+                raise ReceiptError(
+                    "settled refund does not reference a Stripe refund"
+                )
+    if revenue_events != 1 or fee_events > 1:
+        raise ReceiptError(
+            "economics bundle must contain one revenue and at most one fee event"
+        )
+    if (
+        revenue_total != captured_amount
+        or fee_total != fee_amount
+        or refund_total != refunded_amount
+    ):
+        raise ReceiptError("economics bundle events do not reconcile to source amounts")
+    return bundle
+
+
+def validate_public_key(path: Path, *, allow_comment: bool = False) -> str:
+    try:
+        value = read_regular(path, "economics public key", 4096).decode(
+            "utf-8"
+        ).strip()
+    except UnicodeDecodeError as error:
+        raise ReceiptError("economics public key is not UTF-8") from error
+    if allow_comment:
+        fields = value.split()
+        value = " ".join(fields[:2]) if len(fields) >= 2 else value
+    if SSH_KEY_PATTERN.fullmatch(value) is None:
+        raise ReceiptError("economics public key must be comment-free ssh-ed25519")
+    try:
+        base64.b64decode(value.split()[1], validate=True)
+    except ValueError as error:
+        raise ReceiptError("economics public key has invalid base64") from error
+    return value
+
+
+def verify_signature(bundle: Path, signature: Path, public_key: Path) -> None:
+    bundle_bytes = read_regular(bundle, "economics bundle", MAX_BUNDLE_BYTES)
+    signature_path = signature.expanduser().absolute()
+    read_regular(signature_path, "economics signature", MAX_SIGNATURE_BYTES)
+    key = validate_public_key(public_key)
+    with tempfile.TemporaryDirectory(prefix="wywa-receipt-verify-") as temporary:
+        allowed = Path(temporary) / "allowed_signers"
+        allowed.write_text(f"{SIGNER_IDENTITY} {key}\n", encoding="utf-8")
+        allowed.chmod(0o600)
+        result = subprocess.run(
+            [
+                required_executable("ssh-keygen"),
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                SIGNER_IDENTITY,
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature_path),
+            ],
+            input=bundle_bytes,
+            capture_output=True,
+        )
+    if result.returncode != 0:
+        raise ReceiptError("economics bundle signature verification failed")
+
+
+def validate_private_key(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    metadata = absolute.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise ReceiptError("economics signing key must be a regular, nonsymlink file")
+    if metadata.st_nlink != 1 or metadata.st_mode & 0o077:
+        raise ReceiptError("economics signing key must be private and single-linked")
+    public = Path(f"{absolute}.pub")
+    validate_public_key(public, allow_comment=True)
+    return absolute
+
+
+def write_signed_bundle(
+    bundle: dict[str, Any],
+    *,
+    key: Path,
+    output: Path,
+    replace: bool,
+) -> tuple[Path, Path]:
+    private_key = validate_private_key(key)
+    directory = output.expanduser().absolute()
+    if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+        raise ReceiptError("output must be a nonsymlink directory")
+    directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+    directory.chmod(0o755)
+    target = directory / f"{bundle['bundle_id']}.json"
+    signature_target = directory / f"{bundle['bundle_id']}.sig"
+    if not replace and (
+        target.exists()
+        or target.is_symlink()
+        or signature_target.exists()
+        or signature_target.is_symlink()
+    ):
+        raise ReceiptError("economics bundle already exists; use --replace")
+    with tempfile.TemporaryDirectory(
+        prefix=".wywa-receipt-", dir=directory
+    ) as temporary:
+        staging = Path(temporary) / target.name
+        staging.write_bytes(canonical_bytes(bundle))
+        staging.chmod(0o644)
+        result = subprocess.run(
+            [
+                required_executable("ssh-keygen"),
+                "-Y",
+                "sign",
+                "-q",
+                "-f",
+                str(private_key),
+                "-n",
+                NAMESPACE,
+                str(staging),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise ReceiptError("economics bundle signing failed")
+        staging_signature = Path(f"{staging}.sig")
+        if not staging_signature.is_file() or staging_signature.is_symlink():
+            raise ReceiptError("economics bundle signer omitted its signature")
+        staging_signature.chmod(0o644)
+        os.replace(staging, target)
+        os.replace(staging_signature, signature_target)
+    return target, signature_target
+
+
+def stripe_get(
+    path: str,
+    query: list[tuple[str, str]],
+    token: str,
+) -> tuple[dict[str, Any], str | None]:
+    if not path.startswith("/v1/") or "//" in path or "?" in path:
+        raise ReceiptError("unsafe Stripe API path")
+    url = STRIPE_ORIGIN + path
+    if query:
+        url += "?" + urllib.parse.urlencode(query)
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {token}",
+            "Stripe-Version": STRIPE_API_VERSION,
+            "User-Agent": "wywa-receipt/1",
+        },
+        method="GET",
+    )
+    context = ssl.create_default_context()
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    opener = urllib.request.build_opener(
+        NoRedirect(),
+        urllib.request.HTTPSHandler(context=context),
+    )
+    try:
+        with opener.open(request, timeout=20) as response:
+            if response.status != 200 or response.geturl() != url:
+                raise ReceiptError("Stripe API returned an unexpected response")
+            content_type = response.headers.get_content_type()
+            if content_type != "application/json":
+                raise ReceiptError("Stripe API response is not JSON")
+            declared = response.headers.get("Content-Length")
+            if declared is not None and int(declared) > MAX_PROVIDER_BYTES:
+                raise ReceiptError("Stripe API response exceeds the byte ceiling")
+            data = response.read(MAX_PROVIDER_BYTES + 1)
+            if len(data) > MAX_PROVIDER_BYTES:
+                raise ReceiptError("Stripe API response exceeds the byte ceiling")
+            request_id = response.headers.get("Request-Id")
+    except urllib.error.HTTPError as error:
+        raise ReceiptError(f"Stripe API returned HTTP {error.code}") from error
+    except (urllib.error.URLError, TimeoutError, ssl.SSLError) as error:
+        raise ReceiptError("Stripe API request failed") from error
+    return load_json_bytes(data, "Stripe API response"), request_id
+
+
+def fetch_stripe_charge(
+    charge_id: str,
+    token: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[str]]:
+    charge, charge_request_id = stripe_get(
+        f"/v1/charges/{urllib.parse.quote(charge_id, safe='')}",
+        [("expand[]", "balance_transaction")],
+        token,
+    )
+    refunds: list[dict[str, Any]] = []
+    request_ids = [charge_request_id] if charge_request_id else []
+    starting_after: str | None = None
+    for _ in range(10):
+        query = [
+            ("charge", charge_id),
+            ("limit", "100"),
+            ("expand[]", "data.balance_transaction"),
+        ]
+        if starting_after is not None:
+            query.append(("starting_after", starting_after))
+        page, page_request_id = stripe_get("/v1/refunds", query, token)
+        if page_request_id:
+            request_ids.append(page_request_id)
+        if page.get("object") != "list" or not isinstance(page.get("data"), list):
+            raise ReceiptError("Stripe refunds endpoint returned an invalid list")
+        data = page["data"]
+        if not all(isinstance(item, dict) for item in data):
+            raise ReceiptError("Stripe refunds endpoint returned an invalid item")
+        refunds.extend(data)
+        if page.get("has_more") is False:
+            break
+        if page.get("has_more") is not True or not data:
+            raise ReceiptError("Stripe refunds pagination is inconsistent")
+        starting_after = stripe_id(data[-1].get("id"), "last refund id", "re")
+    else:
+        raise ReceiptError("Stripe refunds exceed the ten-page verification limit")
+    return charge, refunds, request_ids
+
+
+def stripe_command(args: argparse.Namespace) -> dict[str, Any]:
+    token = os.environ.get("STRIPE_SECRET_KEY", "")
+    if (
+        not token.startswith("sk_live_")
+        or len(token) < 16
+        or any(character.isspace() for character in token)
+    ):
+        raise ReceiptError(
+            "STRIPE_SECRET_KEY must contain a live restricted or secret key"
+        )
+    charge_id = stripe_id(args.charge_id, "charge id", "ch")
+    at = utc_now() if args.at is None else parse_moment(args.at, "verification time")
+    charge, refunds, request_ids = fetch_stripe_charge(charge_id, token)
+    bundle = compile_stripe_bundle(
+        charge,
+        refunds,
+        product_id_value=args.product_id,
+        scope=args.scope,
+        verified_at=at,
+        request_ids=request_ids,
+    )
+    target, signature = write_signed_bundle(
+        bundle,
+        key=args.key,
+        output=args.output,
+        replace=args.replace,
+    )
+    return {
+        "bundle_id": bundle["bundle_id"],
+        "product_id": bundle["product_id"],
+        "provider": bundle["provider"],
+        "verified_at": bundle["verified_at"],
+        "expires_at": bundle["expires_at"],
+        "events": len(bundle["events"]),
+        "bundle": str(target),
+        "signature": str(signature),
+        "eligible": True,
+    }
+
+
+def verify_command(args: argparse.Namespace) -> dict[str, Any]:
+    verify_signature(args.bundle, args.signature, args.public_key)
+    bundle = load_json_file(args.bundle, "economics bundle", MAX_BUNDLE_BYTES)
+    if canonical_bytes(bundle) != read_regular(
+        args.bundle, "economics bundle", MAX_BUNDLE_BYTES
+    ):
+        raise ReceiptError("economics bundle is not canonical JSON")
+    at = utc_now() if args.at is None else parse_moment(args.at, "verification time")
+    validate_bundle(bundle, at=at, require_current=not args.allow_stale)
+    return {
+        **bundle,
+        "evidence": "signed-provider-verification-bundle",
+        "eligible": True,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Verify provider settlement and emit only a signed, redacted "
+            "economics bundle."
+        )
+    )
+    commands = parser.add_subparsers(dest="command", required=True)
+    stripe = commands.add_parser(
+        "stripe-charge",
+        help=(
+            "fetch one live Stripe charge plus every refund and require "
+            "available reconciled balance transactions"
+        ),
+    )
+    stripe.add_argument("--product-id", required=True)
+    stripe.add_argument("--charge-id", required=True)
+    stripe.add_argument("--scope", required=True)
+    stripe.add_argument("--key", type=Path, required=True)
+    stripe.add_argument("--output", type=Path, required=True)
+    stripe.add_argument("--at")
+    stripe.add_argument("--replace", action="store_true")
+
+    verify = commands.add_parser(
+        "verify-bundle",
+        help="verify a canonical bundle, signature, schema, and freshness",
+    )
+    verify.add_argument("bundle", type=Path)
+    verify.add_argument("signature", type=Path)
+    verify.add_argument("--public-key", type=Path, required=True)
+    verify.add_argument("--at")
+    verify.add_argument("--allow-stale", action="store_true")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        result = (
+            stripe_command(args)
+            if args.command == "stripe-charge"
+            else verify_command(args)
+        )
+    except (ReceiptError, FileNotFoundError, PermissionError) as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

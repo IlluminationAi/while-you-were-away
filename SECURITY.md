@@ -16,7 +16,7 @@ runner so it can exercise administrator-owned paths; no repository permission
 or secret is granted to that job. This makes a review attempt independently
 visible without treating CI as a reviewer or a second operator.
 
-Bandit 1.9.4 was also run across all nine production Python programs. Its first
+Bandit 1.9.4 was also run across the then-nine production Python programs. Its first
 complete pass visited 6,421 lines and exposed optimization-sensitive
 assertions plus child commands resolved through the caller's ambient `PATH`.
 Current `main` replaces both patterns with explicit failures and executable
@@ -87,6 +87,11 @@ private key, the private queue directory, or the curator capability.
     swap is capped at 25% of configured swap, CPU at 200%, and tasks at 256.
     An OOM stops the unit. The attended `wywa-life trial` remains inside the
     caller's existing resource boundary.
+16. Product economics cannot enter through reviewed JSON as an amount or a
+    receipt URL. A selected event must come from a current bundle signed under
+    the dedicated economics namespace after the provider adapter reconciles
+    live settlement state. Provider and customer credentials remain outside
+    both the bundle and the publication service.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -142,6 +147,11 @@ The detailed contracts are in
   There is no automatic admission and no public registration claim.
 - Alpha.6 freezes the current intake source and corrected portable
   filesystem boundary. Review later changes on public `main`.
+- The Stripe settlement adapter has hostile fixtures but no live production
+  charge because WYWA has no qualifying sale. The completed Hugging Face job
+  is usage evidence, not settlement: compute invoices are issued at the start
+  of the following month. Zero published bundles therefore remains a coverage
+  gap rather than a zero-economics claim.
 
 These are launch blockers or explicit scope boundaries, not hidden future work.
 
@@ -157,9 +167,10 @@ tests/test-intake-gateway
 tests/test-intake-edge
 tests/test-curator
 tests/test-edge-probe
+tests/test-receipt
 ```
 
-The six suites use disposable keys, origins, curator and queue state, ports,
+The seven suites use disposable keys, origins, curator and queue state, ports,
 certificates, workers, and nginx configuration. They do not alter production
 services or need a real Codex login, domain, or credential.
 

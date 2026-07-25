@@ -31,9 +31,12 @@ def main() -> None:
         workspace = root / "workspace"
         proof = root / "proof"
         product_proof = root / "product-proof"
+        economics_proof = root / "economics-proof"
         registry_state = root / "registry-state"
         registry_export = root / "registry-export"
         key = root / "identity" / "agent_ed25519"
+        economics_key = root / "identity" / "economics_ed25519"
+        economics_public_key = root / "economics-public-key.pub"
         logs.mkdir()
         runtime.mkdir()
         workspace.mkdir()
@@ -52,6 +55,30 @@ def main() -> None:
             check=True,
         )
         key.chmod(0o600)
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-q",
+                "-t",
+                "ed25519",
+                "-N",
+                "",
+                "-f",
+                str(economics_key),
+            ],
+            check=True,
+        )
+        economics_key.chmod(0o600)
+        economics_public_key.write_text(
+            " ".join(
+                Path(f"{economics_key}.pub")
+                .read_text(encoding="utf-8")
+                .split()[:2]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        economics_proof.mkdir()
         subprocess.run(
             [
                 str(REGISTRY),
@@ -227,6 +254,10 @@ def main() -> None:
                     str(proof),
                     "--product-proof-dir",
                     str(product_proof),
+                    "--economics-proof-dir",
+                    str(economics_proof),
+                    "--economics-public-key",
+                    str(economics_public_key),
                     "--registry-export-dir",
                     str(registry_export),
                     "--as-of",
@@ -273,6 +304,13 @@ def main() -> None:
         assert product_catalog["summary"]["settled_evidence_events"] == 0
         assert product_catalog["summary"]["verified_gross_revenue_usd"] == "0.00"
         assert product_catalog["summary"]["verified_direct_costs_usd"] == "0.00"
+        assert product_catalog["schema_version"] == 2
+        assert product_catalog["evidence_contract"] == "signed-provider-bundles-v1"
+        assert (
+            product_catalog["provider_verification"]["status"]
+            == "configured-no-settled-events"
+        )
+        assert product_catalog["summary"]["provider_verified_events"] == 0
         assert product_catalog["ranking"]["rows"] == []
         assert product_catalog["popularity"]["status"] == "not-measured"
         assert all(
@@ -298,6 +336,7 @@ def main() -> None:
         assert "empty evidence set" in product_page
         assert "verified maker signature" in product_page
         assert "live origin checked" in product_page
+        assert "Inline amounts and receipt URLs" in product_page
         assert "public operating system" in page
         assert "/products/" in page
         assert "$0.00" in page
@@ -369,6 +408,7 @@ def main() -> None:
             current / "agents",
             current / "products",
             current / "products" / "claims",
+            current / "products" / "receipts",
         ):
             assert directory.stat().st_mode & 0o777 == 0o755
         for file_path in (
@@ -392,10 +432,218 @@ def main() -> None:
             current / "products" / "claims" / "wywa.sig",
             current / "products" / "claims" / "revision-radar.json",
             current / "products" / "claims" / "revision-radar.sig",
+            current / "products" / "receipts" / "key.pub",
         ):
             assert file_path.is_file()
             assert not file_path.is_symlink()
             assert file_path.stat().st_mode & 0o777 == 0o644
+
+        bundle_id = "stripe-charge-fixture"
+        settled_state = json.loads(
+            (PROJECT / "platform" / "public-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        settled_state["products"][0]["economics"]["evidence_bundles"] = [
+            bundle_id
+        ]
+        settled_state_path = root / "settled-public-state.json"
+        settled_state_path.write_text(
+            json.dumps(settled_state),
+            encoding="utf-8",
+        )
+        bundle = {
+            "schema_version": 1,
+            "bundle_id": bundle_id,
+            "product_id": "wywa",
+            "provider": "stripe",
+            "adapter": "stripe-balance-v1",
+            "verified_at": "2026-07-24T17:39:00Z",
+            "expires_at": "2026-07-25T17:39:00Z",
+            "source": {
+                "object": "charge",
+                "id": "ch_liveFixture123",
+                "livemode": True,
+                "balance_transaction_id": "txn_liveFixture123",
+                "captured_amount_cents": 1000,
+                "fee_amount_cents": 59,
+                "refunded_amount_cents": 200,
+                "net_amount_cents": 741,
+                "receipt_url": (
+                    "https://pay.stripe.com/receipts/payment/test-fixture"
+                ),
+                "request_ids": ["req_fixture"],
+                "boundary": (
+                    "Fixture provider state was available and reconciled at "
+                    "the recorded verification time."
+                ),
+            },
+            "events": [
+                {
+                    "id": "stripe-revenue-fixture",
+                    "kind": "settled-revenue",
+                    "amount_usd": "10.00",
+                    "settled_at": "2026-07-24T17:30:00Z",
+                    "receipt_url": (
+                        "https://pay.stripe.com/receipts/payment/test-fixture"
+                    ),
+                    "scope": "Test WYWA sale.",
+                    "provider_reference": {
+                        "object": "charge",
+                        "id": "ch_liveFixture123",
+                        "balance_transaction_id": "txn_liveFixture123",
+                    },
+                },
+                {
+                    "id": "stripe-fee-fixture",
+                    "kind": "settled-direct-cost",
+                    "amount_usd": "0.59",
+                    "settled_at": "2026-07-24T17:30:00Z",
+                    "receipt_url": (
+                        "https://pay.stripe.com/receipts/payment/test-fixture"
+                    ),
+                    "scope": "Stripe processing fee for test WYWA sale.",
+                    "provider_reference": {
+                        "object": "charge-fee",
+                        "id": "ch_liveFixture123",
+                        "balance_transaction_id": "txn_liveFixture123",
+                    },
+                },
+                {
+                    "id": "stripe-refund-fixture",
+                    "kind": "settled-refund",
+                    "amount_usd": "2.00",
+                    "settled_at": "2026-07-24T17:35:00Z",
+                    "receipt_url": (
+                        "https://pay.stripe.com/receipts/payment/test-fixture"
+                    ),
+                    "scope": "Stripe refund for test WYWA sale.",
+                    "provider_reference": {
+                        "object": "refund",
+                        "id": "re_liveFixture123",
+                        "balance_transaction_id": "txn_liveRefundFixture123",
+                    },
+                },
+            ],
+        }
+        bundle_path = economics_proof / f"{bundle_id}.json"
+        bundle_path.write_text(
+            json.dumps(bundle, ensure_ascii=False, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                "ssh-keygen",
+                "-Y",
+                "sign",
+                "-q",
+                "-f",
+                str(economics_key),
+                "-n",
+                "wywa-economics-receipt-v1",
+                str(bundle_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        Path(f"{bundle_path}.sig").replace(economics_proof / f"{bundle_id}.sig")
+        settled_site = root / "settled-site"
+        settled_result = subprocess.run(
+            [
+                str(PUBLISH),
+                "--site-root",
+                str(settled_site),
+                "--logs-root",
+                str(logs),
+                "--runtime-root",
+                str(runtime),
+                "--workspace-root",
+                str(workspace),
+                "--public-state",
+                str(settled_state_path),
+                "--agent-proof-dir",
+                str(proof),
+                "--product-proof-dir",
+                str(product_proof),
+                "--economics-proof-dir",
+                str(economics_proof),
+                "--economics-public-key",
+                str(economics_public_key),
+                "--as-of",
+                "2026-07-24T17:43:00Z",
+                "--phase",
+                "active",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if settled_result.returncode != 0:
+            raise AssertionError(
+                "settled economics publication failed\n"
+                f"stdout: {settled_result.stdout}\n"
+                f"stderr: {settled_result.stderr}"
+            )
+        settled_catalog = json.loads(
+            (
+                settled_site
+                / "current"
+                / "products"
+                / "index.json"
+            ).read_text(encoding="utf-8")
+        )
+        settled_summary = settled_catalog["summary"]
+        assert settled_summary["settled_evidence_events"] == 3
+        assert settled_summary["provider_verified_events"] == 3
+        assert settled_summary["verified_gross_revenue_usd"] == "10.00"
+        assert settled_summary["verified_refunds_usd"] == "2.00"
+        assert settled_summary["verified_direct_costs_usd"] == "0.59"
+        assert settled_summary["verified_net_contribution_usd"] == "7.41"
+        assert settled_summary["ranking_eligible_products"] == 1
+        assert settled_catalog["ranking"]["status"] == "withheld"
+        assert (
+            settled_catalog["provider_verification"]["status"]
+            == "configured-current"
+        )
+        assert (
+            settled_site
+            / "current"
+            / "products"
+            / "receipts"
+            / f"{bundle_id}.json"
+        ).is_file()
+        settled_page = (
+            settled_site / "current" / "products" / "index.html"
+        ).read_text(encoding="utf-8")
+        assert "provider receipt" in settled_page
+        assert "signed check" in settled_page
+
+        stale_bundle = subprocess.run(
+            [
+                str(PUBLISH),
+                "--site-root",
+                str(root / "stale-economics-site"),
+                "--logs-root",
+                str(logs),
+                "--runtime-root",
+                str(runtime),
+                "--workspace-root",
+                str(workspace),
+                "--public-state",
+                str(settled_state_path),
+                "--economics-proof-dir",
+                str(economics_proof),
+                "--economics-public-key",
+                str(economics_public_key),
+                "--as-of",
+                "2026-07-26T17:43:00Z",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert stale_bundle.returncode != 0
+        assert "stale" in stale_bundle.stderr
 
         unsafe = subprocess.run(
             [str(PUBLISH), "--site-root", "relative", "--keep", "1"],
@@ -478,7 +726,9 @@ def main() -> None:
             text=True,
         )
         assert invalid_economics_result.returncode != 0
-        assert "two decimals" in invalid_economics_result.stderr
+        assert "inline economics evidence is not accepted" in (
+            invalid_economics_result.stderr
+        )
 
         portable_site = root / "portable-site"
         (runtime / "last-run").write_text(

@@ -72,7 +72,7 @@
       },
       "economics": {
         "statement": "No public settled revenue, refund, or direct-cost evidence has been attached to this starter product.",
-        "evidence": []
+        "evidence_bundles": []
       }
     }
   ],
@@ -88,8 +88,8 @@
   ],
   "economics": {
     "currency": "USD",
-    "definition": "Public settled revenue evidence minus public settled refunds and direct project costs. Budgets, estimates, unpaid value, and wallet balances are excluded.",
-    "ranking_policy": "Rank only when at least two products each have public settled-revenue evidence under the same USD measure.",
+    "definition": "Fresh signed provider-verified settled revenue minus public settled refunds and direct project costs. Inline amounts, budgets, estimates, unpaid value, and wallet balances are excluded.",
+    "ranking_policy": "Rank only when at least two products each have current provider-verified settled-revenue evidence under the same USD measure.",
     "popularity_policy": "Popularity is not measured by the script-free local preview."
   },
   "notes": [

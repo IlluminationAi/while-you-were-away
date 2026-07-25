@@ -39,6 +39,7 @@ mkdir -p -- \
   "$source_root/bin" \
   "$source_root/launch-assets" \
   "$source_root/platform" \
+  "$source_root/platform/economics-proofs" \
   "$source_root/platform/product-proofs" \
   "$source_root/platform/registry" \
   "$source_root/templates" \
@@ -75,6 +76,7 @@ for filename in \
   wywa-life \
   wywa-life-drill \
   wywa-product \
+  wywa-receipt \
   wywa-public \
   wywa-volume \
   wywa-curator \
@@ -115,6 +117,7 @@ for filename in \
   intake-public-window-zones.conf \
   nginx-bootstrap.conf \
   nginx.conf \
+  economics-public-key.pub \
   public-nginx-bootstrap.conf.in \
   public-nginx.conf.in \
   public-nginx-zones.conf \
@@ -127,6 +130,10 @@ do
     "$project_dir/platform/$filename" \
     "$source_root/platform/$filename"
 done
+
+install -m 0644 -- \
+  "$project_dir/platform/economics-proofs/README.md" \
+  "$source_root/platform/economics-proofs/README.md"
 
 for filename in \
   README.md \
@@ -194,6 +201,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-product" \
   "$source_root/tests/test-product"
+install -m 0755 -- \
+  "$project_dir/tests/test-receipt" \
+  "$source_root/tests/test-receipt"
 install -m 0755 -- \
   "$project_dir/tests/test-curator" \
   "$source_root/tests/test-curator"

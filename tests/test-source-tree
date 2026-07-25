@@ -44,6 +44,7 @@ for required in \
   bin/wywa-life \
   bin/wywa-life-drill \
   bin/wywa-product \
+  bin/wywa-receipt \
   bin/wywa-public \
   bin/wywa-volume \
   bin/wywa-curator \
@@ -65,6 +66,8 @@ for required in \
   launch-assets/05-honest-failures.png \
   launch-assets/thumbnail-240.png \
   platform/nginx-bootstrap.conf \
+  platform/economics-public-key.pub \
+  platform/economics-proofs/README.md \
   platform/nginx.conf \
   platform/intake-edge-harness.nginx.conf.in \
   platform/intake-public-window.nginx.conf.in \
@@ -101,6 +104,7 @@ for required in \
   tests/test-volume \
   tests/test-registry \
   tests/test-product \
+  tests/test-receipt \
   tests/test-platform \
   tests/test-release \
   tests/test-source-tree
@@ -122,12 +126,12 @@ except IndexError as exc:
     raise SystemExit("security review path is missing or malformed") from exc
 
 suites = re.findall(r"^tests/test-[a-z-]+$", commands, flags=re.MULTILINE)
-if len(suites) != 6:
+if len(suites) != 7:
     raise SystemExit(
-        f"security review path names {len(suites)} suites instead of 6"
+        f"security review path names {len(suites)} suites instead of 7"
     )
-if "The six suites use disposable" not in review:
-    raise SystemExit("security review prose does not match its six commands")
+if "The seven suites use disposable" not in review:
+    raise SystemExit("security review prose does not match its seven commands")
 PY
 then
   fail "security review path is internally inconsistent"
@@ -189,6 +193,7 @@ for suite in \
   tests/test-public \
   tests/test-registry \
   tests/test-product \
+  tests/test-receipt \
   tests/test-curator \
   tests/test-intake \
   tests/test-intake-edge \

@@ -98,6 +98,7 @@ tests/test-life-drill
 tests/test-public
 tests/test-registry
 tests/test-product
+tests/test-receipt
 tests/test-curator
 tests/test-intake
 tests/test-intake-edge
@@ -507,7 +508,13 @@ or access logs. The larger platform contract is in `PLATFORM.md`.
 The first closed Product Hub slice is also implemented at `/products/` with a
 deterministic `/products/index.json` view. It attaches release evidence to each
 reviewed product and derives revenue, refunds, direct costs, and net
-contribution only from public settled evidence events. WYWA and Revision Radar
+contribution only from fresh signed provider-verification bundles. Inline
+amounts are refused: a receipt URL without provider settlement state cannot
+enter a sum. The first adapter fetches a live Stripe charge and its complete
+refund set, requires succeeded capture plus reconciled `available` balance
+transactions, emits gross revenue, processing fees, and refunds as separate
+events, strips customer and payment details, and makes the signed bundle stale
+after 24 hours. WYWA and Revision Radar
 also carry short-lived maker claims signed by the same Ed25519 key as Lumen's
 current agent-origin manifest. The publisher verifies the agent signature,
 exact manifest hash and sequence, product identity, URL, release claim,
@@ -516,11 +523,14 @@ verified. This proves that the current agent key attributed the product and
 release claim; it does not prove product quality, control of a separate project
 origin, customers, use, sales, independence, or endorsement.
 
-Both products currently publish no qualifying economics events, so the catalog
+Both products currently publish no qualifying economics bundles, so the catalog
 displays the empty coverage and withholds revenue ranking. Popularity is not
 inferred from GitHub, relay delivery, or page availability while the site
 deliberately keeps no visitor analytics. This is a real read-only catalog
-boundary, not public submission, complete accounting, or traction.
+boundary, not public submission, complete accounting, or traction. The
+completed Hugging Face edge job is not counted as a direct cost: Hugging Face
+issues compute invoices at the beginning of the following month, so completed
+usage is not yet settled billing evidence.
 
 Product Hunt is no longer treated as an autonomous launch path. Its current
 policy says that contributing accounts must be personal, authentic, and
