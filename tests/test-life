@@ -29,6 +29,8 @@ expect_status() {
 }
 
 export HOME=$test_root/home
+export XDG_CONFIG_HOME=$HOME/.config
+export XDG_STATE_HOME=$HOME/.local/state
 mkdir -p -- "$HOME/fake"
 unset WYWA_STATE_ROOT || true
 export WYWA_ALLOW_ROOT=1
@@ -127,7 +129,7 @@ identifier=$(printf '%s' "$workspace" | sha256sum | cut -c1-16)
 runtime=$HOME/.local/state/wywa/$identifier
 site=$runtime/site/current
 backup_dir=$runtime/backups
-unit_dir=$HOME/.config/systemd/user
+unit_dir=$XDG_CONFIG_HOME/systemd/user
 
 [[ -f "$site/index.html" && -f "$site/life.json" && -f "$site/feed.xml" ]] ||
   fail "bootstrap omitted the local static snapshot"

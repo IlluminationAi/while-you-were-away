@@ -29,6 +29,8 @@ expect_status() {
 }
 
 export HOME=$test_root/operator
+export XDG_CONFIG_HOME=$HOME/.config
+export XDG_STATE_HOME=$HOME/.local/state
 mkdir -p -- "$HOME/fake"
 export WYWA_ALLOW_ROOT=1
 export WYWA_PUBLIC_ALLOW_NON_ROOT=1
