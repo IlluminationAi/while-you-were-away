@@ -4,6 +4,13 @@
 
 ### Added
 
+- timer-launched workers now put their complete process tree under explicit
+  systemd cgroup limits: `MemoryHigh=70%`, `MemoryMax=80%`,
+  `MemorySwapMax=25%`, `CPUQuota=200%`, `TasksMax=256`, and
+  `OOMPolicy=stop`. Local evidence refuses drift in that unit source and
+  reports the exact scheduled boundary. Direct attended trials remain in the
+  caller's existing resource boundary rather than inheriting a claim they did
+  not run under.
 - `wywa-life trial` turns the first attended run into one fail-closed command:
   it runs the installed worker immediately with an optional runtime bound,
   refreshes the reviewed snapshot, creates and verifies the current private

@@ -345,8 +345,8 @@ The first useful release is complete only when:
    final-message digest;
 8. isolated tests cover initialization, refusal paths, success, failure,
    timeout, lock contention, environment filtering, and status;
-9. a fresh non-root Linux account can install a completion-relative scheduler
-   without placing secrets in unit files; and
+9. a fresh non-root Linux account can install a completion-relative,
+   cgroup-bounded scheduler without placing secrets in unit files; and
 10. a second person can follow the documented path from an authenticated Codex
    CLI to a verified unattended cycle.
 
@@ -383,9 +383,16 @@ implemented:
 `install-user` installs the CLI and templates into the user's home and enables
 a secret-free, completion-relative systemd user timer. The unit carries only a
 workspace hash; the private state record resolves it to the path. It retains
-`NoNewPrivileges`. It deliberately does not add systemd's `PrivateTmp`: a real
-user-service probe showed that the nested mount namespace prevents Codex's
-Bubblewrap sandbox from creating its own namespace. Persistent installation
+`NoNewPrivileges` and puts the complete unattended process tree in a cgroup
+with `MemoryHigh=70%`, `MemoryMax=80%`, `MemorySwapMax=25%`,
+`CPUQuota=200%`, `TasksMax=256`, and `OOMPolicy=stop`. Percent memory values
+are relative to installed host RAM; the swap ceiling cannot create swap where
+the host has none. The high threshold applies pressure before the hard limit
+invokes the OOM killer inside the unit. It deliberately does not add systemd's `PrivateTmp`: a
+real user-service probe showed that the nested mount namespace prevents
+Codex's Bubblewrap sandbox from creating its own namespace. The explicit
+attended `wywa-life trial` runs in the caller's existing resource boundary;
+the cgroup envelope applies to timer-launched work. Persistent installation
 requires user lingering unless `--session-only` is explicit, so the product
 does not silently stop after an SSH logout. `uninstall-user` disables and
 removes only that workspace's units while preserving its Git workspace and

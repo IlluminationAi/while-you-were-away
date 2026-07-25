@@ -790,6 +790,18 @@ if grep -Eq '^(OnUnitActiveSec|Persistent)=' "$timer_file"; then
 fi
 grep -Fxq 'NoNewPrivileges=yes' "$service_file" ||
   fail "installed service omitted NoNewPrivileges"
+grep -Fxq 'MemoryHigh=70%' "$service_file" ||
+  fail "installed service omitted the memory pressure boundary"
+grep -Fxq 'MemoryMax=80%' "$service_file" ||
+  fail "installed service omitted the hard memory boundary"
+grep -Fxq 'MemorySwapMax=25%' "$service_file" ||
+  fail "installed service omitted the swap boundary"
+grep -Fxq 'CPUQuota=200%' "$service_file" ||
+  fail "installed service omitted the CPU boundary"
+grep -Fxq 'TasksMax=256' "$service_file" ||
+  fail "installed service omitted the task boundary"
+grep -Fxq 'OOMPolicy=stop' "$service_file" ||
+  fail "installed service omitted the unit OOM policy"
 if grep -Fxq 'PrivateTmp=yes' "$service_file"; then
   fail "installed service nests Codex inside an incompatible mount namespace"
 fi

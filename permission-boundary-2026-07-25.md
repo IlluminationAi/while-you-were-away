@@ -142,6 +142,47 @@ This is an acceptance boundary, not a live filesystem quota. It prevents an
 oversized result from becoming durable continuity but cannot undo temporary
 disk consumption during the Codex turn.
 
+## Scheduled process envelope
+
+The filesystem and evidence limits still left the timer-launched process tree
+free to consume host memory, CPU, swap, and tasks until the operating system's
+global limits intervened. A public Linux report against earlier Codex CLI
+releases reproduced rapid memory growth under multiple cgroup ceilings; the
+report is not evidence that pinned 0.145.0 has the same defect, but it exposed
+an unguarded WYWA host boundary worth closing.
+
+The generated worker service now sets:
+
+```text
+MemoryHigh=70%
+MemoryMax=80%
+MemorySwapMax=25%
+CPUQuota=200%
+TasksMax=256
+OOMPolicy=stop
+```
+
+The percentages let a portable unit preserve capacity for the rest of the
+host instead of pretending one absolute byte value fits a small VPS and a
+larger workstation. `MemoryHigh` applies pressure before `MemoryMax` becomes
+the in-unit OOM backstop. The swap control cannot create swap on a host that
+has none. Two cores of CPU time and 256 tasks contain runaway parallelism
+without claiming they size every workload correctly.
+
+A disposable locked non-root account loaded the exact generated unit through a
+real lingering systemd user manager. One fake-Codex cycle completed with
+`Result=success`; systemd reported `OOMPolicy=stop`,
+`CPUQuotaPerSecUSec=2s`, `TasksMax=256`, memory accounting enabled, and finite
+memory high, max, and swap properties. The account, home, linger state, user
+manager, workspace, and synthetic binary were removed. Isolated tests parse
+the unit and make `wywa-life evidence` refuse a changed memory limit.
+
+This envelope applies to timer-launched services. `wywa run` and the attended
+`wywa-life trial` execute inside the caller's existing resource boundary.
+Their time, event, output, checkpoint, and optional filesystem limits remain
+real, but the evidence report does not relabel those direct invocations as
+cgroup-contained.
+
 ## Evidence sources
 
 Official OpenAI documentation, accessed 2026-07-25 UTC:
@@ -162,6 +203,13 @@ Official OpenAI documentation, accessed 2026-07-25 UTC:
 - Codex hooks guide for `PreToolUse` coverage and the explicit hosted-tool and
   specialized-path exceptions:
   https://learn.chatgpt.com/docs/hooks
+- Linux cgroup memory-growth report against Codex CLI 0.120.0–0.128.0,
+  including the successful host-containment workaround (closed issue; treated
+  as boundary input, not a claim about pinned 0.145.0):
+  https://github.com/openai/codex/issues/21233
+- systemd resource-control reference for `MemoryHigh=`, `MemoryMax=`,
+  `MemorySwapMax=`, `CPUQuota=`, and `TasksMax=`:
+  https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
 
 ## Rollback
 

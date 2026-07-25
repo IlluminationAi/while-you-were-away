@@ -80,6 +80,21 @@ cat >"$fake_systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$HOME/fake/systemctl-arguments"
+if [[ "${1:-}" == --user && "${2:-}" == show &&
+  "${4:-}" == -p && "${6:-}" == --value ]]; then
+  case "${5:-}" in
+    NeedDaemonReload) printf '%s\n' no ;;
+    MemoryAccounting|TasksAccounting) printf '%s\n' yes ;;
+    MemoryHigh) printf '%s\n' 7000 ;;
+    MemoryMax) printf '%s\n' 8000 ;;
+    MemorySwapMax) printf '%s\n' 2500 ;;
+    CPUQuotaPerSecUSec) printf '%s\n' 2s ;;
+    TasksMax) printf '%s\n' 256 ;;
+    OOMPolicy) printf '%s\n' stop ;;
+    *) exit 2 ;;
+  esac
+  exit 0
+fi
 if [[ -f "$HOME/fake/fail-life-enable" &&
   "$*" == *"enable --now wywa-life-"* ]]; then
   exit 31
@@ -285,11 +300,30 @@ assert report["receipt"]["version"] == 9
 assert report["receipt"]["verified"] is True
 assert report["workspace"]["clean"] is True
 assert report["snapshot"]["script_free"] is True
+assert report["scheduled_worker"] == {
+    "cpu_quota": "200%",
+    "memory_high": "70%",
+    "memory_max": "80%",
+    "memory_swap_max": "25%",
+    "manager_properties_verified": True,
+    "oom_policy": "stop",
+    "tasks_max": 256,
+    "unit_source_verified": True,
+}
+assert "scheduled-worker-cgroup-resource-boundary" in report["checks"]
+assert "attended trial" in report["boundary"]
 assert "operator identity" in report["boundary"]
 PY
 if rg -q "$test_root|$workspace|$HOME" "$test_root/evidence.json"; then
   fail "local evidence exposed a private path"
 fi
+cp -p -- "$service_file" "$test_root/worker-service.saved"
+sed -i 's/^MemoryMax=80%$/MemoryMax=81%/' "$service_file"
+expect_status 2 "$life" evidence "$workspace"
+grep -q 'worker service resource boundary drifted: MemoryMax=80%' \
+  "$test_root/stderr" ||
+  fail "local evidence did not identify worker cgroup drift"
+mv -- "$test_root/worker-service.saved" "$service_file"
 [[ -f "$workspace/trial-artifact.txt" ]] ||
   fail "trial did not preserve the worker artifact"
 expect_status 2 "$life" trial "$workspace" --max-runtime

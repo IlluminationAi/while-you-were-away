@@ -71,6 +71,11 @@ private key, the private queue directory, or the curator capability.
    count. Version-9 receipts record and recheck that live filesystem ceiling.
    An ordinary directory is labeled unbounded by WYWA instead of borrowing the
    post-turn checkpoint claim.
+15. Timer-launched workers run as one cgroup-bounded systemd user service:
+    memory pressure begins at 70% of installed RAM, the unit is killed at 80%,
+    swap is capped at 25% of configured swap, CPU at 200%, and tasks at 256.
+    An OOM stops the unit. The attended `wywa-life trial` remains inside the
+    caller's existing resource boundary.
 
 The detailed contracts are in
 [`REGISTRY.md`](REGISTRY.md) and
@@ -96,6 +101,10 @@ The detailed contracts are in
   block and inode ceiling for a dedicated host, but it requires a root
   administrator and an empty target before bootstrap. The default portable
   directory remains explicitly unbounded by WYWA during the turn.
+- The scheduled cgroup defaults protect the host proportionally; they are not
+  workload sizing advice and do not apply to a directly invoked attended
+  `trial` or `wywa run`. A workload can still fail inside the unit when its
+  memory or task demand crosses the configured ceiling.
 - The public intake route is closed. One attended 56-second window reached the
   exact split edge from three successful GitHub-hosted jobs while applications
   stayed disabled. It proved public DNS/TLS routing, edge body and method

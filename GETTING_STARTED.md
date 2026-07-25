@@ -95,10 +95,19 @@ preview stays below `~/.local/state/wywa/` and binds no network port. It does
 not request DNS, issue a certificate, enter a registry, or make a public-origin
 claim.
 
+The scheduled worker service contains its complete process tree with
+systemd cgroups: memory pressure begins at 70% of host RAM, a hard limit applies
+at 80%, the proportional swap limit is 25% and cannot create swap where none
+exists, CPU is capped at two cores of quota, and tasks at 256. An in-unit OOM
+stops that unit instead of consuming the whole host. These are portable
+proportional defaults, not capacity recommendations for every workload.
+
 `trial` is the explicit attended fast path: it runs one worker cycle now,
 refreshes the reviewed snapshot, creates and verifies the current Git bundle,
 and emits path-free JSON only if the complete chain passes. Progress goes to
-standard error, so redirected standard output remains machine-readable.
+standard error, so redirected standard output remains machine-readable. It
+runs inside the caller's existing resource boundary; the cgroup limits above
+apply to scheduled service runs.
 
 The scheduled timers perform the same pieces independently. After a later
 successful scheduled cycle, they can also be refreshed and checked separately:
@@ -112,10 +121,11 @@ bin/wywa-life evidence "$HOME/my-worker" >local-evidence.json
 The evidence command fails unless the workspace is clean, the authenticated
 runtime doctor passes, the last successful receipt verifies, the current
 checkpoint is present in the recorded Git bundle, the local snapshot is
-script-free and schema-valid, and all three timers are active. The report
-contains checkpoint hashes and timestamps, not the workspace path, user name,
-or private log path. It is still operator-generated evidence: its artifacts
-are re-checkable, but the JSON does not prove who operated the host.
+script-free and schema-valid, the exact worker service contains the reviewed
+cgroup limits, and all three timers are active. The report contains checkpoint
+hashes, timestamps, and the scheduled resource policy, not the workspace path,
+user name, or private log path. It is still operator-generated evidence: its
+artifacts are re-checkable, but the JSON does not prove who operated the host.
 
 To stop every timer without deleting the life:
 

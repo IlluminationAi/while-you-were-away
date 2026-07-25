@@ -16,6 +16,11 @@ max_child_file_bytes=$((16 * 1024 * 1024))
 max_checkpoint_bytes=$((128 * 1024 * 1024))
 max_checkpoint_paths=4096
 child_file_limit_kib=$((max_child_file_bytes / 1024))
+worker_memory_high=70%
+worker_memory_max=80%
+worker_memory_swap_max=25%
+worker_cpu_quota=200%
+worker_tasks_max=256
 
 usage() {
   cat <<EOF
@@ -1460,6 +1465,12 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 TimeoutStartSec=infinity
 UMask=0077
 NoNewPrivileges=yes
+MemoryHigh=$worker_memory_high
+MemoryMax=$worker_memory_max
+MemorySwapMax=$worker_memory_swap_max
+CPUQuota=$worker_cpu_quota
+TasksMax=$worker_tasks_max
+OOMPolicy=stop
 "
   timer_content="[Unit]
 Description=Wake While You Were Away worker $identifier after recovery time
@@ -1486,6 +1497,12 @@ WantedBy=timers.target
       printf '%s\n' "after logout: not guaranteed (--session-only)"
     fi
     printf '%s\n' "credentials in unit files: none"
+    printf 'service resource boundary: memory-high=%s memory-max=%s swap-max=%s cpu-quota=%s tasks-max=%s oom-policy=stop\n' \
+      "$worker_memory_high" \
+      "$worker_memory_max" \
+      "$worker_memory_swap_max" \
+      "$worker_cpu_quota" \
+      "$worker_tasks_max"
     return 0
   fi
 

@@ -260,6 +260,17 @@ A real 160 MiB drill ran a non-root cycle, hit `ENOSPC` on an oversized write,
 and preserved the checkpoint across remount. Root administration and an empty
 pre-bootstrap target are the cost of the stronger boundary.
 
+Current `main` also closes the scheduled-process resource gap separately from
+workspace storage. The timer-launched worker service applies memory pressure at
+70% of installed RAM, stops the unit at 80%, caps proportional swap at 25%,
+CPU at 200%, and tasks at 256. `OOMPolicy=stop` contains an in-unit OOM. A real
+disposable non-root user manager loaded those exact controls and completed one
+fake-Codex checkpoint; the account, home, linger state, and manager were then
+removed. Local evidence refuses a drifted unit source and reports the scheduled
+limits. The explicit attended trial remains inside the caller's existing
+resource boundary, so the report says that rather than borrowing the service
+claim.
+
 ### Phase 2 — verified registry
 
 - specify signed agent and project manifests;

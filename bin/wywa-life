@@ -8,6 +8,11 @@ version_file=$project_dir/VERSION
 publisher_source=$project_dir/bin/publish-platform
 css_source=$project_dir/platform/site.css
 public_state_template=$project_dir/templates/public-state.json
+worker_memory_high=70%
+worker_memory_max=80%
+worker_memory_swap_max=25%
+worker_cpu_quota=200%
+worker_tasks_max=256
 
 usage() {
   cat <<EOF
@@ -661,6 +666,8 @@ cmd_evidence() {
   local worker_cli current current_real snapshot_generated
   local receipt_line receipt_version receipt_commit
   local backup_receipt backup_name backup_path systemctl_bin unit_dir name
+  local worker_service need_reload memory_accounting memory_high memory_max
+  local memory_swap_max cpu_quota tasks_accounting tasks_max oom_policy
   workspace=$(absolute_path "$1")
   validate_workspace "$workspace"
   [[ -z "$(git -C "$workspace" status --porcelain)" ]] ||
@@ -758,6 +765,73 @@ PY
 
   systemctl_bin=$(resolve_systemctl)
   unit_dir=${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user
+  worker_service=$unit_dir/wywa-$identifier.service
+  [[ -f "$worker_service" && ! -L "$worker_service" &&
+    "$(stat -c %a "$worker_service")" == 600 ]] ||
+    die "private worker service source is missing or unsafe"
+  for name in \
+    "MemoryHigh=$worker_memory_high" \
+    "MemoryMax=$worker_memory_max" \
+    "MemorySwapMax=$worker_memory_swap_max" \
+    "CPUQuota=$worker_cpu_quota" \
+    "TasksMax=$worker_tasks_max" \
+    "OOMPolicy=stop"
+  do
+    grep -Fxq "$name" "$worker_service" ||
+      die "worker service resource boundary drifted: $name"
+  done
+  need_reload=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p NeedDaemonReload --value
+  )
+  memory_accounting=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p MemoryAccounting --value
+  )
+  memory_high=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p MemoryHigh --value
+  )
+  memory_max=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p MemoryMax --value
+  )
+  memory_swap_max=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p MemorySwapMax --value
+  )
+  cpu_quota=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p CPUQuotaPerSecUSec --value
+  )
+  tasks_accounting=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p TasksAccounting --value
+  )
+  tasks_max=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p TasksMax --value
+  )
+  oom_policy=$(
+    "$systemctl_bin" --user show "wywa-$identifier.service" \
+      -p OOMPolicy --value
+  )
+  [[ "$need_reload" == no ]] ||
+    die "worker service manager state needs a daemon reload"
+  [[ "$memory_accounting" == yes ]] ||
+    die "worker service memory accounting is not active"
+  [[ "$memory_high" =~ ^[1-9][0-9]*$ &&
+    "$memory_max" =~ ^[1-9][0-9]*$ &&
+    "$memory_high" -lt "$memory_max" ]] ||
+    die "worker service manager has no finite ordered memory boundary"
+  [[ "$memory_swap_max" =~ ^[0-9]+$ ]] ||
+    die "worker service manager has no finite swap boundary"
+  [[ "$cpu_quota" == 2s ]] ||
+    die "worker service manager has an unexpected CPU quota"
+  [[ "$tasks_accounting" == yes && "$tasks_max" == "$worker_tasks_max" ]] ||
+    die "worker service manager has an unexpected task boundary"
+  [[ "$oom_policy" == stop ]] ||
+    die "worker service manager has an unexpected OOM policy"
   for name in \
     "wywa-$identifier.timer" \
     "wywa-life-$identifier-publish.timer" \
@@ -779,7 +853,12 @@ PY
     "$tree" \
     "$receipt_version" \
     "$receipt_commit" \
-    "$snapshot_generated" <<'PY'
+    "$snapshot_generated" \
+    "$worker_memory_high" \
+    "$worker_memory_max" \
+    "$worker_memory_swap_max" \
+    "$worker_cpu_quota" \
+    "$worker_tasks_max" <<'PY'
 import json
 import sys
 
@@ -792,6 +871,11 @@ import sys
     receipt_version,
     receipt_commit,
     snapshot_generated,
+    worker_memory_high,
+    worker_memory_max,
+    worker_memory_swap_max,
+    worker_cpu_quota,
+    worker_tasks_max,
 ) = sys.argv
 report = {
     "schema_version": 1,
@@ -814,17 +898,30 @@ report = {
         "script_free": True,
         "verified": True,
     },
+    "scheduled_worker": {
+        "memory_high": worker_memory_high,
+        "memory_max": worker_memory_max,
+        "memory_swap_max": worker_memory_swap_max,
+        "cpu_quota": worker_cpu_quota,
+        "tasks_max": int(worker_tasks_max),
+        "oom_policy": "stop",
+        "manager_properties_verified": True,
+        "unit_source_verified": True,
+    },
     "checks": [
         "authenticated-runtime-doctor",
         "successful-receipt-chain",
         "clean-git-checkpoint",
         "current-checkpoint-in-private-bundle",
         "local-snapshot-schema-and-script-boundary",
+        "scheduled-worker-cgroup-resource-boundary",
         "three-active-completion-relative-timers",
     ],
     "boundary": (
         "Operator-generated evidence; the commit, tree, and receipt remain "
-        "independently re-checkable artifacts, not proof of operator identity."
+        "independently re-checkable artifacts, not proof of operator identity. "
+        "The cgroup limits apply to scheduled worker services; the explicit "
+        "attended trial runs in the caller's existing resource boundary."
     ),
 }
 print(json.dumps(report, indent=2, sort_keys=True))
