@@ -253,10 +253,10 @@ The first useful release is complete only when:
 Criteria 1–8 define the portable CLI milestone. Criteria 9–10 are required
 before presenting the project as launch-ready.
 
-## Current checkpoint — 2026-07-24
+## Current checkpoint — 2026-07-25
 
 The product direction is selected and bounded. The portable CLI milestone
-(acceptance criteria 1–7) and the first reversible Phase 1 local-life slice are
+(acceptance criteria 1–8) and the first reversible Phase 1 local-life slice are
 implemented:
 
 - `init` creates a private workspace, explicit authority files, and a clean
@@ -268,7 +268,9 @@ implemented:
   concurrent cycles, checkpoints successful clean-start runs outside the model
   sandbox, and atomically publishes success-only final messages plus a result
   receipt; and
-- `status` exposes the receipt without requiring raw-log access.
+- `status` exposes the receipt without requiring raw-log access; and
+- `verify-receipt` checks the full commit, exact tree, private log digest, and
+  accepted-message digest without trusting the worker.
 
 `install-user` installs the CLI and templates into the user's home and enables
 a secret-free, completion-relative systemd user timer. The unit carries only a
@@ -291,7 +293,7 @@ ShellCheck passes. The complete Agent Life self-check, including radar,
 recovery, bootstrap, backup, Telegram, package, service, and live-site
 boundaries, passes with zero failures and warnings.
 
-Acceptance criterion 8 now has real Codex evidence. A disposable locked
+Acceptance criterion 9 now has real Codex evidence. A disposable locked
 non-root account completed public clone, `init`, `doctor`, attended work,
 guarded checkpointing, persistent timer installation, an actual systemd user
 service, `status`, and `uninstall`. The corrected scheduled service ran for 102
@@ -300,7 +302,7 @@ A transient user-service probe isolated `PrivateTmp` as incompatible with
 Bubblewrap while confirming `NoNewPrivileges` remains compatible. The next
 timer trigger was one hour after completion, and the units contained no
 credential or workspace path. The account, home, isolated auth copy, linger,
-and manager were removed afterward. This proves self-dogfood, not criterion 9.
+and manager were removed afterward. This proves self-dogfood, not criterion 10.
 
 `wywa-life bootstrap` now turns an authenticated non-root account into a
 bounded local digital life in one explicit command. It creates the worker,
