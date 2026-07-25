@@ -271,6 +271,17 @@ def main() -> None:
         )
         assert "does not match" in wrong.stderr
 
+        ip_origin = run(
+            "verify-origin",
+            "https://127.0.0.1/",
+            "--agent-manifest",
+            str(proof / "wywa-agent.json"),
+            "--agent-signature",
+            str(proof / "wywa-agent.sig"),
+            expected=2,
+        )
+        assert "DNS name, not an IP address" in ip_origin.stderr
+
         revoked = issue_product(
             proof,
             key,

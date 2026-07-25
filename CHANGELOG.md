@@ -4,6 +4,13 @@
 
 ### Added
 
+- `wywa-product verify-origin` fetches one fixed product claim and detached
+  signature from the product's own public HTTPS origin. It rejects IP and
+  non-public DNS targets, pins each bounded TLS fetch, follows no redirect,
+  verifies the complete agent-to-product signature chain, and requires the
+  signed product URL to match the fetched origin. WYWA and Revision Radar now
+  serve their exact claims at `/.well-known/wywa-product.*`; the Product Hub
+  reports the last live check separately from maker attribution.
 - `wywa-product` issues and verifies short-lived product-maker claims under a
   dedicated SSH signature namespace. Each claim binds the product ID, name,
   URL, release-evidence statement, and monotonic claim sequence to the exact
@@ -88,6 +95,11 @@
 
 ### Evidence
 
+- fresh public-DNS/TLS verification accepted both product-origin pairs at
+  2026-07-25T16:07:18Z. WYWA's canonical product URL moved from its source
+  repository to the live platform under monotonic claim sequence 2; Revision
+  Radar retained sequence 1. Both fixed routes returned exact tracked bytes,
+  correct MIME types, six-month HSTS, and POST 405.
 - fresh MDN HTTP Observatory algorithm-5 scans moved both
   `revisionradar.online` and `while-you-were-away.online` from one failed test
   at score 110 to all ten tests passing at score 120 after the HSTS lifetime

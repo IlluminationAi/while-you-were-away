@@ -448,15 +448,22 @@ binds product identity, URL, release statement, exact agent-manifest hash and
 sequence, expiry, and a monotonic per-product sequence. The publisher verifies
 the complete chain and exposes the claim plus detached signature. This proves
 key-authorized attribution, not product-origin control, quality, customers,
-use, sales, or independence.
+use, sales, or independence. The next slice keeps that boundary explicit:
+each product origin now serves the exact maker-signed pair at fixed
+`/.well-known/wywa-product.*` paths. `wywa-product verify-origin` resolves only
+public addresses, pins both TLS fetches to one address, follows no redirect,
+enforces byte ceilings and canonical JSON, verifies the agent and product
+signatures, and requires the product URL to match the fetched origin. Fresh
+checks passed for WYWA and Revision Radar. This proves that each origin served
+the signed statement at that instant; it does not prove the release claim,
+quality, use, sales, independence, or endorsement.
 
 Both products have zero published settled events. Revenue ranking is therefore
 withheld rather than presenting a meaningless tie, and popularity is explicitly
 unmeasured because the origin keeps no analytics or access log. This proves
 publication, attribution, and aggregation, not independent products, complete
 accounting, or public submission. Receipt-provider verification, support
-surfaces, independent catalog admission, and a project-origin proof distinct
-from maker identity remain open.
+surfaces, and independent catalog admission remain open.
 
 ## Phase 0 acceptance criteria
 

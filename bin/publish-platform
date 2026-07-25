@@ -114,6 +114,13 @@ def validate_products(record: dict[str, Any]) -> None:
             "https://"
         ):
             raise ValueError(f"product {product_id} URL must use HTTPS")
+        origin_last_verified_at = product.get("origin_last_verified_at")
+        if origin_last_verified_at is not None:
+            if not isinstance(origin_last_verified_at, str):
+                raise ValueError(
+                    f"product {product_id} origin verification must be a timestamp"
+                )
+            parse_moment(origin_last_verified_at)
         proof = product.get("release_evidence")
         if not isinstance(proof, dict):
             raise ValueError(f"product {product_id} omits release evidence")
@@ -762,6 +769,26 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
               <p>{esc(identity_claim['reason'])}</p>
             </div>"""
         )
+        origin_claim = identity_claim.get("project_origin")
+        origin_status = ""
+        if isinstance(origin_claim, dict):
+            origin_status = (
+                "live origin checked "
+                + visible_time(origin_claim["last_verified_at"])
+                if origin_claim["last_verified_at"]
+                else "project origin ready for a live recheck"
+            )
+        origin_block = (
+            f"""
+            <div class="product-proof">
+              <span>{esc(origin_status)}</span>
+              <p>{esc(origin_claim['boundary'])}</p>
+              <a href="{esc(origin_claim['claim_url'])}" rel="noreferrer">fetch origin claim ↗</a>
+              <a href="{esc(origin_claim['signature_url'])}" rel="noreferrer">origin signature ↗</a>
+            </div>"""
+            if isinstance(origin_claim, dict)
+            else ""
+        )
         product_cards.append(
             f"""
           <article class="product-record">
@@ -769,6 +796,7 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
             <h2><a href="{esc(product['url'])}" rel="noreferrer">{esc(product['name'])}</a></h2>
             <p class="product-description">{esc(product['description'])}</p>
             {identity_block}
+            {origin_block}
             <div class="product-proof">
               <span>{esc(product['release_evidence']['kind'])}</span>
               <p>{esc(product['release_evidence']['claim'])}</p>
@@ -1356,6 +1384,9 @@ def read_product_proofs(
         if verified.get("eligible") is not True or verified.get("status") != "active":
             raise ValueError(f"product claim {product_id} is not active")
         base_url = snapshot["site"]["base_url"]
+        product_url = urlparse(verified["product_url"])
+        product_origin = f"{product_url.scheme}://{product_url.netloc}"
+        origin_last_verified_at = product.get("origin_last_verified_at")
         verifications[product_id] = {
             "status": "verified-maker-signature",
             "evidence": verified["evidence"],
@@ -1369,6 +1400,26 @@ def read_product_proofs(
             "expires_at": verified["expires_at"],
             "manifest_url": f"{base_url}/products/claims/{product_id}.json",
             "signature_url": f"{base_url}/products/claims/{product_id}.sig",
+            "project_origin": {
+                "status": (
+                    "last-live-verified"
+                    if origin_last_verified_at is not None
+                    else "available-for-live-verification"
+                ),
+                "origin": f"{product_origin}/",
+                "claim_url": (
+                    f"{product_origin}/.well-known/wywa-product.json"
+                ),
+                "signature_url": (
+                    f"{product_origin}/.well-known/wywa-product.sig"
+                ),
+                "last_verified_at": origin_last_verified_at,
+                "boundary": (
+                    "A successful fresh fetch proves that this HTTPS origin "
+                    "served the exact maker-signed claim at that time. It does "
+                    "not prove quality, sales, use, or independent operation."
+                ),
+            },
             "boundary": (
                 "The current agent key signed this product and release claim. "
                 "This does not prove quality, project-origin control, sales, "
@@ -1377,6 +1428,16 @@ def read_product_proofs(
         }
         content[f"products/claims/{product_id}.json"] = claim.read_bytes()
         content[f"products/claims/{product_id}.sig"] = signature.read_bytes()
+        if product_origin == base_url:
+            if (
+                ".well-known/wywa-product.json" in content
+                or ".well-known/wywa-product.sig" in content
+            ):
+                raise ValueError(
+                    "multiple product claims target the publisher's fixed origin path"
+                )
+            content[".well-known/wywa-product.json"] = claim.read_bytes()
+            content[".well-known/wywa-product.sig"] = signature.read_bytes()
     extras = sorted(
         path.name
         for path in directory.iterdir()

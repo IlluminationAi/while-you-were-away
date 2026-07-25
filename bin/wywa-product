@@ -7,10 +7,12 @@ import argparse
 import base64
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import os
 import re
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -23,6 +25,8 @@ from urllib.parse import urlsplit
 PROGRAM = Path(__file__).name
 REGISTRY = Path(__file__).resolve().parent / "wywa-registry"
 NAMESPACE = "wywa-product-claim-v1"
+ORIGIN_CLAIM_NAME = "wywa-product.json"
+ORIGIN_SIGNATURE_NAME = "wywa-product.sig"
 MAX_CLAIM_BYTES = 64 * 1024
 MAX_SIGNATURE_BYTES = 16 * 1024
 MAX_AGENT_BYTES = 64 * 1024
@@ -163,6 +167,32 @@ def https_url(value: object, label: str) -> str:
     if len(value) > 2048:
         raise ProductError(f"{label} is too long")
     return value
+
+
+def product_origin(value: object) -> str:
+    url = https_url(value, "product origin")
+    parsed = urlsplit(url)
+    if parsed.hostname is None:
+        raise ProductError("product origin has no hostname")
+    try:
+        host = parsed.hostname.encode("idna").decode("ascii").lower()
+    except UnicodeError as error:
+        raise ProductError("product origin has an invalid domain") from error
+    if host.endswith(".") or len(host) > 253:
+        raise ProductError("product origin has an invalid domain")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ProductError("product origin must use a DNS name, not an IP address")
+    labels = host.split(".")
+    if len(labels) < 2 or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    ):
+        raise ProductError("product origin has an invalid DNS name")
+    return f"https://{host}/"
 
 
 def canonical_bytes(record: dict[str, Any]) -> bytes:
@@ -440,6 +470,148 @@ def verify_files(args: argparse.Namespace) -> int:
     return 0 if record["eligible"] else 4
 
 
+def public_addresses(host: str) -> list[str]:
+    try:
+        answers = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise ProductError(f"product origin DNS resolution failed: {error}") from error
+    addresses = sorted({answer[4][0] for answer in answers})
+    if not addresses:
+        raise ProductError("product origin DNS returned no addresses")
+    for address in addresses:
+        parsed = ipaddress.ip_address(address)
+        if not parsed.is_global:
+            raise ProductError(
+                f"product origin DNS includes a non-public address: {address}"
+            )
+    return addresses
+
+
+def curl_fetch(
+    url: str,
+    host: str,
+    address: str,
+    destination: Path,
+    maximum: int,
+) -> None:
+    pinned = f"{host}:443:{address}"
+    if ":" in address:
+        pinned = f"{host}:443:[{address}]"
+    result = subprocess.run(
+        [
+            required_executable("curl"),
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--tlsv1.2",
+            "--max-redirs",
+            "0",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "20",
+            "--max-filesize",
+            str(maximum),
+            "--noproxy",
+            "*",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--resolve",
+            pinned,
+            "--output",
+            str(destination),
+            url,
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()
+        summary = detail[-1] if detail else f"curl exited {result.returncode}"
+        raise ProductError(f"project-origin HTTPS fetch failed: {summary}")
+
+
+def verify_origin(args: argparse.Namespace) -> int:
+    origin = product_origin(args.origin)
+    host = urlsplit(origin).hostname
+    if host is None:
+        raise ProductError("product origin has no hostname")
+    addresses = public_addresses(host)
+    failures: list[str] = []
+    at = utc_now()
+    with tempfile.TemporaryDirectory(prefix="wywa-product-origin-") as temporary:
+        root = Path(temporary)
+        claim = root / ORIGIN_CLAIM_NAME
+        signature = root / ORIGIN_SIGNATURE_NAME
+        for address in addresses:
+            claim.unlink(missing_ok=True)
+            signature.unlink(missing_ok=True)
+            try:
+                curl_fetch(
+                    f"{origin}.well-known/{ORIGIN_CLAIM_NAME}",
+                    host,
+                    address,
+                    claim,
+                    MAX_CLAIM_BYTES,
+                )
+                curl_fetch(
+                    f"{origin}.well-known/{ORIGIN_SIGNATURE_NAME}",
+                    host,
+                    address,
+                    signature,
+                    MAX_SIGNATURE_BYTES,
+                )
+                agent = verify_agent(
+                    args.agent_manifest,
+                    args.agent_signature,
+                    at=at,
+                )
+                claim_bytes = read_regular(
+                    claim,
+                    "product claim",
+                    MAX_CLAIM_BYTES,
+                )
+                validated = validate_claim(
+                    load_json_bytes(claim_bytes, "product claim"),
+                    agent,
+                    at=at,
+                )
+                if canonical_bytes(validated) != claim_bytes:
+                    raise ProductError("product claim is not canonical JSON")
+                if product_origin(validated["product_url"]) != origin:
+                    raise ProductError(
+                        "live product claim URL differs from the fetched origin"
+                    )
+                verify_signature(claim_bytes, signature, agent)
+                claim_hash = hashlib.sha256(claim_bytes).hexdigest()
+                validate_previous(args.previous, validated, claim_hash)
+                record = verification_record(validated, claim_bytes)
+                record.update(
+                    {
+                        "evidence": "live-https-project-origin",
+                        "verified_at": utc_text(at),
+                        "origin": origin,
+                        "claim_url": (
+                            f"{origin}.well-known/{ORIGIN_CLAIM_NAME}"
+                        ),
+                        "signature_url": (
+                            f"{origin}.well-known/{ORIGIN_SIGNATURE_NAME}"
+                        ),
+                    }
+                )
+                print(json.dumps(record, indent=2, sort_keys=True))
+                return 0 if record["eligible"] else 4
+            except ProductError as error:
+                failures.append(f"{address}: {error}")
+    raise ProductError(
+        "no resolved project-origin address returned one valid proof pair ("
+        + "; ".join(failures)
+        + ")"
+    )
+
+
 def key_public(key: Path) -> str:
     absolute = key.expanduser().absolute()
     metadata = absolute.lstat()
@@ -591,6 +763,19 @@ def build_parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--previous", type=Path)
     verify_parser.add_argument("--at")
     verify_parser.set_defaults(handler=verify_files)
+
+    origin_parser = subparsers.add_parser(
+        "verify-origin",
+        help=(
+            "fetch the fixed product claim pair from a public HTTPS origin "
+            "and verify maker attribution plus origin control"
+        ),
+    )
+    origin_parser.add_argument("origin")
+    origin_parser.add_argument("--agent-manifest", type=Path, required=True)
+    origin_parser.add_argument("--agent-signature", type=Path, required=True)
+    origin_parser.add_argument("--previous", type=Path)
+    origin_parser.set_defaults(handler=verify_origin)
     return parser
 
 

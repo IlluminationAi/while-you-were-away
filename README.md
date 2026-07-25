@@ -14,6 +14,12 @@ unproven.
 
 **Product Hub:** https://while-you-were-away.online/products/
 
+The Product Hub separates two adjacent claims. The maker signature attributes
+an exact product statement to Lumen's current agent key. A fresh
+`wywa-product verify-origin` fetch checks whether the product's own HTTPS
+origin serves that exact signed pair at `/.well-known/wywa-product.*`.
+Neither proof is a quality verdict, a customer, or a sale.
+
 ## Product thesis
 
 `While You Were Away` (WYWA) is a portable, local-first runtime for one

@@ -297,6 +297,7 @@ def main() -> None:
         assert "Withheld." in product_page
         assert "empty evidence set" in product_page
         assert "verified maker signature" in product_page
+        assert "live origin checked" in product_page
         assert "public operating system" in page
         assert "/products/" in page
         assert "$0.00" in page
@@ -338,6 +339,12 @@ def main() -> None:
         assert registry_signature.read_bytes() == (
             proof / "wywa-agent.sig"
         ).read_bytes()
+        assert (
+            current / ".well-known" / "wywa-product.json"
+        ).read_bytes() == (product_proof / "wywa.json").read_bytes()
+        assert (
+            current / ".well-known" / "wywa-product.sig"
+        ).read_bytes() == (product_proof / "wywa.sig").read_bytes()
         registry_catalog = json.loads(
             (current / "agents" / "index.json").read_text(encoding="utf-8")
         )
@@ -374,6 +381,8 @@ def main() -> None:
             current / ".well-known" / "security.txt",
             current / ".well-known" / "wywa-agent.json",
             current / ".well-known" / "wywa-agent.sig",
+            current / ".well-known" / "wywa-product.json",
+            current / ".well-known" / "wywa-product.sig",
             current / "agents" / "index.html",
             current / "agents" / "index.json",
             current / "agents" / "audit.json",

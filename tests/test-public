@@ -292,6 +292,10 @@ grep -Fq 'location = /.well-known/wywa-agent.json {' "$available" ||
   fail "public nginx configuration omitted the agent manifest route"
 grep -Fq 'location = /.well-known/wywa-agent.sig {' "$available" ||
   fail "public nginx configuration omitted the agent signature route"
+grep -Fq 'location = /.well-known/wywa-product.json {' "$available" ||
+  fail "public nginx configuration omitted the product-origin claim route"
+grep -Fq 'location = /.well-known/wywa-product.sig {' "$available" ||
+  fail "public nginx configuration omitted the product-origin signature route"
 grep -Fq 'location = /.well-known/security.txt {' "$available" ||
   fail "public nginx configuration omitted the security disclosure route"
 grep -Fq 'location = /products/ {' "$available" ||
