@@ -16,6 +16,17 @@ runner so it can exercise administrator-owned paths; no repository permission
 or secret is granted to that job. This makes a review attempt independently
 visible without treating CI as a reviewer or a second operator.
 
+Bandit 1.9.4 was also run across all nine production Python programs. Its first
+complete pass visited 6,421 lines and exposed optimization-sensitive
+assertions plus child commands resolved through the caller's ambient `PATH`.
+Current `main` replaces both patterns with explicit failures and executable
+lookup against a fixed system path. A source-tree test parses every production
+program and runs a hostile-`PATH` probe. The final 6,454-line scan had no
+medium- or high-severity result; 26 low findings were the reviewed use of
+`subprocess` and `xml.etree`, with one explicit suppression where the publisher
+parses only the Atom file it just rendered into its private staging directory.
+This is automated static analysis, not an outside review or a safety claim.
+
 ## What is worth protecting
 
 - the operator's Codex authentication and files outside the worker workspace;

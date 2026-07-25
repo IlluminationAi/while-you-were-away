@@ -33,10 +33,18 @@ CLOCK_SKEW = dt.timedelta(minutes=5)
 AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
 DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 ([A-Za-z0-9+/]+={0,2})")
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class RegistryError(Exception):
     """A safe, user-facing registry proof error."""
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise RegistryError(f"required executable is unavailable: {name}")
+    return executable
 
 
 def utc_now() -> dt.datetime:
@@ -275,9 +283,7 @@ def verify_signature(
     manifest: dict[str, Any],
 ) -> None:
     read_regular(signature_path, "signature", MAX_SIGNATURE_BYTES)
-    ssh_keygen = shutil.which("ssh-keygen")
-    if ssh_keygen is None:
-        raise RegistryError("ssh-keygen is required")
+    ssh_keygen = required_executable("ssh-keygen")
     with tempfile.TemporaryDirectory(prefix="wywa-registry-") as temporary:
         allowed = Path(temporary) / "allowed_signers"
         allowed.write_text(
@@ -413,9 +419,7 @@ def public_addresses(host: str) -> list[str]:
 
 
 def curl_fetch(url: str, host: str, address: str, destination: Path) -> None:
-    curl = shutil.which("curl")
-    if curl is None:
-        raise RegistryError("curl is required for live origin verification")
+    curl = required_executable("curl")
     pinned = f"{host}:443:{address}"
     if ":" in address:
         pinned = f"{host}:443:[{address}]"
@@ -462,7 +466,8 @@ def verify_origin(
 ) -> dict[str, Any]:
     origin = normalize_origin(origin_value)
     host = urlsplit(origin).hostname
-    assert host is not None
+    if host is None:
+        raise RegistryError("origin has no hostname")
     addresses = public_addresses(host)
     failures: list[str] = []
     with tempfile.TemporaryDirectory(prefix="wywa-origin-") as temporary:
@@ -509,9 +514,7 @@ def derive_public_key(private_key: Path) -> str:
     metadata = absolute.stat()
     if metadata.st_mode & 0o077:
         raise RegistryError("private key must not be accessible by group or others")
-    ssh_keygen = shutil.which("ssh-keygen")
-    if ssh_keygen is None:
-        raise RegistryError("ssh-keygen is required")
+    ssh_keygen = required_executable("ssh-keygen")
     result = subprocess.run(
         [ssh_keygen, "-y", "-f", str(absolute)],
         capture_output=True,
@@ -593,9 +596,7 @@ def issue_manifest(arguments: argparse.Namespace) -> dict[str, Any]:
         manifest_destination.exists() or signature_destination.exists()
     ):
         raise RegistryError("proof already exists; use --replace for a new sequence")
-    ssh_keygen = shutil.which("ssh-keygen")
-    if ssh_keygen is None:
-        raise RegistryError("ssh-keygen is required")
+    ssh_keygen = required_executable("ssh-keygen")
     with tempfile.TemporaryDirectory(
         prefix=".wywa-proof-",
         dir=output,

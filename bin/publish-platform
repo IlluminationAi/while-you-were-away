@@ -34,6 +34,14 @@ MAX_AGENT_SIGNATURE_BYTES = 16 * 1024
 MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
 MAX_REGISTRY_AUDIT_BYTES = 2 * 1024 * 1024
 MAX_REGISTRY_PAGE_BYTES = 512 * 1024
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise ValueError(f"required executable is unavailable: {name}")
+    return executable
 
 
 def parse_moment(value: str) -> dt.datetime:
@@ -175,7 +183,14 @@ def load_public_state(path: Path) -> dict[str, Any]:
 
 def git_commit_count(workspace_root: Path) -> int:
     result = subprocess.run(
-        ["git", "-C", str(workspace_root), "rev-list", "--count", "HEAD"],
+        [
+            required_executable("git"),
+            "-C",
+            str(workspace_root),
+            "rev-list",
+            "--count",
+            "HEAD",
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -239,7 +254,11 @@ def detected_phase(explicit: str | None) -> str:
     if explicit is not None:
         return explicit
     result = subprocess.run(
-        ["systemctl", "is-active", "agent-life-cycle.service"],
+        [
+            required_executable("systemctl"),
+            "is-active",
+            "agent-life-cycle.service",
+        ],
         capture_output=True,
         text=True,
     )
@@ -905,7 +924,9 @@ def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
     for value in snapshot["metrics"].values():
         if esc(value) not in page:
             raise ValueError(f"dashboard omits a headline metric: {value}")
-    ET.parse(staging / "feed.xml")
+    # The parser reads the feed rendered into this private staging directory
+    # by this process; no network or caller-supplied XML reaches this boundary.
+    ET.parse(staging / "feed.xml")  # nosec B314
     security_txt = render_security_txt(snapshot)
     if security_txt is not None:
         published_security = (

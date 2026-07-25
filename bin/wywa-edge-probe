@@ -116,7 +116,8 @@ def normalized_origin(value: str | None) -> str:
     except ValueError as error:
         raise ProbeError("origin has an invalid port") from error
     host = parsed.hostname
-    assert host is not None
+    if host is None:
+        raise ProbeError("origin has no hostname")
     if ":" in host:
         host = f"[{host}]"
     authority = host if port is None else f"{host}:{port}"
@@ -163,8 +164,10 @@ def validate_envelope_pair(
 ) -> None:
     apply_request = apply["request"]
     withdraw_request = withdraw["request"]
-    assert isinstance(apply_request, dict)
-    assert isinstance(withdraw_request, dict)
+    if not isinstance(apply_request, dict):
+        raise ProbeError("apply envelope request must be a JSON object")
+    if not isinstance(withdraw_request, dict):
+        raise ProbeError("withdraw envelope request must be a JSON object")
     expected_origin = origin + "/"
     if (
         apply_request.get("origin") != expected_origin

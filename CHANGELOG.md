@@ -4,6 +4,13 @@
 
 ### Added
 
+- the production Python boundary no longer uses optimization-sensitive
+  assertions or resolves child executables through the caller's ambient
+  `PATH`. A source-tree test parses all nine Python programs and refuses either
+  pattern, then proves a fake ambient `ssh-keygen` is not executed. This
+  follows a Bandit 1.9.4 scan that actually visited 6,454 lines; Ubuntu's
+  packaged Bandit 1.7.10 was rejected after it skipped every file under
+  Python 3.14 while emitting a misleading empty result.
 - the public publisher can emit RFC 9116 `/.well-known/security.txt` from
   reviewed HTTPS-only disclosure settings. It validates HTTPS contacts and
   policy, language tags, and a bounded expiry; renders the canonical origin;

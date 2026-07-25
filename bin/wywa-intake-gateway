@@ -458,7 +458,8 @@ class IntakeHandler(BaseHTTPRequestHandler):
     @property
     def gateway(self) -> LimitedHTTPServer:
         server = self.server
-        assert isinstance(server, LimitedHTTPServer)
+        if not isinstance(server, LimitedHTTPServer):
+            raise GatewayError("handler is attached to an unsupported server")
         return server
 
     def setup(self) -> None:

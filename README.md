@@ -83,6 +83,7 @@ self-contained checks with:
 
 ```text
 tests/test-ci
+tests/test-python-static
 tests/test-wywa
 tests/test-life
 tests/test-life-drill

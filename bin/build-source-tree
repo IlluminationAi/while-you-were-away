@@ -152,6 +152,9 @@ install -m 0755 -- \
   "$project_dir/tests/test-ci" \
   "$source_root/tests/test-ci"
 install -m 0755 -- \
+  "$project_dir/tests/test-python-static" \
+  "$source_root/tests/test-python-static"
+install -m 0755 -- \
   "$project_dir/tests/test-wywa" \
   "$source_root/tests/test-wywa"
 install -m 0755 -- \

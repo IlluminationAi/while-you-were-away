@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Refuse optimization-sensitive assertions and ambient executable lookup."""
+
+from __future__ import annotations
+
+import ast
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+PYTHON_PROGRAMS = (
+    "build-launch-assets",
+    "publish-platform",
+    "wywa-curator",
+    "wywa-edge-probe",
+    "wywa-intake",
+    "wywa-intake-gateway",
+    "wywa-intake-queue",
+    "wywa-registry",
+    "wywa-retained-proof",
+)
+SUBPROCESS_CALLS = {"run", "Popen", "call", "check_call", "check_output"}
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+def dotted_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = dotted_name(node.value)
+        return None if parent is None else f"{parent}.{node.attr}"
+    return None
+
+
+def literal_command(call: ast.Call) -> str | None:
+    if not call.args:
+        return None
+    command = call.args[0]
+    if not isinstance(command, (ast.List, ast.Tuple)) or not command.elts:
+        return None
+    first = command.elts[0]
+    if isinstance(first, ast.Constant) and isinstance(first.value, str):
+        return first.value
+    return None
+
+
+def inspect_program(path: Path) -> list[str]:
+    source = path.read_text(encoding="utf-8")
+    if not source.startswith("#!/usr/bin/env python3\n"):
+        return [f"{path.name}: missing exact Python 3 shebang"]
+    tree = ast.parse(source, filename=str(path))
+    failures: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert):
+            failures.append(
+                f"{path.name}:{node.lineno}: runtime validation uses assert"
+            )
+        if not isinstance(node, ast.Call):
+            continue
+        name = dotted_name(node.func)
+        if (
+            name
+            and name.startswith("subprocess.")
+            and name.rsplit(".", 1)[-1] in SUBPROCESS_CALLS
+        ):
+            command = literal_command(node)
+            if command is not None and "/" not in command:
+                failures.append(
+                    f"{path.name}:{node.lineno}: "
+                    f"subprocess uses ambient command {command!r}"
+                )
+        if name == "shutil.which" and not any(
+            keyword.arg == "path" for keyword in node.keywords
+        ):
+            failures.append(
+                f"{path.name}:{node.lineno}: shutil.which uses ambient PATH"
+            )
+    return failures
+
+
+def hostile_path_probe() -> list[str]:
+    ssh_keygen = shutil.which("ssh-keygen", path=SAFE_PATH)
+    if ssh_keygen is None:
+        return ["ssh-keygen is unavailable for the hostile-PATH probe"]
+    with tempfile.TemporaryDirectory(prefix="wywa-static-") as temporary:
+        root = Path(temporary)
+        key = root / "identity"
+        output = root / "proof"
+        marker = root / "ambient-command-ran"
+        fake_directory = root / "ambient"
+        fake_directory.mkdir()
+        fake = fake_directory / "ssh-keygen"
+        fake.write_text(
+            "#!/bin/sh\n: >\"${WYWA_STATIC_MARKER:?}\"\nexit 99\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        generated = subprocess.run(
+            [ssh_keygen, "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if generated.returncode != 0:
+            return ["could not create a disposable hostile-PATH test key"]
+        environment = os.environ.copy()
+        environment["PATH"] = str(fake_directory)
+        environment["WYWA_STATIC_MARKER"] = str(marker)
+        issued = subprocess.run(
+            [
+                sys.executable,
+                str(PROJECT / "bin" / "wywa-registry"),
+                "issue",
+                "--agent-id",
+                "static-test",
+                "--name",
+                "Static Test",
+                "--origin",
+                "https://example.com",
+                "--runtime-version",
+                "test",
+                "--sequence",
+                "1",
+                "--key",
+                str(key),
+                "--output",
+                str(output),
+            ],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        failures: list[str] = []
+        if issued.returncode != 0:
+            failures.append(
+                "registry issue failed under hostile PATH: "
+                + issued.stderr.strip().splitlines()[-1]
+            )
+        if marker.exists():
+            failures.append("registry executed ssh-keygen from the ambient PATH")
+        if not (output / "wywa-agent.json").is_file():
+            failures.append("registry hostile-PATH probe produced no manifest")
+        return failures
+
+
+def main() -> int:
+    failures: list[str] = []
+    for name in PYTHON_PROGRAMS:
+        path = PROJECT / "bin" / name
+        if not path.is_file() or path.is_symlink():
+            failures.append(
+                f"{name}: production Python program is missing or unsafe"
+            )
+            continue
+        failures.extend(inspect_program(path))
+    failures.extend(hostile_path_probe())
+    if failures:
+        for failure in failures:
+            print(f"FAIL: {failure}", file=sys.stderr)
+        return 1
+    print(
+        "PASS: production Python avoids assertions and ambient executable "
+        f"lookup ({len(PYTHON_PROGRAMS)} files)"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

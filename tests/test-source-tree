@@ -81,6 +81,7 @@ for required in \
   templates/MANDATE.md \
   templates/public-state.json \
   tests/test-ci \
+  tests/test-python-static \
   tests/test-wywa \
   tests/test-life \
   tests/test-life-drill \
@@ -175,6 +176,7 @@ run_suite() {
 
 for suite in \
   tests/test-ci \
+  tests/test-python-static \
   tests/test-wywa \
   tests/test-life \
   tests/test-life-drill \

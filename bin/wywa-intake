@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -42,10 +43,18 @@ REQUEST_KEYS = {
 AGENT_ID_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?")
 HASH_PATTERN = re.compile(r"[0-9a-f]{64}")
 REQUEST_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 class IntakeError(Exception):
     """A bounded, user-facing intake request failure."""
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise IntakeError(f"required executable is unavailable: {name}")
+    return executable
 
 
 def utc_now() -> dt.datetime:
@@ -315,7 +324,7 @@ def private_key(path: Path) -> Path:
 
 def derive_public_key(key: Path) -> str:
     result = subprocess.run(
-        ["ssh-keygen", "-y", "-f", str(key)],
+        [required_executable("ssh-keygen"), "-y", "-f", str(key)],
         capture_output=True,
         text=True,
     )
@@ -330,7 +339,7 @@ def sign_request(data: bytes, key: Path) -> bytes:
         request_path.write_bytes(data)
         result = subprocess.run(
             [
-                "ssh-keygen",
+                required_executable("ssh-keygen"),
                 "-Y",
                 "sign",
                 "-q",
@@ -358,7 +367,7 @@ def verify_signature(data: bytes, signature: bytes, public_key: str) -> None:
         signature_path.write_bytes(signature)
         result = subprocess.run(
             [
-                "ssh-keygen",
+                required_executable("ssh-keygen"),
                 "-Y",
                 "verify",
                 "-f",

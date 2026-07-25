@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import stat
 import subprocess
@@ -65,6 +66,13 @@ CAPSULE_KEYS = {
 
 class RetainedProofError(Exception):
     """A bounded, user-facing retained-proof error."""
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise RetainedProofError(f"required executable is unavailable: {name}")
+    return executable
 
 
 def utc_now() -> dt.datetime:
@@ -263,7 +271,7 @@ def private_key_public(path: Path) -> tuple[str, bytes]:
     read_regular(path, "backup signing key")
     try:
         result = subprocess.run(
-            ["ssh-keygen", "-y", "-f", str(path)],
+            [required_executable("ssh-keygen"), "-y", "-f", str(path)],
             cwd="/",
             env={
                 "PATH": SAFE_PATH,
@@ -296,7 +304,7 @@ def sign_record(data: bytes, key: Path) -> str:
     try:
         result = subprocess.run(
             [
-                "ssh-keygen",
+                required_executable("ssh-keygen"),
                 "-Y",
                 "sign",
                 "-f",
@@ -377,7 +385,7 @@ def verify_record_signature(
         os.chmod(signature_path, 0o600)
         result = subprocess.run(
             [
-                "ssh-keygen",
+                required_executable("ssh-keygen"),
                 "-Y",
                 "verify",
                 "-f",
