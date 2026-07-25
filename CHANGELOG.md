@@ -4,6 +4,11 @@
 
 ### Added
 
+- version-5 worker receipts record the unattended authority surface, not only
+  the shell sandbox: apps, plugins, hooks, and subagents are disabled;
+  workspace-local Codex configuration is absent; approvals are never granted;
+  sessions are ephemeral; local-command network is disabled; and hosted search
+  remains live. Version 2–4 receipts remain verifiable without invented fields.
 - version-4 worker receipts record the split network posture beside the
   permission profile: model-generated local commands have network disabled,
   while the separately controlled hosted web-search tool remains live.
@@ -18,6 +23,13 @@
 
 ### Fixed
 
+- unattended runs now use strict inline capability controls instead of relying
+  on `--ignore-user-config` as a universal isolation switch. They also ignore
+  project command rules, refuse `.codex` before launch and at checkpoint,
+  disable apps, plugins, hooks, browsers, computer control, image generation,
+  subagents, goals, dependency installation, and tool discovery, grant no
+  approvals, and persist no Codex session. The reviewed surface is pinned to
+  Codex CLI 0.145.0 until live probes are repeated on an upgrade.
 - the `wywa-workspace-only` profile now sets
   `permissions.wywa-workspace-only.network.enabled=false` explicitly instead
   of relying on the permission-profile default; dry-run output exposes both

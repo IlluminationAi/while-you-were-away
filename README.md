@@ -198,15 +198,21 @@ root deployment:
 - `.git` remains read-only to Codex; after a successful run, the host wrapper
   creates a hooks-disabled checkpoint only from a clean starting tree and
   refuses common credential signatures and unsafe workspace content;
-- the private version-4 receipt records the enforced permission profile,
-  disabled local-command network, and separately enabled live hosted search,
-  then binds that host-created commit and exact tree
+- unattended runs are ephemeral and approval-free; they ignore user config and
+  command rules, reject a workspace-local `.codex` layer, and explicitly
+  disable apps/connectors, plugins, hooks, browser and computer control, image
+  generation, subagents, goals, skill dependency installation, and tool
+  suggestions. Hosted web search is the only non-shell external tool left on;
+- the private version-5 receipt records that complete launch posture beside
+  the enforced permission profile and split network boundary, then binds the
+  host-created commit and exact tree
   to SHA-256 digests of the run log and accepted final message, while
-  `verify-receipt` re-checks the chain independently of the worker. Version-2
-  and version-3 receipts remain mechanically verifiable, but their unrecorded
-  capability split is not inferred after the fact;
-- user Codex configuration is ignored during unattended runs, while existing
-  Codex authentication is reused;
+  `verify-receipt` re-checks the chain independently of the worker. Version
+  2–4 receipts remain mechanically verifiable, but their unrecorded
+  capabilities are not inferred after the fact;
+- the reviewed unattended surface is pinned to Codex CLI 0.145.0. A different
+  version fails `doctor` until its filesystem, tool-catalog, command-egress,
+  and hosted-search probes are repeated;
 - only a small environment allowlist reaches the child process, so unrelated
   shell secrets do not leak into the worker;
 - runtime state and logs live outside the agent-writable workspace;
@@ -253,7 +259,8 @@ The first useful release is complete only when:
 3. `run` uses an exclusive lock, bounded runtime, signal forwarding, private
    logs, atomic last-message publication, deny-read workspace-only
    permissions, explicitly disabled local-command network, separately declared
-   live hosted search, and a guarded host-side Git checkpoint;
+   live hosted search, no apps/plugins/hooks/subagents/approvals or persisted
+   Codex session, and a guarded host-side Git checkpoint;
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
@@ -279,13 +286,15 @@ implemented:
   initial Git checkpoint;
 - `doctor` enforces required files, Git integrity, Codex login, safe runtime
   storage, and the non-root default;
-- `run` uses a Codex 0.138+ deny-read profile with explicitly disabled
-  local-command network, separately enables live hosted search, ignores
-  unattended user configuration, scrubs unrelated environment variables,
-  bounds runtime, forwards signals, excludes concurrent cycles, checkpoints
-  successful clean-start runs outside the model sandbox, and atomically
-  publishes success-only final messages plus a capability-bearing result
-  receipt; and
+- `run` uses the reviewed Codex 0.145.0 deny-read profile, explicitly disables
+  local-command network, leaves only live hosted search outside the shell
+  boundary, removes apps, plugins, hooks, browser/computer control, subagents,
+  approvals, and session persistence, ignores user config and command rules,
+  rejects workspace-local Codex config, scrubs unrelated environment
+  variables, bounds runtime, forwards signals, excludes concurrent cycles,
+  checkpoints successful clean-start runs outside the model sandbox, and
+  atomically publishes success-only final messages plus a version-5
+  capability receipt; and
 - `status` exposes the receipt without requiring raw-log access; and
 - `verify-receipt` checks the full commit, exact tree, private log digest, and
   accepted-message digest without trusting the worker.

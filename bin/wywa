@@ -8,6 +8,7 @@ templates_dir=$project_dir/templates
 permission_profile=wywa-workspace-only
 permission_filesystem='permissions.wywa-workspace-only.filesystem={":root"="deny",":minimal"="read",":tmpdir"="deny",":slash_tmp"="deny"}'
 permission_network='permissions.wywa-workspace-only.network.enabled=false'
+reviewed_codex_version=0.145.0
 
 usage() {
   cat <<EOF
@@ -122,9 +123,8 @@ check_codex_permissions_support() {
   else
     die "Codex CLI returned an unrecognized version: $version_output"
   fi
-  if (( major == 0 && minor < 138 )); then
-    die "Codex CLI 0.138.0 or newer is required for deny-read permission profiles (found $major.$minor.$patch)"
-  fi
+  [[ "$major.$minor.$patch" == "$reviewed_codex_version" ]] ||
+    die "Codex CLI $reviewed_codex_version is the reviewed unattended capability boundary (found $major.$minor.$patch)"
 }
 
 safe_environment() {
@@ -170,6 +170,8 @@ check_required_workspace_files() {
     [[ -f "$workspace/$relative" && ! -L "$workspace/$relative" ]] ||
       die "required workspace file is missing or unsafe: $relative"
   done
+  [[ ! -e "$workspace/.codex" && ! -L "$workspace/.codex" ]] ||
+    die "workspace-local Codex configuration is forbidden: .codex"
   [[ -d "$workspace/.git" ]] || die "workspace is not a Git repository"
 }
 
@@ -203,6 +205,11 @@ checkpoint_workspace() {
   secret_pattern='(sk-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----|"(access_token|refresh_token|id_token|client_secret)"[[:space:]]*:[[:space:]]*"[^"]{20,}")'
 
   checkpoint_result=refused
+
+  if [[ -e "$workspace/.codex" || -L "$workspace/.codex" ]]; then
+    printf '%s\n' "checkpoint: refused because workspace-local Codex configuration is present"
+    return 73
+  fi
 
   if ! finding=$(
     cd /
@@ -459,7 +466,7 @@ cmd_run() {
   local last_run prompt run_stamp run_log message_tmp receipt_tmp
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
   local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
-  local -a clean_env permission_args command_line
+  local -a clean_env permission_args capability_args command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
   logs_dir=$runtime_dir/logs
@@ -475,14 +482,41 @@ cmd_run() {
     -c "$permission_filesystem"
     -c "$permission_network"
   )
+  capability_args=(
+    -c 'approval_policy="never"'
+    -c 'features.apps=false'
+    -c 'features.plugins=false'
+    -c 'features.remote_plugin=false'
+    -c 'features.plugin_sharing=false'
+    -c 'features.hooks=false'
+    -c 'features.auth_elicitation=false'
+    -c 'features.tool_call_mcp_elicitation=false'
+    -c 'features.browser_use=false'
+    -c 'features.browser_use_external=false'
+    -c 'features.browser_use_full_cdp_access=false'
+    -c 'features.computer_use=false'
+    -c 'features.image_generation=false'
+    -c 'features.in_app_browser=false'
+    -c 'features.multi_agent=false'
+    -c 'agents.enabled=false'
+    -c 'features.goals=false'
+    -c 'features.guardian_approval=false'
+    -c 'features.skill_mcp_dependency_install=false'
+    -c 'features.skill_search=false'
+    -c 'features.tool_suggest=false'
+    -c 'features.workspace_dependencies=false'
+  )
   command_line=(
     "${clean_env[@]}"
     "$codex_bin"
     --search
     exec
+    --ephemeral
     --ignore-user-config
+    --ignore-rules
     --strict-config
     "${permission_args[@]}"
+    "${capability_args[@]}"
     --cd "$workspace"
     --color never
   )
@@ -494,7 +528,10 @@ cmd_run() {
     printf 'permissions: %s\n' "$permission_profile"
     printf '%s\n' "filesystem: workspace writable; other paths unreadable except minimal tool runtime"
     printf '%s\n' "local command network: disabled"
-    printf '%s\n' "hosted web search: live; separate from the local command sandbox"
+    printf '%s\n' "hosted web search: live; only non-shell external tool"
+    printf '%s\n' "extensions: apps, plugins, hooks, browsers, and subagents disabled"
+    printf '%s\n' "configuration: user config and project rules ignored; workspace-local .codex forbidden"
+    printf '%s\n' "approvals: never; session persistence: ephemeral"
     printf 'maximum runtime: %s\n' "$max_runtime"
     printf '%s\n' "environment: minimal allowlist; unrelated secrets excluded"
     return 0
@@ -529,7 +566,7 @@ cmd_run() {
       rm -f -- "$message_tmp"
     fi
     log_sha256=$(sha256sum -- "$run_log" | cut -d ' ' -f 1)
-    printf '%s receipt=4 status=%s permissions=%s local_network=disabled web_search=live checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
+    printf '%s receipt=5 status=%s permissions=%s local_network=disabled web_search=live apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$permission_profile" \
@@ -636,6 +673,8 @@ cmd_verify_receipt() {
   local workspace runtime_dir receipt line prefix log_path
   local receipt_version='' status='' sandbox='' checkpoint=''
   local permissions='' local_network='' web_search=''
+  local apps='' plugins='' hooks='' subagents='' project_config=''
+  local approval='' persistence=''
   local commit='' tree='' log_sha256='' message_sha256='' token
   local actual_commit actual_tree actual_log_sha256 actual_message_sha256
   workspace=$(canonical_workspace_path "$1")
@@ -661,6 +700,13 @@ cmd_verify_receipt() {
       permissions=*) permissions=${token#permissions=} ;;
       local_network=*) local_network=${token#local_network=} ;;
       web_search=*) web_search=${token#web_search=} ;;
+      apps=*) apps=${token#apps=} ;;
+      plugins=*) plugins=${token#plugins=} ;;
+      hooks=*) hooks=${token#hooks=} ;;
+      subagents=*) subagents=${token#subagents=} ;;
+      project_config=*) project_config=${token#project_config=} ;;
+      approval=*) approval=${token#approval=} ;;
+      persistence=*) persistence=${token#persistence=} ;;
       checkpoint=*) checkpoint=${token#checkpoint=} ;;
       commit=*) commit=${token#commit=} ;;
       tree=*) tree=${token#tree=} ;;
@@ -671,7 +717,8 @@ cmd_verify_receipt() {
 
   [[ "$receipt_version" == 2 ||
      "$receipt_version" == 3 ||
-     "$receipt_version" == 4 ]] ||
+     "$receipt_version" == 4 ||
+     "$receipt_version" == 5 ]] ||
     die "last-run receipt is not a supported verifiable receipt"
   if [[ "$status" != 0 ]]; then
     printf 'verify-receipt: last run was not successful (status %s)\n' \
@@ -690,6 +737,26 @@ cmd_verify_receipt() {
       die "receipt records an unexpected local network capability"
     [[ "$web_search" == live ]] ||
       die "receipt records an unexpected hosted web search capability"
+  fi
+  if [[ "$receipt_version" == 5 ]]; then
+    [[ "$local_network" == disabled ]] ||
+      die "receipt records an unexpected local network capability"
+    [[ "$web_search" == live ]] ||
+      die "receipt records an unexpected hosted web search capability"
+    [[ "$apps" == disabled ]] ||
+      die "receipt records an unexpected app capability"
+    [[ "$plugins" == disabled ]] ||
+      die "receipt records an unexpected plugin capability"
+    [[ "$hooks" == disabled ]] ||
+      die "receipt records an unexpected hook capability"
+    [[ "$subagents" == disabled ]] ||
+      die "receipt records an unexpected subagent capability"
+    [[ "$project_config" == absent ]] ||
+      die "receipt records unexpected workspace-local Codex configuration"
+    [[ "$approval" == never ]] ||
+      die "receipt records an unexpected approval posture"
+    [[ "$persistence" == ephemeral ]] ||
+      die "receipt records unexpected Codex session persistence"
   fi
   [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
     die "last-run receipt has an invalid checkpoint abbreviation"
@@ -731,11 +798,18 @@ cmd_verify_receipt() {
   [[ "$actual_message_sha256" == "$message_sha256" ]] ||
     die "final-message digest does not match the receipt"
 
-  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s\n' \
+  printf 'receipt: verified commit=%s tree=%s permissions=%s local_network=%s web_search=%s apps=%s plugins=%s hooks=%s subagents=%s project_config=%s approval=%s persistence=%s\n' \
     "${commit:0:12}" "${tree:0:12}" \
     "${permissions:-legacy-workspace-write}" \
     "${local_network:-unrecorded}" \
-    "${web_search:-unrecorded}"
+    "${web_search:-unrecorded}" \
+    "${apps:-unrecorded}" \
+    "${plugins:-unrecorded}" \
+    "${hooks:-unrecorded}" \
+    "${subagents:-unrecorded}" \
+    "${project_config:-unrecorded}" \
+    "${approval:-unrecorded}" \
+    "${persistence:-unrecorded}"
 }
 
 cmd_run_state() {

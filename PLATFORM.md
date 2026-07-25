@@ -214,8 +214,16 @@ The post-alpha.5 main line makes the network half explicit too. The selected
 profile sets local-command network to disabled instead of relying on its
 default, while WYWA's separately controlled live hosted-search tool stays
 enabled for the bounded research mandate. Receipt version 4 records both
-capabilities; older version-2 and version-3 receipts remain verifiable without
-inventing fields they never carried.
+capabilities. The next authority audit found that this was still incomplete:
+Codex 0.145.0 enables apps, plugins, hooks, browser/computer surfaces, image
+generation, and multi-agent tools independently of the shell profile. Current
+main pins that exact reviewed CLI, ignores user config and project rules,
+forbids workspace-local `.codex`, disables those extension surfaces and
+approvals, makes each session ephemeral, and records the complete posture in
+receipt version 5. A live catalog probe exposed no app, plugin, browser,
+image-generation, or subagent tool; the surviving local image viewer could not
+resolve a known PNG outside the disposable workspace. Older version 2–4
+receipts remain verifiable without inventing fields they never carried.
 
 ### Phase 2 — verified registry
 

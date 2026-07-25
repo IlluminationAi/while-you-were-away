@@ -26,17 +26,34 @@ The runtime now uses one strict inline permission profile:
 - deny `:tmpdir` and `:slash_tmp`; and
 - explicitly set sandboxed command network to disabled.
 
-The wrapper ignores unattended user configuration, passes the complete profile
-on the command line, enables strict configuration parsing, and requires Codex
-CLI 0.138.0 or newer. It does not combine the profile with the legacy
-`--sandbox` option.
+The wrapper ignores unattended user configuration and command rules, rejects a
+workspace-local `.codex` layer before launch and at checkpoint, passes the
+complete profile on the command line, enables strict configuration parsing,
+and pins the reviewed boundary to Codex CLI 0.145.0. It does not combine the
+profile with the legacy `--sandbox` option.
 
 Permission profiles govern local command execution. Built-in web search,
 connectors, browser tools, cloud tasks, and approved escalations are separate
 capabilities; WYWA does not pretend the filesystem profile governs them.
 WYWA deliberately enables live hosted search for its read-only research
-mandate. Version-4 receipts now record both sides of that split:
-`local_network=disabled` and `web_search=live`.
+mandate. Version-5 receipts record both sides of that split plus the rest of
+the unattended authority surface.
+
+## Non-shell capability boundary
+
+The permission profile alone is not an external-tool allowlist. Current
+official configuration documents apps, plugins, browser/computer control,
+image generation, multi-agent tools, hooks, skill dependencies, and tool
+suggestions as separate features, many enabled by default. `--ignore-user-config`
+only skips `$CODEX_HOME/config.toml`; it does not mean “shell plus search.”
+
+WYWA now starts every unattended turn with no approval path and an ephemeral
+session. It disables apps, plugins, remote plugins, hooks, browser and computer
+control, image generation, subagents, goals, Guardian approval, authentication
+elicitation, MCP elicitation, skill dependency installation, skill search,
+tool suggestions, and workspace dependency loading. Live hosted search remains
+enabled deliberately. Existing Codex authentication is still used by the host
+client and remains unreadable to sandboxed tools.
 
 ## Verification
 
@@ -55,14 +72,23 @@ Codex authentication file was also refused through the exact production
 arguments: `AUTH_PATH_DENIED`. No authentication file was opened, copied, or
 printed. All disposable paths were removed.
 
-`tests/test-wywa` now rejects a Codex version below 0.138.0, asserts every
-profile argument including the explicit network denial, refuses any
-simultaneous legacy `--sandbox` flag, and checks that version-4 receipts record
-`wywa-workspace-only` plus the separate local and hosted network capabilities.
-Version-2 and version-3 receipts remain verifiable without retroactively
-claiming a capability split they did not record. The live probe remains an
-upgrade gate because beta permission behavior cannot be proved by an argument
-fixture alone.
+`tests/test-wywa` now rejects every Codex version except the reviewed 0.145.0,
+asserts every profile and feature argument, refuses any simultaneous legacy
+`--sandbox` or dangerous bypass, rejects workspace-local Codex configuration,
+and checks that version-5 receipts preserve the full posture. Version 2–4
+receipts remain verifiable without retroactively claiming fields they did not
+record.
+
+An exact live 0.145.0 catalog probe under the production arguments exposed only
+workspace tools, planning/input helpers, the hosted search tool, and local
+`view_image`; it exposed no app, plugin, browser, computer-control,
+image-generation, or subagent capability. A second probe asked `view_image` to
+open WYWA's public thumbnail outside the disposable workspace. The router
+returned `No such file or directory`, and the model reported
+`VIEW_IMAGE_OUTSIDE_DENIED`. The current official schema documents a
+`tools.view_image` control, but the live 0.145.0 CLI rejects that inline field;
+verified runtime behavior takes precedence over the newer schema. The surviving
+tool therefore remains part of the filesystem upgrade probe.
 
 ## Evidence sources
 
@@ -72,8 +98,12 @@ Official OpenAI documentation, accessed 2026-07-25 UTC:
   workspace-only example, scope, and Linux enforcement:
   https://learn.chatgpt.com/docs/permissions
 - Codex configuration reference for `default_permissions`, named profiles, and
-  the rule not to combine profiles with legacy sandbox settings:
+  the rule not to combine profiles with legacy sandbox settings, plus the
+  separate app, plugin, browser, multi-agent, and hook features:
   https://learn.chatgpt.com/docs/config-file/config-reference#configtoml
+- `codex exec` reference for the exact scope of `--ignore-user-config`,
+  `--ignore-rules`, and `--ephemeral`:
+  https://learn.chatgpt.com/docs/developer-commands#codex-exec
 
 ## Rollback
 

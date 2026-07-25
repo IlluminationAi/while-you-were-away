@@ -215,24 +215,33 @@ bin/wywa verify-receipt "$HOME/my-worker"
 ```
 
 The first real run should produce one useful artifact and update durable state.
-WYWA requires Codex CLI 0.138.0 or newer and selects a named permission profile
-instead of the legacy `workspace-write` mode. The profile denies filesystem
-reads by default, reopens only the workspace and Codex's minimal tool runtime,
-denies system temporary directories, and preserves the built-in read-only
-protection for `.git`. After a successful cycle, WYWA checks the change and
-creates the Git checkpoint from the host side with hooks and global Git
-configuration disabled. It refuses a dirty starting tree, special or oversized
-files, nested Git metadata, malformed diffs, and common credential signatures.
-A zero-change cycle records status 72; an unsafe checkpoint records status 73
-and preserves the uncommitted evidence. Neither case publishes a new final
-message. Inspect `git log`, `git status`, and the private result receipt before
-enabling unattended work.
+The current reviewed boundary requires Codex CLI 0.145.0 exactly; another
+version fails until the live capability probes are repeated. WYWA selects a
+named permission profile instead of the legacy `workspace-write` mode. The
+profile denies filesystem reads by default, reopens only the workspace and
+Codex's minimal tool runtime, denies system temporary directories, and
+preserves the built-in read-only protection for `.git`. The unattended launch
+is ephemeral and approval-free, ignores user config and command rules, rejects
+workspace-local `.codex`, and explicitly disables apps, plugins, hooks,
+browser/computer control, image generation, subagents, goals, skill dependency
+installation, and tool suggestions. Live hosted search is the only non-shell
+external tool left enabled.
 
-The version-4 receipt records the enforced permission profile, disabled
-local-command network, separately enabled live hosted search, full host-created
-commit, exact tree, and SHA-256 digests of the private run log and published
-final message. Version-2 and version-3 receipts remain mechanically verifiable
-as legacy evidence, but their unrecorded capability split is not inferred.
+After a successful cycle, WYWA checks the change and creates the Git checkpoint
+from the host side with hooks and global Git configuration disabled. It refuses
+a dirty starting tree, special or oversized files, nested Git metadata,
+workspace-local Codex config, malformed diffs, and common credential
+signatures. A zero-change cycle records status 72; an unsafe checkpoint records
+status 73 and preserves the uncommitted evidence. Neither case publishes a new
+final message. Inspect `git log`, `git status`, and the private result receipt
+before enabling unattended work.
+
+The version-5 receipt records the enforced permission profile, disabled
+local-command network, live hosted search, disabled extension surfaces,
+workspace-local config absence, no-approval posture, ephemeral session, full
+host-created commit, exact tree, and SHA-256 digests of the private run log and
+published final message. Version 2–4 receipts remain mechanically verifiable as
+legacy evidence, but their unrecorded capabilities are not inferred.
 `verify-receipt` checks that mechanical chain without trusting the worker.
 This proves which bytes became durable and which output the wrapper accepted;
 it does not prove that a claim inside those bytes is true. External claims

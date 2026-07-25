@@ -59,13 +59,18 @@ The detailed contracts are in
 ## Known gaps
 
 - The workspace-only filesystem profile is a beta Codex permission surface.
-  WYWA requires Codex 0.138.0 or newer, passes strict inline configuration,
-  and has a live corrected read-denial probe on 0.145.0. Future Codex upgrades
-  must repeat that probe. Local-command network is explicitly disabled in the
-  profile. Live hosted web search remains separately enabled by design and is
-  recorded beside the profile in version-4 receipts; connectors, browser
-  surfaces, and approved escalations have separate controls and are not
-  governed by the local-command profile.
+  WYWA pins the reviewed unattended boundary to Codex 0.145.0 rather than
+  silently trusting an upgrade. Local-command network is disabled. Apps,
+  plugins, hooks, browser/computer control, image generation, subagents,
+  approvals, user config, project rules, workspace-local Codex config, and
+  session persistence are also disabled or refused explicitly; live hosted web
+  search is the only non-shell external tool retained. A live catalog probe
+  showed no connector, plugin, browser, image-generation, or subagent tool.
+  The surviving local `view_image` tool could not resolve a known public PNG
+  outside the disposable workspace, so it honored the deny-read boundary.
+  Version-5 receipts record this launch posture. Every Codex upgrade must
+  repeat the filesystem, catalog, image-path, command-egress, and hosted-search
+  probes before the version pin moves.
 - The public intake route is closed. Current load, TLS, failure, and rollback
   evidence comes from one host and one source address.
 - Distributed sources, NAT contention, upstream DDoS controls, hostile internet

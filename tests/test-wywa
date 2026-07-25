@@ -189,13 +189,26 @@ grep -q '^doctor: ok ' "$test_root/doctor-output" ||
 
 printf '%s\n' "codex-cli 0.137.0" >"$HOME/fake/version"
 expect_status 2 "$wywa" doctor "$workspace"
-grep -q '0.138.0 or newer is required' "$test_root/stderr" ||
-  fail "doctor accepted Codex without deny-read permission profiles"
+grep -q '0.145.0 is the reviewed unattended capability boundary' \
+  "$test_root/stderr" ||
+  fail "doctor accepted an older unreviewed Codex tool surface"
+printf '%s\n' "codex-cli 0.146.0" >"$HOME/fake/version"
+expect_status 2 "$wywa" doctor "$workspace"
+grep -q '0.145.0 is the reviewed unattended capability boundary' \
+  "$test_root/stderr" ||
+  fail "doctor accepted a newer unreviewed Codex tool surface"
 rm -f -- "$HOME/fake/version"
 
 touch "$HOME/fake/login-fail"
 expect_status 2 "$wywa" doctor "$workspace"
 rm -f -- "$HOME/fake/login-fail"
+
+mkdir -- "$workspace/.codex"
+expect_status 2 "$wywa" doctor "$workspace"
+grep -q 'workspace-local Codex configuration is forbidden' \
+  "$test_root/stderr" ||
+  fail "doctor accepted workspace-local Codex configuration"
+rmdir -- "$workspace/.codex"
 
 "$wywa" run "$workspace" --max-runtime 2m --dry-run \
   >"$test_root/dry-run-output" 2>"$test_root/dry-run-error"
@@ -207,9 +220,20 @@ grep -q '^filesystem: workspace writable; other paths unreadable' \
 grep -Fqx 'local command network: disabled' "$test_root/dry-run-output" ||
   fail "dry run omitted the local command network boundary"
 grep -Fqx \
-  'hosted web search: live; separate from the local command sandbox' \
+  'hosted web search: live; only non-shell external tool' \
   "$test_root/dry-run-output" ||
   fail "dry run omitted the separate hosted web search capability"
+grep -Fqx \
+  'extensions: apps, plugins, hooks, browsers, and subagents disabled' \
+  "$test_root/dry-run-output" ||
+  fail "dry run omitted the extension boundary"
+grep -Fqx \
+  'configuration: user config and project rules ignored; workspace-local .codex forbidden' \
+  "$test_root/dry-run-output" ||
+  fail "dry run omitted the configuration boundary"
+grep -Fqx 'approvals: never; session persistence: ephemeral' \
+  "$test_root/dry-run-output" ||
+  fail "dry run omitted the approval and persistence boundary"
 grep -q '^maximum runtime: 2m$' "$test_root/dry-run-output" ||
   fail "dry run omitted the runtime bound"
 
@@ -223,6 +247,10 @@ rm -f -- "$HOME/fake/workspace-file"
 
 grep -q '^--ignore-user-config$' "$HOME/fake/arguments" ||
   fail "run did not isolate unattended configuration"
+grep -q '^--ignore-rules$' "$HOME/fake/arguments" ||
+  fail "run did not ignore user and project command rules"
+grep -q '^--ephemeral$' "$HOME/fake/arguments" ||
+  fail "run did not disable Codex session persistence"
 grep -Fqx 'default_permissions="wywa-workspace-only"' \
   "$HOME/fake/arguments" ||
   fail "run did not select the workspace-only permission profile"
@@ -240,6 +268,33 @@ grep -Fqx \
   fail "run did not explicitly disable local command network access"
 grep -Fxq -- '--search' "$HOME/fake/arguments" ||
   fail "run omitted the declared hosted web search capability"
+for capability_override in \
+  'approval_policy="never"' \
+  'features.apps=false' \
+  'features.plugins=false' \
+  'features.remote_plugin=false' \
+  'features.plugin_sharing=false' \
+  'features.hooks=false' \
+  'features.auth_elicitation=false' \
+  'features.tool_call_mcp_elicitation=false' \
+  'features.browser_use=false' \
+  'features.browser_use_external=false' \
+  'features.browser_use_full_cdp_access=false' \
+  'features.computer_use=false' \
+  'features.image_generation=false' \
+  'features.in_app_browser=false' \
+  'features.multi_agent=false' \
+  'agents.enabled=false' \
+  'features.goals=false' \
+  'features.guardian_approval=false' \
+  'features.skill_mcp_dependency_install=false' \
+  'features.skill_search=false' \
+  'features.tool_suggest=false' \
+  'features.workspace_dependencies=false'
+do
+  grep -Fqx "$capability_override" "$HOME/fake/arguments" ||
+    fail "run omitted capability override: $capability_override"
+done
 if grep -q '^--sandbox$' "$HOME/fake/arguments"; then
   fail "run mixed the legacy sandbox with the permission profile"
 fi
@@ -271,10 +326,14 @@ grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
   fail "successful receipt omitted the host checkpoint"
 receipt_commit=$(git -C "$workspace" rev-parse HEAD)
 receipt_tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
-grep -Fq "receipt=4" "$runtime_dir/last-run" ||
+grep -Fq "receipt=5" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its schema version"
 grep -Fq "local_network=disabled web_search=live" "$runtime_dir/last-run" ||
   fail "successful receipt omitted its split network capabilities"
+grep -Fq \
+  "apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral" \
+  "$runtime_dir/last-run" ||
+  fail "successful receipt omitted its extension and configuration boundary"
 grep -Fq "commit=$receipt_commit" "$runtime_dir/last-run" ||
   fail "successful receipt omitted the exact commit"
 grep -Fq "tree=$receipt_tree" "$runtime_dir/last-run" ||
@@ -290,20 +349,42 @@ grep -Fq "receipt: verified commit=${receipt_commit:0:12}" \
   "$test_root/verify-receipt-output" ||
   fail "verify-receipt did not verify the successful checkpoint"
 
-cp -- "$runtime_dir/last-run" "$test_root/version-4-capabilities.saved"
+cp -- "$runtime_dir/last-run" "$test_root/version-5-capabilities.saved"
 sed \
   's/local_network=disabled/local_network=enabled/' \
-  "$test_root/version-4-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-5-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected local network capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed local network capability"
 sed \
   's/web_search=live/web_search=disabled/' \
-  "$test_root/version-4-capabilities.saved" >"$runtime_dir/last-run"
+  "$test_root/version-5-capabilities.saved" >"$runtime_dir/last-run"
 expect_status 2 "$wywa" verify-receipt "$workspace"
 grep -q 'unexpected hosted web search capability' "$test_root/stderr" ||
   fail "verify-receipt accepted a changed hosted web search capability"
-mv -- "$test_root/version-4-capabilities.saved" "$runtime_dir/last-run"
+sed \
+  's/apps=disabled/apps=enabled/' \
+  "$test_root/version-5-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'unexpected app capability' "$test_root/stderr" ||
+  fail "verify-receipt accepted enabled apps"
+sed \
+  's/approval=never/approval=on-request/' \
+  "$test_root/version-5-capabilities.saved" >"$runtime_dir/last-run"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'unexpected approval posture' "$test_root/stderr" ||
+  fail "verify-receipt accepted a changed approval posture"
+mv -- "$test_root/version-5-capabilities.saved" "$runtime_dir/last-run"
+
+cp -- "$runtime_dir/last-run" "$test_root/version-5-receipt.saved"
+sed \
+  -e 's/receipt=5 /receipt=4 /' \
+  -e 's/ apps=disabled plugins=disabled hooks=disabled subagents=disabled project_config=absent approval=never persistence=ephemeral//' \
+  "$test_root/version-5-receipt.saved" >"$runtime_dir/last-run"
+"$wywa" verify-receipt "$workspace" >"$test_root/version-4-receipt-output"
+grep -Fq 'apps=unrecorded plugins=unrecorded hooks=unrecorded subagents=unrecorded' \
+  "$test_root/version-4-receipt-output" ||
+  fail "verify-receipt invented extension capabilities for a version-4 receipt"
 
 cp -- "$runtime_dir/last-run" "$test_root/version-4-receipt.saved"
 sed \
@@ -323,7 +404,7 @@ sed \
 grep -Fq 'permissions=legacy-workspace-write' \
   "$test_root/legacy-receipt-output" ||
   fail "verify-receipt did not preserve version-2 compatibility"
-mv -- "$test_root/version-4-receipt.saved" "$runtime_dir/last-run"
+mv -- "$test_root/version-5-receipt.saved" "$runtime_dir/last-run"
 
 cp -- "$runtime_dir/last-message.txt" "$test_root/last-message.saved"
 printf '%s\n' "tampered result" >"$runtime_dir/last-message.txt"
@@ -543,5 +624,25 @@ if rg -q 'abcdefghijklmnopqrstuvwxyz0123456789' \
   "$secret_runtime/logs"; then
   fail "credential refusal copied suspected secret content into the log"
 fi
+
+config_workspace=$test_root/config-worker
+"$wywa" init "$config_workspace" >/dev/null
+printf '%s\n' "forbidden project-local Codex layer" >"$HOME/fake/workspace-file"
+printf '%s\n' ".codex" >"$HOME/fake/workspace-relative-path"
+printf '%s\n' "must not publish" >"$HOME/fake/message"
+expect_status 73 "$wywa" run "$config_workspace" --max-runtime 2m
+rm -f -- \
+  "$HOME/fake/workspace-file" \
+  "$HOME/fake/workspace-relative-path"
+config_id=$(printf '%s' "$config_workspace" | sha256sum | cut -c1-16)
+config_runtime=$WYWA_STATE_ROOT/$config_id
+grep -q 'status=73 .*checkpoint=refused' "$config_runtime/last-run" ||
+  fail "workspace-local config refusal receipt is missing or malformed"
+[[ ! -e "$config_runtime/last-message.txt" ]] ||
+  fail "workspace-local config refusal published a canonical message"
+[[ "$(git -C "$config_workspace" rev-list --count HEAD)" == 1 ]] ||
+  fail "workspace-local Codex configuration was committed"
+[[ -n "$(git -C "$config_workspace" status --porcelain)" ]] ||
+  fail "workspace-local config refusal discarded the evidence"
 
 printf '%s\n' "PASS: WYWA portable runtime"
