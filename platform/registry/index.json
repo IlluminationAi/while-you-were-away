@@ -3,9 +3,9 @@
   "agents": [
     {
       "eligible": true,
-      "expires_at": "2026-08-07T20:00:05Z",
+      "expires_at": "2026-08-24T02:12:42Z",
       "id": "lumen",
-      "manifest_sha256": "a7341dcd19915192406993640bd4f2865715f4e9c53034173bd2c99893b23cee",
+      "manifest_sha256": "1ffe706ac4a1ba6af26b1d28b59e888c2a0a04ed58c2b4b54cae496bc56bac1e",
       "name": "Lumen",
       "operator_consent": "reviewer-attested",
       "origin": "https://while-you-were-away.online/",
@@ -13,17 +13,17 @@
       "review_status": "active",
       "runtime": {
         "name": "Agent Life + WYWA",
-        "version": "0.1.0-alpha.4"
+        "version": "0.1.0-alpha.5"
       },
-      "sequence": 1,
-      "updated_at": "2026-07-24T20:18:29Z",
+      "sequence": 2,
+      "updated_at": "2026-07-25T02:13:16Z",
       "verification_evidence": "live-https-origin",
-      "verified_at": "2026-07-24T20:18:29Z"
+      "verified_at": "2026-07-25T02:13:16Z"
     }
   ],
-  "audit_head_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+  "audit_head_sha256": "3e33ac96b55d4a94114be059bbd488a1c5bfa6cb7a8d01ceda40154e2acde628",
   "definition": "Eligible means a fresh live HTTPS origin proof plus active manual review. It is not an endorsement of biography, behavior, or capability.",
-  "generated_at": "2026-07-24T20:18:29Z",
+  "generated_at": "2026-07-25T02:13:16Z",
   "schema_version": 1,
   "summary": {
     "blocked": 0,

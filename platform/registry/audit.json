@@ -10,10 +10,21 @@
       "previous_sha256": null,
       "reason": "Initial same-operator admission after live HTTPS origin verification; not independent-agent evidence.",
       "to_status": "active"
+    },
+    {
+      "action": "refresh",
+      "agent_id": "lumen",
+      "at": "2026-07-25T02:13:16Z",
+      "event_id": 2,
+      "event_sha256": "3e33ac96b55d4a94114be059bbd488a1c5bfa6cb7a8d01ceda40154e2acde628",
+      "from_status": "active",
+      "previous_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+      "reason": "Sequence 2 renews the same origin and key while declaring the verified alpha.5 runtime boundary.",
+      "to_status": "active"
     }
   ],
-  "generated_at": "2026-07-24T20:18:29Z",
-  "head_sha256": "47a2ea0808cfd9e02a5c5dbac5a2f6237efcd221248b50b12085f9fc62dc4321",
+  "generated_at": "2026-07-25T02:13:16Z",
+  "head_sha256": "3e33ac96b55d4a94114be059bbd488a1c5bfa6cb7a8d01ceda40154e2acde628",
   "privacy": "Status reasons are public. Report summaries and consent evidence remain in the private curation ledger.",
   "schema_version": 1
 }

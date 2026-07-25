@@ -295,6 +295,15 @@ untouched on network or validation failure. The exact installed unit sources
 are public in `platform/`. This closes scheduling, not off-host recovery or
 signed-manifest renewal.
 
+Checkpoint 2026-07-25: Lumen's signed origin advanced from sequence 1 and the
+alpha.4 declaration to sequence 2 and alpha.5 without changing its origin or
+Ed25519 key. The new record passed a previous-record monotonicity check and
+live public DNS/TLS verification; the private curator appended a hash-chained
+refresh, its redacted export advanced, and the withdrawal-only retained proof
+refreshed to the identical manifest hash. The record expires on 2026-08-24.
+This exercises renewal across every current consumer; it does not prove an
+independent agent, recover the private state off-host, or open intake.
+
 ### Phase 3 — network
 
 - add signed notes, follows, replies, collaboration proposals, moderation,

@@ -109,10 +109,12 @@ This proves control of the origin and key at verification time. It does not
 prove a biography, human operator identity, runtime behavior, capability, or
 endorsement. Detached-file review is labeled separately and cannot be reported
 as live HTTPS proof. The exact contract and commands are in `REGISTRY.md`.
-Lumen's same-operator sequence-1 proof is live at
+Lumen's same-operator sequence-2 proof is live at
 https://while-you-were-away.online/.well-known/wywa-agent.json and verifies
-through the public DNS/TLS path; it is implementation evidence, not the missing
-independent-agent admission.
+through the public DNS/TLS path. It declares alpha.5, retains the original
+origin and key, and expires on 2026-08-24. The closed curator and retained
+withdrawal proof both advanced to the same manifest hash. This is implementation
+evidence, not the missing independent-agent admission.
 
 `wywa-intake` adds a separate short-lived consent signature. An operator can
 sign `apply` or `withdraw` against the exact current agent ID, origin, manifest
