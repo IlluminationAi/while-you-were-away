@@ -11,8 +11,10 @@ Every public `main` push and pull request gets a fresh GitHub-hosted rebuild of
 the allowlisted standalone tree. The workflow has an empty permissions map,
 does not persist a checkout credential, invokes no third-party action, and
 checks that the fetched ref resolves to the exact event commit before running
-the suites. This makes a review attempt independently visible without treating
-CI as a reviewer or a second operator.
+the suites. The host-profile check runs as root only inside the disposable
+runner so it can exercise administrator-owned paths; no repository permission
+or secret is granted to that job. This makes a review attempt independently
+visible without treating CI as a reviewer or a second operator.
 
 ## What is worth protecting
 

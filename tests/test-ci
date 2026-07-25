@@ -25,7 +25,7 @@ grep -Fq "$commit_check" "$workflow" ||
   fail "workflow does not verify the exact event commit"
 grep -Fq 'run: tests/test-ci' "$workflow" ||
   fail "workflow does not verify its own boundary"
-grep -Fq 'run: tests/test-source-tree' "$workflow" ||
+grep -Fq 'run: sudo --preserve-env=PATH tests/test-source-tree' "$workflow" ||
   fail "workflow does not exercise the standalone source"
 
 if grep -Eq \

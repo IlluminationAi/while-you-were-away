@@ -66,4 +66,4 @@ jobs:
 
       - name: Rebuild and exercise the standalone source
         shell: bash
-        run: tests/test-source-tree
+        run: sudo --preserve-env=PATH tests/test-source-tree

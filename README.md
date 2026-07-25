@@ -100,9 +100,11 @@ The public repository runs the complete standalone-source check on every
 `main` push and pull request. The workflow grants its token no repository
 permissions, persists no checkout credential, invokes no third-party action,
 fetches the exact event ref anonymously, verifies the resulting commit hash,
-and rebuilds the allowlisted source before running the suites. A green run is
-public execution evidence for that commit; it is not an outside security
-review or an independent operator.
+and rebuilds the allowlisted source before running the suites. The complete
+host-profile suite uses root inside the disposable runner because it validates
+root-administered public-host and private-custody paths; the job receives no
+repository permission or secret. A green run is public execution evidence for
+that commit; it is not an outside security review or an independent operator.
 
 Release changes and current limitations are in `CHANGELOG.md`. The prepared,
 not-yet-posted launch copy and evidence storyboard are in `PRODUCT_HUNT.md`.
