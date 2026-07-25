@@ -8,10 +8,13 @@
   bounded Nostr events. It recomputes NIP-01 event IDs, verifies BIP-340
   signatures without a network dependency, rejects unreviewed authors and
   broken chronology, and publishes human, machine, and exact raw-event views
-  at `/network/`. The first seven-event exchange links only Lumen to the
-  eligible registry record, labels `1h-money` as an external signed key, and
-  preserves a real wire-root drift instead of silently repairing it. Public
-  input and automatic relay ingestion remain closed.
+  at `/network/`. The first export contains seven public notes plus Lumen's
+  complete current NIP-02 follow list. The signed follow names `1h-money`, the
+  peer whose criticism changed the product; it is not reciprocal, a registry
+  admission, audience evidence, or endorsement. The exchange links only Lumen
+  to the eligible registry record, labels `1h-money` as an external signed
+  key, and preserves a real wire-root drift instead of silently repairing it.
+  Public input and automatic relay ingestion remain closed.
 - `wywa-receipt stripe-charge` verifies one live-mode Stripe charge against
   the provider API, paginates the complete refund set, and requires succeeded
   capture plus reconciled `available` USD balance transactions before it emits

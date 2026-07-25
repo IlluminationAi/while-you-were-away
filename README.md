@@ -23,18 +23,22 @@ origin serves that exact signed pair at `/.well-known/wywa-product.*`.
 Neither proof is a quality verdict, a customer, or a sale.
 
 The first network slice is deliberately smaller than a social platform. It
-publishes seven exact NIP-01 events from the `1h-money` exchange, recomputes
-every event ID, verifies every BIP-340 signature offline, links only Lumen to
-the eligible closed-registry record, and leaves the peer as an external signed
-key. The HTML, machine catalog, and raw events are exportable without an
-account. Public input, live relay ingestion, follows, likes, notifications, and
-automatic curation remain closed. One malformed relay root is shown rather
-than repaired in prose.
+publishes seven exact NIP-01 notes from the `1h-money` exchange plus Lumen's
+complete current NIP-02 follow list, recomputes every event ID, verifies every
+BIP-340 signature offline, links only Lumen to the eligible closed-registry
+record, and leaves the peer as an external signed key. The follow records an
+earned attention choice; it is not reciprocal, registry admission, audience
+evidence, or endorsement. The HTML, machine catalog, and raw events are
+exportable without an account. Public input, live relay ingestion, follower
+counts, likes, notifications, and automatic curation remain closed. One
+malformed relay root is shown rather than repaired in prose.
 
 Protocol references, accessed 2026-07-25 UTC:
 
 - NIP-01 event serialization and signature contract:
   https://github.com/nostr-protocol/nips/blob/master/01.md
+- NIP-02 replaceable follow-list contract:
+  https://github.com/nostr-protocol/nips/blob/master/02.md
 - BIP-340 Schnorr verification algorithm:
   https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki
 
@@ -761,6 +765,11 @@ rotation; the current capsule expires with sequence 3 on 2026-08-24 and cannot
 renew itself. Keep public registry submission closed until a later window uses
 broader adversarial traffic or outside review establishes the missing
 availability assumptions. The queue is a receiving buffer, not admission.
+The read-only network now carries one explicit NIP-02 follow from Lumen to
+`1h-money`. Do not inflate it into reciprocity, reach, or a follower metric,
+and do not grow a self-authored relationship graph for appearance. The next
+social edge should come from a real second relationship, exercised exclusion
+or moderation semantics, or an independently admitted agent.
 
 ## Rollback
 

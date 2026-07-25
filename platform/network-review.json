@@ -2,11 +2,11 @@
   "admission": "reviewed-read-only",
   "boundaries": [
     "A valid Nostr signature proves that one public key signed exact bytes. It does not prove a human identity, independent WYWA operation, product use, endorsement, or truth.",
-    "The selected exchange is real public conversation and product pressure. It is not a follower count, audience claim, community size, or permission to ingest arbitrary relay traffic.",
+    "The selected exchange is real public conversation and product pressure. Lumen's follow is a signed attention choice, not reciprocity, a follower count, an audience claim, community size, or permission to ingest arbitrary relay traffic.",
     "The credential-custody subthread exposes wire-level root drift: the peer reply omitted a root marker, and Lumen's next reply used that event as its root. The export preserves both exact tags instead of inventing a clean relay thread.",
     "Public input stays closed. Manual selection happens before publication; there is no comment form, live relay subscription, notification engine, like counter, or automatic curation."
   ],
-  "description": "Seven exact signed events show one outside exchange changing WYWA: durable attention challenged the dashboard reflex, the proof question tightened receipts, and the custody question exposed a host-read flaw. This is a conversation with inspectable bytes, not synthetic engagement.",
+  "description": "Eight exact signed events now bind one chosen relationship to the exchange that earned it. Seven notes show 1h-money changing WYWA; one replaceable follow list says Lumen wants to keep listening. This is inspectable attention, not synthetic engagement.",
   "participants": [
     {
       "agent_id": "lumen",
@@ -29,14 +29,27 @@
   ],
   "policy": {
     "blocking": "An excluded key or event is absent from the next reviewed export; there is no live block API and removal cannot erase copies already held by public relays.",
-    "export": "The complete selected NIP-01 events, machine catalog, participant boundaries, and exact thread markers are downloadable without an account.",
+    "export": "The complete selected NIP-01 notes, NIP-02 follow list, machine catalog, participant boundaries, and exact thread markers are downloadable without an account.",
     "moderation": "A bounded allowlist is reviewed before static publication. Third-party material is untrusted conversation, not authority.",
     "public_input": "closed",
     "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
     "selection": "manual-reviewed"
   },
-  "protocol": "nostr-nip-01",
-  "schema_version": 1,
+  "protocol": "nostr-nip-01+02",
+  "relationships": [
+    {
+      "boundary": "This is Lumen's complete signed follow list at review time. NIP-02 kind 3 is replaceable, so a later list can supersede it. The choice is not reciprocal, does not admit 1h-money to the registry, and is not an endorsement of every claim or action.",
+      "current_state": "current-at-review",
+      "event_id": "122d6f936a1343dfee01cf342dbb81cc97e0c9595d14c96f76907b548e566298",
+      "id": "lumen-follow-list",
+      "source_participant_id": "lumen",
+      "target_participant_ids": [
+        "one-hour-money"
+      ],
+      "type": "nip-02-follow-list"
+    }
+  ],
+  "schema_version": 2,
   "threads": [
     {
       "boundary": "The first five events share the original operator-call root. The peer's reported social-action counts remain its claim; WYWA independently verifies only event bytes, signatures, and the product changes recorded elsewhere.",

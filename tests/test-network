@@ -14,7 +14,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 NETWORK = PROJECT / "bin" / "wywa-network"
 REVIEW = PROJECT / "platform" / "network-review.json"
 EVENTS = PROJECT / "platform" / "network-events"
-AS_OF = "2026-07-25T17:30:00Z"
+AS_OF = "2026-07-25T18:00:00Z"
 
 
 def run_build(
@@ -64,23 +64,33 @@ def main() -> None:
             assert (first / relative).read_bytes() == (second / relative).read_bytes()
 
         catalog = json.loads((first / "index.json").read_text(encoding="utf-8"))
-        assert catalog["schema_version"] == 1
+        assert catalog["schema_version"] == 2
         assert catalog["admission"] == "reviewed-read-only"
-        assert catalog["protocol"] == "nostr-nip-01"
+        assert catalog["protocol"] == "nostr-nip-01+02"
         assert catalog["summary"] == {
-            "events": 7,
+            "events": 8,
             "external_key_only_participants": 1,
+            "follow_list_events": 1,
+            "follows": 1,
+            "notes": 7,
             "participants": 2,
             "registry_linked_participants": 1,
             "replies": 5,
             "threads": 2,
-            "verified_event_ids": 7,
-            "verified_event_signatures": 7,
+            "verified_event_ids": 8,
+            "verified_event_signatures": 8,
         }
         assert [thread["id"] for thread in catalog["threads"]] == [
             "durable-attention",
             "credential-custody",
         ]
+        assert len(catalog["relationships"]) == 1
+        follow = catalog["relationships"][0]
+        assert follow["type"] == "nip-02-follow-list"
+        assert follow["source_participant_id"] == "lumen"
+        assert follow["target_participant_ids"] == ["one-hour-money"]
+        assert follow["content"] == ""
+        assert follow["verification"]["semantics"] == "nip-02-follow-list"
         custody = catalog["threads"][1]
         assert custody["events"][0]["wire_root"] is None
         assert custody["events"][0]["reply_to"].startswith("d0cd2e6b")
@@ -88,9 +98,10 @@ def main() -> None:
         page = (first / "index.html").read_text(encoding="utf-8")
         assert "<script" not in page.lower()
         assert "<style" not in page.lower()
-        assert "Conversation," in page
+        assert "Relationship," in page
+        assert "Follows 1h-money" in page
         assert "root drift" in page
-        assert len(list((first / "events").glob("*.json"))) == 7
+        assert len(list((first / "events").glob("*.json"))) == 8
 
         tampered_events = root / "tampered-events"
         shutil.copytree(EVENTS, tampered_events)
@@ -117,6 +128,22 @@ def main() -> None:
         )
         assert bad_signature.returncode != 0
         assert "BIP-340 signature verification" in bad_signature.stderr
+
+        wrong_follow_events = root / "wrong-follow-events"
+        shutil.copytree(EVENTS, wrong_follow_events)
+        target = wrong_follow_events / (
+            "122d6f936a1343dfee01cf342dbb81cc97e0c9595d14c96f76907b548e566298.json"
+        )
+        record = json.loads(target.read_text(encoding="utf-8"))
+        record["tags"][0][1] = (
+            "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1"
+        )
+        target.write_text(json.dumps(record), encoding="utf-8")
+        wrong_follow = run_build(
+            REVIEW, wrong_follow_events, root / "wrong-follow-output"
+        )
+        assert wrong_follow.returncode != 0
+        assert "NIP-01 id verification" in wrong_follow.stderr
 
         extra_events = root / "extra-events"
         shutil.copytree(EVENTS, extra_events)

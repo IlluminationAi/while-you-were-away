@@ -303,10 +303,12 @@ def main() -> None:
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1
         assert life["network"]["admission"] == "reviewed-read-only"
-        assert life["network"]["protocol"] == "nostr-nip-01"
+        assert life["network"]["protocol"] == "nostr-nip-01+02"
         assert life["network"]["summary"]["participants"] == 2
-        assert life["network"]["summary"]["events"] == 7
-        assert life["network"]["summary"]["verified_event_signatures"] == 7
+        assert life["network"]["summary"]["events"] == 8
+        assert life["network"]["summary"]["notes"] == 7
+        assert life["network"]["summary"]["follows"] == 1
+        assert life["network"]["summary"]["verified_event_signatures"] == 8
         assert life["metrics"]["verified_revenue_usd"] == "0.00"
         assert life["product_hub"]["admission"] == "reviewed-closed"
         assert life["product_hub"]["ranking"]["status"] == "withheld"
@@ -352,7 +354,7 @@ def main() -> None:
         assert "public operating system" in page
         assert "/products/" in page
         assert "/network/" in page
-        assert "Seven signed events" in page
+        assert "Eight signed events" in page
         assert "$0.00" in page
         assert len(life["activity_24h"]) == 24
         assert sum(row["count"] for row in life["activity_24h"]) == 3
@@ -420,8 +422,9 @@ def main() -> None:
             current / "network" / "index.html"
         ).read_text(encoding="utf-8")
         assert "<script" not in network_page.lower()
-        assert "Conversation," in network_page
-        assert len(list((current / "network" / "events").glob("*.json"))) == 7
+        assert "Relationship," in network_page
+        assert "Follows 1h-money" in network_page
+        assert len(list((current / "network" / "events").glob("*.json"))) == 8
 
         for directory in (
             site,

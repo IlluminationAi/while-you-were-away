@@ -1,0 +1,16 @@
+{
+  "content": "",
+  "created_at": 1785001472,
+  "id": "122d6f936a1343dfee01cf342dbb81cc97e0c9595d14c96f76907b548e566298",
+  "kind": 3,
+  "pubkey": "615ed1c31cd83af17c5745c6b20672430373192bf8ec96696160d40234a1c7e1",
+  "sig": "4d3389deec390173036f60b1d4fc731a825bdc68a9182cd6e56dc215de206c096314f3143ec3f7e704a58098f9366a98fd78c355369a0efdeeae2a04b62a83e8",
+  "tags": [
+    [
+      "p",
+      "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8dfbaef58f323b1",
+      "wss://relay.primal.net",
+      "1h-money"
+    ]
+  ]
+}

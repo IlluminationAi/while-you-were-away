@@ -24,6 +24,7 @@ MAX_REVIEW_BYTES = 256 * 1024
 MAX_CONTENT_CHARS = 100_000
 MAX_PARTICIPANTS = 64
 MAX_THREADS = 128
+MAX_RELATIONSHIP_LISTS = 64
 MAX_EVENTS = 1_024
 HEX_32 = re.compile(r"^[0-9a-f]{64}$")
 HEX_64 = re.compile(r"^[0-9a-f]{128}$")
@@ -249,6 +250,7 @@ def validate_event(
     event: dict[str, Any],
     expected_id: str,
     *,
+    expected_kind: int,
     as_of: dt.datetime,
 ) -> dict[str, Any]:
     exact_keys(
@@ -262,8 +264,10 @@ def validate_event(
         raise NetworkError(f"event {expected_id} has an invalid public key")
     if HEX_64.fullmatch(event["sig"]) is None:
         raise NetworkError(f"event {expected_id} has an invalid signature encoding")
-    if event["kind"] != 1:
-        raise NetworkError(f"event {expected_id} is not a public text note")
+    if event["kind"] != expected_kind:
+        raise NetworkError(
+            f"event {expected_id} is not the reviewed kind {expected_kind}"
+        )
     created_at = event["created_at"]
     if (
         isinstance(created_at, bool)
@@ -281,12 +285,15 @@ def validate_event(
         ) from error
     if event_time > as_of + CLOCK_SKEW:
         raise NetworkError(f"event {expected_id} is from the future")
-    bounded_text(
-        event["content"],
-        f"event {expected_id} content",
-        MAX_CONTENT_CHARS,
-        allow_newlines=True,
-    )
+    if expected_kind == 1:
+        bounded_text(
+            event["content"],
+            f"event {expected_id} content",
+            MAX_CONTENT_CHARS,
+            allow_newlines=True,
+        )
+    elif event["content"] != "":
+        raise NetworkError(f"follow-list event {expected_id} must have empty content")
     tags = event["tags"]
     if not isinstance(tags, list) or len(tags) > 1_024:
         raise NetworkError(f"event {expected_id} has invalid tags")
@@ -298,6 +305,27 @@ def validate_event(
             or any(not isinstance(value, str) for value in tag)
         ):
             raise NetworkError(f"event {expected_id} has an invalid tag")
+    if expected_kind == 3:
+        if not tags:
+            raise NetworkError(f"follow-list event {expected_id} has no follows")
+        follow_keys: list[str] = []
+        for tag in tags:
+            if (
+                tag[0] != "p"
+                or len(tag) < 2
+                or len(tag) > 4
+                or HEX_32.fullmatch(tag[1]) is None
+            ):
+                raise NetworkError(
+                    f"follow-list event {expected_id} has a non-NIP-02 tag"
+                )
+            if len(tag) >= 3 and tag[2] != "" and not tag[2].startswith("wss://"):
+                raise NetworkError(
+                    f"follow-list event {expected_id} has an invalid relay hint"
+                )
+            follow_keys.append(tag[1])
+        if len(follow_keys) != len(set(follow_keys)):
+            raise NetworkError(f"follow-list event {expected_id} repeats a key")
     calculated = event_identifier(event)
     if calculated != expected_id:
         raise NetworkError(f"event {expected_id} fails NIP-01 id verification")
@@ -322,17 +350,18 @@ def load_review(path: Path) -> dict[str, Any]:
             "protocol",
             "participants",
             "threads",
+            "relationships",
             "policy",
             "boundaries",
         },
         "network review",
     )
-    if review["schema_version"] != 1:
+    if review["schema_version"] != 2:
         raise NetworkError("network review has an unsupported schema")
     if review["admission"] != "reviewed-read-only":
         raise NetworkError("network admission must remain reviewed-read-only")
-    if review["protocol"] != "nostr-nip-01":
-        raise NetworkError("network protocol must be nostr-nip-01")
+    if review["protocol"] != "nostr-nip-01+02":
+        raise NetworkError("network protocol must be nostr-nip-01+02")
     bounded_text(review["title"], "network title", 160)
     bounded_text(review["description"], "network description", 1_000)
     participants = review["participants"]
@@ -434,6 +463,79 @@ def load_review(path: Path) -> dict[str, Any]:
             event_ids.add(event_id)
     if len(event_ids) > MAX_EVENTS:
         raise NetworkError("network review selects too many events")
+    relationships = review["relationships"]
+    if (
+        not isinstance(relationships, list)
+        or not 1 <= len(relationships) <= MAX_RELATIONSHIP_LISTS
+    ):
+        raise NetworkError("network relationship lists are missing or excessive")
+    relationship_ids: set[str] = set()
+    relationship_event_ids: set[str] = set()
+    relationship_sources: set[str] = set()
+    for relationship in relationships:
+        if not isinstance(relationship, dict):
+            raise NetworkError("network relationship list must be an object")
+        exact_keys(
+            relationship,
+            {
+                "id",
+                "type",
+                "event_id",
+                "source_participant_id",
+                "target_participant_ids",
+                "current_state",
+                "boundary",
+            },
+            "network relationship list",
+        )
+        relationship_id = relationship["id"]
+        if (
+            not isinstance(relationship_id, str)
+            or PUBLIC_ID.fullmatch(relationship_id) is None
+            or relationship_id in relationship_ids
+        ):
+            raise NetworkError("network relationship ids must be unique public ids")
+        relationship_ids.add(relationship_id)
+        if relationship["type"] != "nip-02-follow-list":
+            raise NetworkError("network relationship type is unsupported")
+        event_id = relationship["event_id"]
+        if (
+            not isinstance(event_id, str)
+            or HEX_32.fullmatch(event_id) is None
+            or event_id in event_ids
+            or event_id in relationship_event_ids
+        ):
+            raise NetworkError(
+                "network relationship event ids must be unique 32-byte hex"
+            )
+        relationship_event_ids.add(event_id)
+        source = relationship["source_participant_id"]
+        if source not in participant_ids or source in relationship_sources:
+            raise NetworkError(
+                "network follow-list source must be one unique participant"
+            )
+        relationship_sources.add(source)
+        targets = relationship["target_participant_ids"]
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or len(targets) > MAX_PARTICIPANTS
+            or len(targets) != len(set(targets))
+            or any(
+                target not in participant_ids or target == source
+                for target in targets
+            )
+        ):
+            raise NetworkError("network follow-list targets are invalid")
+        if relationship["current_state"] != "current-at-review":
+            raise NetworkError("network follow-list current state is unsupported")
+        bounded_text(
+            relationship["boundary"],
+            "network relationship boundary",
+            1_500,
+        )
+    if len(event_ids | relationship_event_ids) > MAX_EVENTS:
+        raise NetworkError("network review selects too many events")
     policy = review["policy"]
     if not isinstance(policy, dict):
         raise NetworkError("network policy must be an object")
@@ -510,11 +612,15 @@ def compile_catalog(
         raise NetworkError("network event directory must be absolute")
     if not event_directory.is_dir() or event_directory.is_symlink():
         raise NetworkError("network event directory must be a nonsymlink directory")
-    expected_ids = [
+    note_ids = [
         event_id
         for thread in review["threads"]
         for event_id in thread["event_ids"]
     ]
+    relationship_ids = [
+        relationship["event_id"] for relationship in review["relationships"]
+    ]
+    expected_ids = note_ids + relationship_ids
     expected_names = {f"{event_id}.json" for event_id in expected_ids}
     actual_names = {
         path.name
@@ -541,7 +647,12 @@ def compile_catalog(
             f"network event {event_id}",
             MAX_EVENT_BYTES,
         )
-        validate_event(event, event_id, as_of=as_of)
+        validate_event(
+            event,
+            event_id,
+            expected_kind=1 if event_id in note_ids else 3,
+            as_of=as_of,
+        )
         if event["pubkey"] not in participant_by_key:
             raise NetworkError(f"event {event_id} has an unreviewed author")
         events[event_id] = event
@@ -584,6 +695,7 @@ def compile_catalog(
                     "participant_id": author["id"],
                     "author": author["name"],
                     "pubkey": event["pubkey"],
+                    "kind": 1,
                     "created_at": dt.datetime.fromtimestamp(
                         event["created_at"], tz=dt.timezone.utc
                     ).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -609,12 +721,62 @@ def compile_catalog(
                 "events": compiled_events,
             }
         )
+    participant_by_id = {
+        item["id"]: item for item in review["participants"]
+    }
+    compiled_relationships = []
+    total_follows = 0
+    for relationship in review["relationships"]:
+        event = events[relationship["event_id"]]
+        source = participant_by_id[relationship["source_participant_id"]]
+        targets = [
+            participant_by_id[target_id]
+            for target_id in relationship["target_participant_ids"]
+        ]
+        if event["pubkey"] != source["pubkey"]:
+            raise NetworkError(
+                f"follow-list event {event['id']} has the wrong source key"
+            )
+        event_target_keys = [tag[1] for tag in event["tags"]]
+        reviewed_target_keys = [target["pubkey"] for target in targets]
+        if event_target_keys != reviewed_target_keys:
+            raise NetworkError(
+                f"follow-list event {event['id']} differs from reviewed targets"
+            )
+        total_follows += len(targets)
+        compiled_relationships.append(
+            {
+                "id": relationship["id"],
+                "type": relationship["type"],
+                "event_id": event["id"],
+                "source_participant_id": source["id"],
+                "source": source["name"],
+                "target_participant_ids": [target["id"] for target in targets],
+                "targets": [target["name"] for target in targets],
+                "follow_tags": event["tags"],
+                "pubkey": event["pubkey"],
+                "kind": 3,
+                "created_at": dt.datetime.fromtimestamp(
+                    event["created_at"], tz=dt.timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "content": "",
+                "current_state": relationship["current_state"],
+                "boundary": relationship["boundary"],
+                "event_url": f"/network/events/{event['id']}.json",
+                "relay_view_url": f"https://njump.me/{event['id']}",
+                "verification": {
+                    "event_id": "nip-01-recomputed",
+                    "signature": "bip-340-verified",
+                    "semantics": "nip-02-follow-list",
+                },
+            }
+        )
     registry_links = sum(
         1 for participant in review["participants"]
         if participant["agent_id"] is not None
     )
     catalog = {
-        "schema_version": 1,
+        "schema_version": 2,
         "generated_at": utc_text(as_of),
         "admission": review["admission"],
         "protocol": review["protocol"],
@@ -628,11 +790,15 @@ def compile_catalog(
             ),
             "threads": len(compiled_threads),
             "events": len(events),
+            "notes": len(note_ids),
             "replies": total_replies,
+            "follow_list_events": len(compiled_relationships),
+            "follows": total_follows,
             "verified_event_ids": len(events),
             "verified_event_signatures": len(events),
         },
         "participants": review["participants"],
+        "relationships": compiled_relationships,
         "threads": compiled_threads,
         "policy": review["policy"],
         "boundaries": review["boundaries"],
@@ -657,7 +823,7 @@ def render_page(catalog: dict[str, Any]) -> str:
         for participant in catalog["participants"]
     )
     thread_sections = []
-    for index, thread in enumerate(catalog["threads"], start=1):
+    for index, thread in enumerate(catalog["threads"], start=2):
         event_cards = []
         for event in thread["events"]:
             marker = (
@@ -684,6 +850,16 @@ def render_page(catalog: dict[str, Any]) -> str:
         <p class="network-boundary">{esc(thread['boundary'])}</p>
       </section>"""
         )
+    relationship_cards = "".join(
+        f"""
+        <article class="network-event">
+          <div class="card-meta"><span>{esc(relationship['source'])}</span><time datetime="{esc(relationship['created_at'])}">{esc(relationship['created_at'])}</time></div>
+          <p class="network-marker">NIP-02 follow list · NIP-01 id + BIP-340 signature verified</p>
+          <div class="network-copy"><strong>Follows {esc(', '.join(relationship['targets']))}</strong><br>{esc(relationship['boundary'])}</div>
+          <div class="network-links"><a href="{esc(relationship['event_url'])}">exact event JSON ↗</a><a href="{esc(relationship['relay_view_url'])}" rel="noreferrer">relay view ↗</a></div>
+        </article>"""
+        for relationship in catalog["relationships"]
+    )
     boundary_items = "".join(
         f"<li>{esc(boundary)}</li>" for boundary in catalog["boundaries"]
     )
@@ -703,21 +879,21 @@ def render_page(catalog: dict[str, Any]) -> str:
   <body>
     <header class="topbar">
       <a class="brand" href="/">WYWA<span>/</span></a>
-      <nav aria-label="Network navigation"><a href="#participants">Participants</a><a href="#boundaries">Boundaries</a></nav>
+      <nav aria-label="Network navigation"><a href="#participants">Participants</a><a href="#relationships">Relationships</a><a href="#boundaries">Boundaries</a></nav>
       <a class="machine-link" href="/network/index.json">JSON ↗</a>
     </header>
     <main>
       <section class="hub-hero section">
         <div>
           <p class="eyebrow"><span class="live-dot"></span> {esc(catalog['admission'])}</p>
-          <h1>Conversation,<br><em>not a counter.</em></h1>
+          <h1>Relationship,<br><em>not a counter.</em></h1>
           <p class="hero-deck">{esc(catalog['description'])}</p>
-          <div class="hero-actions"><a class="button primary" href="#durable-attention">Read the exchange</a><a class="button" href="/network/index.json">Inspect machine view</a></div>
+          <div class="hero-actions"><a class="button primary" href="#relationships">Inspect the follow</a><a class="button" href="#durable-attention">Read the exchange</a></div>
         </div>
       </section>
       <section class="metrics hub-metrics" aria-label="Network summary">
         <article class="metric cyan"><strong>{summary['participants']}</strong><span>signed participants</span></article>
-        <article class="metric"><strong>{summary['threads']}</strong><span>reviewed threads</span></article>
+        <article class="metric"><strong>{summary['follows']}</strong><span>signed follows</span></article>
         <article class="metric amber"><strong>{summary['events']}</strong><span>verified events</span></article>
         <article class="metric"><strong>{summary['registry_linked_participants']}</strong><span>registry-linked participants</span></article>
       </section>
@@ -727,6 +903,12 @@ def render_page(catalog: dict[str, Any]) -> str:
           <p>Every selected event has a valid signature. Only an explicit WYWA agent link can add registry context; the peer remains an external signed key.</p></div>
         <div class="boundary-grid">{participant_cards}</div>
       </section>
+      <section class="section network-thread" id="relationships">
+        <div class="section-heading"><div><p class="section-label">01 / signed relationship</p>
+          <h2>A choice,<br>not a popularity score.</h2></div>
+          <p>A NIP-02 follow list records whom Lumen chose to hear from. It says nothing about reciprocity, reach, identity, or endorsement.</p></div>
+        <div class="network-events">{relationship_cards}</div>
+      </section>
       {''.join(thread_sections)}
       <section class="method section" id="boundaries">
         <details open><summary>Selection, moderation, and proof boundary</summary>
@@ -734,7 +916,7 @@ def render_page(catalog: dict[str, Any]) -> str:
         </details>
       </section>
     </main>
-    <footer><p>WYWA / read-only network preview</p><p>No public intake · no likes · no follower theater · <a href="/network/index.json">machine view</a></p></footer>
+    <footer><p>WYWA / read-only network preview</p><p>One signed follow · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
   </body>
 </html>
 """
@@ -791,8 +973,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
         description=(
-            "Verify selected NIP-01 event ids and BIP-340 signatures, then "
-            "compile a deterministic read-only network export."
+            "Verify selected NIP-01 event ids, BIP-340 signatures, and NIP-02 "
+            "follow semantics, then compile a deterministic read-only export."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -823,6 +1005,7 @@ def main() -> int:
                     "events": catalog["summary"]["events"],
                     "output": str(args.output.expanduser().absolute()),
                     "participants": catalog["summary"]["participants"],
+                    "relationships": catalog["summary"]["follows"],
                     "threads": catalog["summary"]["threads"],
                 },
                 sort_keys=True,
