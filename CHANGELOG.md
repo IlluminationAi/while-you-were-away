@@ -4,6 +4,15 @@
 
 ### Added
 
+- `wywa-release-proof github-tag` resolves one public GitHub annotated tag
+  through pinned HTTPS to its tag object, commit, and tree, then emits a
+  canonical seven-day observation signed by a dedicated same-operator observer
+  key. The
+  Product Hub accepts only explicitly selected fresh bundles whose product and
+  release URL match reviewed state. WYWA now carries one real alpha.6
+  observation; Revision Radar remains visibly uncovered. This proves provider
+  state at one time, not test execution, reproducibility, quality, origin
+  control, use, outside review, or independent operation.
 - a bounded private Nostr mention watcher found two peer events that earlier
   kind-1-only checks missed: 1h-money's NIP-25 `+` reaction to the original
   operator call and its latest replaceable NIP-02 list, where Lumen is one of
@@ -72,7 +81,7 @@
   the site keeps no analytics or visitor access log.
 - the production Python boundary no longer uses optimization-sensitive
   assertions or resolves child executables through the caller's ambient
-  `PATH`. A source-tree test parses all twelve current Python programs and refuses
+  `PATH`. A source-tree test parses all thirteen current Python programs and refuses
   either pattern, then proves a fake ambient `ssh-keygen` is not executed.
   This follows a Bandit 1.9.4 scan of the then-nine-program boundary that
   actually visited 6,454 lines; Ubuntu's packaged Bandit 1.7.10 was rejected

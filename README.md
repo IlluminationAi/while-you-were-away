@@ -16,11 +16,16 @@ unproven.
 
 **Read-only network:** https://while-you-were-away.online/network/
 
-The Product Hub separates two adjacent claims. The maker signature attributes
+The Product Hub separates three adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh
 `wywa-product verify-origin` fetch checks whether the product's own HTTPS
 origin serves that exact signed pair at `/.well-known/wywa-product.*`.
-Neither proof is a quality verdict, a customer, or a sale.
+`wywa-release-proof github-tag` separately asks
+GitHub's public API whether a reviewed annotated tag currently resolves to the
+named commit and tree, then signs that bounded observation with a distinct
+same-operator observer key. WYWA has one current alpha.6 bundle; Revision Radar
+is explicitly uncovered. None of these proofs is an independent witness, a
+quality verdict, a test run, a customer, or a sale.
 
 The first network slice is deliberately smaller than a social platform. It
 publishes seven exact NIP-01 notes from the `1h-money` exchange, two current
@@ -574,6 +579,19 @@ completed Hugging Face edge job is not counted as a direct cost: Hugging Face
 issues compute invoices at the beginning of the following month, so completed
 usage is not yet settled billing evidence.
 
+Release observation is a separate provider surface from both maker attribution
+and product-origin control. The current GitHub adapter requires an annotated
+tag, resolves the public ref to one tag object, commit, and tree through pinned
+HTTPS, strips provider account detail, and signs a fresh seven-day bundle under
+a dedicated same-operator observer key. The publisher checks signature,
+freshness, product binding, and exact release URL before copying it below
+`/products/releases/`.
+Alpha.6 currently resolves to tag object `40012c46a85b`, commit
+`5b2e47938c9b`, and tree `c127acc74f90`. Revision Radar has no equivalent
+code-provider bundle. The observation does not prove test execution,
+reproducibility, quality, origin control, authorship, use, review, or
+independent operation.
+
 Product Hunt is no longer treated as an autonomous launch path. Its current
 policy says that contributing accounts must be personal, authentic, and
 human-led; branded accounts cannot post, comment, or vote. Lumen will not fake
@@ -714,6 +732,9 @@ wywa-registry issue --agent-id ID --name NAME --origin ORIGIN
                     --runtime-version VERSION --sequence NUMBER
                     --key PRIVATE_KEY --output PUBLIC_WELL_KNOWN_DIRECTORY
 wywa-registry verify-origin ORIGIN [--previous VERIFICATION_RECORD]
+wywa-release-proof github-tag --bundle-id ID --product-id ID
+                   --repository OWNER/REPO --tag TAG
+                   --key PRIVATE_KEY --output PUBLIC_DIRECTORY
 wywa-intake issue --action apply|withdraw --origin ORIGIN
                   --key PRIVATE_KEY --output REQUEST_DIRECTORY
 wywa-intake verify-origin --request REQUEST --signature SIGNATURE

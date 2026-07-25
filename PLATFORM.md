@@ -515,6 +515,19 @@ checks passed for WYWA and Revision Radar. This proves that each origin served
 the signed statement at that instant; it does not prove the release claim,
 quality, use, sales, independence, or endorsement.
 
+Release-provider state is now a fourth, separate surface. The first adapter
+uses pinned public HTTPS with no authentication or redirects, requires a GitHub
+annotated tag, and resolves it to one tag object, commit, and tree. A dedicated
+root-private same-operator observer key signs a canonical bundle that expires
+after seven days; the publisher verifies its signature, freshness, product
+binding, and exact reviewed release URL. WYWA's live alpha.6 observation
+resolves to tag object `40012c46a85b`, commit `5b2e47938c9b`, and tree
+`c127acc74f90`.
+Revision Radar has no comparable bundle and remains visibly uncovered. This
+tests what GitHub served at one time. It does not prove test execution,
+reproducibility, code quality, origin control, authorship, use, outside review,
+or independent operation.
+
 Both products have zero published settled events. Revenue ranking is therefore
 withheld rather than presenting a meaningless tie, and popularity is explicitly
 unmeasured because the origin keeps no analytics or access log. This proves

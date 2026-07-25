@@ -23,6 +23,7 @@ PYTHON_PROGRAMS = (
     "wywa-intake-queue",
     "wywa-network",
     "wywa-product",
+    "wywa-release-proof",
     "wywa-receipt",
     "wywa-registry",
     "wywa-retained-proof",

@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Exercise signed, provider-backed product release observations."""
+
+from __future__ import annotations
+
+import copy
+import datetime as dt
+import importlib.machinery
+import importlib.util
+import json
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+PROJECT = Path(__file__).resolve().parent.parent
+PROGRAM = PROJECT / "bin" / "wywa-release-proof"
+AT = dt.datetime(2026, 7, 25, 20, 30, tzinfo=dt.timezone.utc)
+TAG_OBJECT = "4" * 40
+COMMIT = "5" * 40
+TREE = "6" * 40
+REPOSITORY = "IlluminationAi/while-you-were-away"
+TAG = "v0.1.0-alpha.6"
+
+
+def load_program():
+    loader = importlib.machinery.SourceFileLoader(
+        "wywa_release_proof",
+        str(PROGRAM),
+    )
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None:
+        raise AssertionError("could not create release-proof module specification")
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def provider_fixture() -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+    api = "https://api.github.com/repos/IlluminationAi/while-you-were-away/git"
+    reference = {
+        "ref": f"refs/tags/{TAG}",
+        "object": {
+            "type": "tag",
+            "sha": TAG_OBJECT,
+            "url": f"{api}/tags/{TAG_OBJECT}",
+        },
+        "unreviewed_provider_field": "ignored",
+    }
+    tag = {
+        "sha": TAG_OBJECT,
+        "tag": TAG,
+        "object": {
+            "type": "commit",
+            "sha": COMMIT,
+            "url": f"{api}/commits/{COMMIT}",
+        },
+        "message": "Release alpha.6",
+    }
+    commit = {
+        "sha": COMMIT,
+        "tree": {
+            "sha": TREE,
+            "url": f"{api}/trees/{TREE}",
+        },
+        "author": {"email": "must-not-enter-the-bundle@example.test"},
+    }
+    return reference, tag, commit
+
+
+def run(
+    *arguments: str,
+    expected: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        [str(PROGRAM), *arguments],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != expected:
+        raise AssertionError(
+            f"expected {expected}, got {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    return result
+
+
+def main() -> None:
+    release = load_program()
+    reference, tag, commit = provider_fixture()
+    bundle = release.compile_github_bundle(
+        reference,
+        tag,
+        commit,
+        bundle_id_value="wywa-alpha6-github-tag-20260725",
+        product_id_value="wywa",
+        repository_value=REPOSITORY,
+        tag_value=TAG,
+        verified_at=AT,
+        validity=dt.timedelta(days=7),
+    )
+    assert bundle["provider"] == "github"
+    assert bundle["adapter"] == "github-annotated-tag-v1"
+    assert bundle["verified_at"] == "2026-07-25T20:30:00Z"
+    assert bundle["expires_at"] == "2026-08-01T20:30:00Z"
+    assert bundle["observation"]["tag_object_sha"] == TAG_OBJECT
+    assert bundle["observation"]["commit_sha"] == COMMIT
+    assert bundle["observation"]["tree_sha"] == TREE
+    assert bundle["observation"]["release_url"].endswith(
+        "/releases/tag/v0.1.0-alpha.6"
+    )
+    encoded = json.dumps(bundle)
+    assert "must-not-enter-the-bundle" not in encoded
+    assert "test execution" in bundle["boundary"]
+    assert "does not prove" in bundle["boundary"]
+
+    lightweight = copy.deepcopy(reference)
+    lightweight["object"]["type"] = "commit"
+    try:
+        release.compile_github_bundle(
+            lightweight,
+            tag,
+            commit,
+            bundle_id_value=bundle["bundle_id"],
+            product_id_value="wywa",
+            repository_value=REPOSITORY,
+            tag_value=TAG,
+            verified_at=AT,
+            validity=dt.timedelta(days=1),
+        )
+    except release.ReleaseProofError as error:
+        assert "Git tag" in str(error)
+    else:
+        raise AssertionError("a lightweight GitHub tag was accepted")
+
+    nested = copy.deepcopy(tag)
+    nested["object"]["type"] = "tag"
+    try:
+        release.compile_github_bundle(
+            reference,
+            nested,
+            commit,
+            bundle_id_value=bundle["bundle_id"],
+            product_id_value="wywa",
+            repository_value=REPOSITORY,
+            tag_value=TAG,
+            verified_at=AT,
+            validity=dt.timedelta(days=1),
+        )
+    except release.ReleaseProofError as error:
+        assert "Git commit" in str(error)
+    else:
+        raise AssertionError("a nested annotated tag was accepted")
+
+    wrong_tree_url = copy.deepcopy(commit)
+    wrong_tree_url["tree"]["url"] = "https://api.github.com/not-the-tree"
+    try:
+        release.compile_github_bundle(
+            reference,
+            tag,
+            wrong_tree_url,
+            bundle_id_value=bundle["bundle_id"],
+            product_id_value="wywa",
+            repository_value=REPOSITORY,
+            tag_value=TAG,
+            verified_at=AT,
+            validity=dt.timedelta(days=1),
+        )
+    except release.ReleaseProofError as error:
+        assert "tree URL" in str(error)
+    else:
+        raise AssertionError("a mismatched GitHub tree URL was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="wywa-release-proof-test-") as temporary:
+        root = Path(temporary)
+        key = root / "private" / "release_ed25519"
+        key.parent.mkdir(mode=0o700)
+        subprocess.run(
+            ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+        key.chmod(0o600)
+        output = root / "public"
+        bundle_path, signature_path = release.write_signed_bundle(
+            bundle,
+            key=key,
+            output=output,
+            replace=False,
+        )
+        public_key = root / "release.pub"
+        public_key.write_text(
+            " ".join(Path(f"{key}.pub").read_text(encoding="utf-8").split()[:2])
+            + "\n",
+            encoding="ascii",
+        )
+        assert bundle_path.stat().st_mode & 0o777 == 0o644
+        assert signature_path.stat().st_mode & 0o777 == 0o644
+        assert output.stat().st_mode & 0o777 == 0o755
+        assert bundle_path.read_bytes() == release.canonical_bytes(bundle)
+
+        verified = json.loads(
+            run(
+                "verify-bundle",
+                str(bundle_path),
+                str(signature_path),
+                "--public-key",
+                str(public_key),
+                "--at",
+                "2026-07-25T20:31:00Z",
+            ).stdout
+        )
+        assert verified["eligible"] is True
+        assert verified["bundle_id"] == bundle["bundle_id"]
+        assert verified["evidence"] == "signed-provider-release-observation"
+
+        stale = run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-08-02T20:30:00Z",
+            expected=2,
+        )
+        assert "stale" in stale.stderr
+        run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-08-02T20:30:00Z",
+            "--allow-stale",
+        )
+
+        tampered = json.loads(bundle_path.read_text(encoding="utf-8"))
+        tampered["observation"]["tree_sha"] = "7" * 40
+        bundle_path.write_bytes(release.canonical_bytes(tampered))
+        failed = run(
+            "verify-bundle",
+            str(bundle_path),
+            str(signature_path),
+            "--public-key",
+            str(public_key),
+            "--at",
+            "2026-07-25T20:31:00Z",
+            expected=2,
+        )
+        assert (
+            "differs from its identifiers" in failed.stderr
+            or "signature verification failed" in failed.stderr
+        )
+
+        unexpected = copy.deepcopy(bundle)
+        unexpected["result"] = "green"
+        try:
+            release.validate_bundle(
+                unexpected,
+                at=AT,
+                require_current=True,
+            )
+        except release.ReleaseProofError as error:
+            assert "unknown result" in str(error)
+        else:
+            raise AssertionError("an unknown signed-bundle field was accepted")
+
+    print("PASS: signed provider release observations")
+
+
+if __name__ == "__main__":
+    main()

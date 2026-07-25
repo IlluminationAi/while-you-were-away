@@ -44,6 +44,7 @@ mkdir -p -- \
   "$source_root/platform/network/events" \
   "$source_root/platform/network-events" \
   "$source_root/platform/product-proofs" \
+  "$source_root/platform/release-proofs" \
   "$source_root/platform/registry" \
   "$source_root/templates" \
   "$source_root/tests"
@@ -80,6 +81,7 @@ for filename in \
   wywa-life-drill \
   wywa-network \
   wywa-product \
+  wywa-release-proof \
   wywa-receipt \
   wywa-public \
   wywa-volume \
@@ -117,6 +119,16 @@ do
 done
 
 for filename in \
+  README.md \
+  wywa-alpha6-github-tag-20260725.json \
+  wywa-alpha6-github-tag-20260725.sig
+do
+  install -m 0644 -- \
+    "$project_dir/platform/release-proofs/$filename" \
+    "$source_root/platform/release-proofs/$filename"
+done
+
+for filename in \
   revision-radar.json \
   revision-radar.sig \
   wywa.json \
@@ -144,6 +156,7 @@ for filename in \
   nginx-bootstrap.conf \
   nginx.conf \
   economics-public-key.pub \
+  release-public-key.pub \
   public-nginx-bootstrap.conf.in \
   public-nginx.conf.in \
   public-nginx-zones.conf \
@@ -233,6 +246,9 @@ install -m 0755 -- \
 install -m 0755 -- \
   "$project_dir/tests/test-receipt" \
   "$source_root/tests/test-receipt"
+install -m 0755 -- \
+  "$project_dir/tests/test-release-proof" \
+  "$source_root/tests/test-release-proof"
 install -m 0755 -- \
   "$project_dir/tests/test-curator" \
   "$source_root/tests/test-curator"

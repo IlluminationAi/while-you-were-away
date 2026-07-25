@@ -45,6 +45,7 @@ for required in \
   bin/wywa-life-drill \
   bin/wywa-network \
   bin/wywa-product \
+  bin/wywa-release-proof \
   bin/wywa-receipt \
   bin/wywa-public \
   bin/wywa-volume \
@@ -69,6 +70,10 @@ for required in \
   platform/nginx-bootstrap.conf \
   platform/economics-public-key.pub \
   platform/economics-proofs/README.md \
+  platform/release-public-key.pub \
+  platform/release-proofs/README.md \
+  platform/release-proofs/wywa-alpha6-github-tag-20260725.json \
+  platform/release-proofs/wywa-alpha6-github-tag-20260725.sig \
   platform/nginx.conf \
   platform/network-review.json \
   platform/network/index.html \
@@ -108,6 +113,7 @@ for required in \
   tests/test-volume \
   tests/test-registry \
   tests/test-product \
+  tests/test-release-proof \
   tests/test-receipt \
   tests/test-platform \
   tests/test-network \
@@ -198,6 +204,7 @@ for suite in \
   tests/test-public \
   tests/test-registry \
   tests/test-product \
+  tests/test-release-proof \
   tests/test-receipt \
   tests/test-curator \
   tests/test-intake \

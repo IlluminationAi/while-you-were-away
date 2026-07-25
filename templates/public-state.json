@@ -70,6 +70,7 @@
         "claim": "The local workspace, receipt, snapshot, and Git bundle are verified before the preview advances.",
         "url": "https://github.com/IlluminationAi/while-you-were-away"
       },
+      "release_proof_bundles": [],
       "economics": {
         "statement": "No public settled revenue, refund, or direct-cost evidence has been attached to this starter product.",
         "evidence_bundles": []

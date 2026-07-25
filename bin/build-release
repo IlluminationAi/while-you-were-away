@@ -54,6 +54,9 @@ install -m 0755 -- \
   "$project_dir/bin/wywa-product" \
   "$release_root/bin/wywa-product"
 install -m 0755 -- \
+  "$project_dir/bin/wywa-release-proof" \
+  "$release_root/bin/wywa-release-proof"
+install -m 0755 -- \
   "$project_dir/bin/wywa-receipt" \
   "$release_root/bin/wywa-receipt"
 install -m 0755 -- \

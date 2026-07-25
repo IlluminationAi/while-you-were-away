@@ -16,9 +16,9 @@ REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
 CURATOR = PROJECT / "bin" / "wywa-curator"
 INSTANTS = (
-    "2026-07-25T17:40:00Z",
-    "2026-07-25T17:41:00Z",
-    "2026-07-25T17:42:00Z",
+    "2026-07-25T20:38:00Z",
+    "2026-07-25T20:39:00Z",
+    "2026-07-25T20:40:00Z",
 )
 
 
@@ -258,6 +258,10 @@ def main() -> None:
                     str(economics_proof),
                     "--economics-public-key",
                     str(economics_public_key),
+                    "--release-proof-dir",
+                    str(PROJECT / "platform" / "release-proofs"),
+                    "--release-public-key",
+                    str(PROJECT / "platform" / "release-public-key.pub"),
                     "--registry-export-dir",
                     str(registry_export),
                     "--network-export-dir",
@@ -320,13 +324,22 @@ def main() -> None:
         assert product_catalog["summary"]["settled_evidence_events"] == 0
         assert product_catalog["summary"]["verified_gross_revenue_usd"] == "0.00"
         assert product_catalog["summary"]["verified_direct_costs_usd"] == "0.00"
-        assert product_catalog["schema_version"] == 2
-        assert product_catalog["evidence_contract"] == "signed-provider-bundles-v1"
+        assert product_catalog["schema_version"] == 3
+        assert product_catalog["evidence_contract"] == (
+            "signed-provider-release-and-settlement-bundles-v1"
+        )
+        assert (
+            product_catalog["release_verification"]["status"]
+            == "configured-partial"
+        )
+        assert product_catalog["release_verification"]["verified_products"] == 1
+        assert product_catalog["release_verification"]["uncovered_products"] == 1
         assert (
             product_catalog["provider_verification"]["status"]
             == "configured-no-settled-events"
         )
         assert product_catalog["summary"]["provider_verified_events"] == 0
+        assert product_catalog["summary"]["provider_observed_releases"] == 1
         assert product_catalog["ranking"]["rows"] == []
         assert product_catalog["popularity"]["status"] == "not-measured"
         assert all(
@@ -352,6 +365,8 @@ def main() -> None:
         assert "empty evidence set" in product_page
         assert "verified maker signature" in product_page
         assert "live origin checked" in product_page
+        assert "github annotated tag observed" in product_page
+        assert "provider release observation unavailable" in product_page
         assert "Inline amounts and receipt URLs" in product_page
         assert "public operating system" in page
         assert "/products/" in page
@@ -379,7 +394,7 @@ def main() -> None:
         assert security_txt == (
             "Contact: "
             "https://github.com/IlluminationAi/while-you-were-away/security\n"
-            "Expires: 2027-01-21T17:42:00Z\n"
+            "Expires: 2027-01-21T20:40:00Z\n"
             "Preferred-Languages: en\n"
             "Canonical: "
             "https://while-you-were-away.online/.well-known/security.txt\n"
@@ -456,6 +471,7 @@ def main() -> None:
             current / "network" / "events",
             current / "products",
             current / "products" / "claims",
+            current / "products" / "releases",
             current / "products" / "receipts",
         ):
             assert directory.stat().st_mode & 0o777 == 0o755
@@ -482,6 +498,15 @@ def main() -> None:
             current / "products" / "claims" / "wywa.sig",
             current / "products" / "claims" / "revision-radar.json",
             current / "products" / "claims" / "revision-radar.sig",
+            current / "products" / "releases" / "key.pub",
+            current
+            / "products"
+            / "releases"
+            / "wywa-alpha6-github-tag-20260725.json",
+            current
+            / "products"
+            / "releases"
+            / "wywa-alpha6-github-tag-20260725.sig",
             current / "products" / "receipts" / "key.pub",
         ):
             assert file_path.is_file()
@@ -512,8 +537,8 @@ def main() -> None:
             "product_id": "wywa",
             "provider": "stripe",
             "adapter": "stripe-balance-v1",
-            "verified_at": "2026-07-24T17:39:00Z",
-            "expires_at": "2026-07-25T17:39:00Z",
+            "verified_at": "2026-07-25T20:25:00Z",
+            "expires_at": "2026-07-26T20:25:00Z",
             "source": {
                 "object": "charge",
                 "id": "ch_liveFixture123",
@@ -625,8 +650,12 @@ def main() -> None:
                 str(economics_proof),
                 "--economics-public-key",
                 str(economics_public_key),
+                "--release-proof-dir",
+                str(PROJECT / "platform" / "release-proofs"),
+                "--release-public-key",
+                str(PROJECT / "platform" / "release-public-key.pub"),
                 "--as-of",
-                "2026-07-24T17:43:00Z",
+                "2026-07-25T20:41:00Z",
                 "--phase",
                 "active",
             ],
@@ -690,8 +719,12 @@ def main() -> None:
                 str(economics_proof),
                 "--economics-public-key",
                 str(economics_public_key),
+                "--release-proof-dir",
+                str(PROJECT / "platform" / "release-proofs"),
+                "--release-public-key",
+                str(PROJECT / "platform" / "release-public-key.pub"),
                 "--as-of",
-                "2026-07-26T17:43:00Z",
+                "2026-07-27T20:30:00Z",
             ],
             capture_output=True,
             text=True,
@@ -785,12 +818,24 @@ def main() -> None:
         )
 
         portable_site = root / "portable-site"
+        portable_state = json.loads(
+            (PROJECT / "platform" / "public-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for product in portable_state["products"]:
+            product["release_proof_bundles"] = []
+        portable_state_path = root / "portable-public-state.json"
+        portable_state_path.write_text(
+            json.dumps(portable_state),
+            encoding="utf-8",
+        )
         (runtime / "last-run").write_text(
             "2026-07-24T17:43:00Z status=0 sandbox=workspace-write "
             "checkpoint=0123456789ab log=/another/private/path\n",
             encoding="utf-8",
         )
-        subprocess.run(
+        portable_result = subprocess.run(
             [
                 str(PUBLISH),
                 "--site-root",
@@ -801,6 +846,8 @@ def main() -> None:
                 str(runtime),
                 "--workspace-root",
                 str(workspace),
+                "--public-state",
+                str(portable_state_path),
                 "--base-url",
                 "http://127.0.0.1",
                 "--as-of",
@@ -810,10 +857,15 @@ def main() -> None:
                 "--keep",
                 "2",
             ],
-            check=True,
             capture_output=True,
             text=True,
         )
+        if portable_result.returncode != 0:
+            raise AssertionError(
+                "portable platform publication failed\n"
+                f"stdout: {portable_result.stdout}\n"
+                f"stderr: {portable_result.stderr}"
+            )
         portable_life = json.loads(
             (portable_site / "current" / "life.json").read_text(
                 encoding="utf-8"

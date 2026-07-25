@@ -1,0 +1,779 @@
+#!/usr/bin/env python3
+"""Observe a public release provider and emit a signed, bounded WYWA proof."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import datetime as dt
+import hashlib
+import ipaddress
+import json
+import os
+import re
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+
+PROGRAM = Path(__file__).name
+NAMESPACE = "wywa-release-observation-v1"
+SIGNER_IDENTITY = "wywa-release-observer"
+GITHUB_API_HOST = "api.github.com"
+GITHUB_API_ORIGIN = f"https://{GITHUB_API_HOST}"
+GITHUB_ORIGIN = "https://github.com"
+GITHUB_API_VERSION = "2022-11-28"
+ADAPTER = "github-annotated-tag-v1"
+MAX_PROVIDER_BYTES = 512 * 1024
+MAX_BUNDLE_BYTES = 128 * 1024
+MAX_SIGNATURE_BYTES = 16 * 1024
+MAX_VALIDITY = dt.timedelta(days=7)
+CLOCK_SKEW = dt.timedelta(minutes=5)
+PUBLIC_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+REPOSITORY_PART_PATTERN = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,98}[A-Za-z0-9])?")
+HEX40_PATTERN = re.compile(r"[0-9a-f]{40}")
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 ([A-Za-z0-9+/]+={0,2})")
+SAFE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+BOUNDARY = (
+    "GitHub's public API resolved one annotated tag to this commit and tree at "
+    "the observation time. Lumen's separate same-operator key signed the "
+    "observation; it is not an independent witness and does not prove test "
+    "execution, reproducibility, code quality, origin control, authorship, use, "
+    "or independent operation."
+)
+
+
+class ReleaseProofError(Exception):
+    """A bounded user-facing release-proof error."""
+
+
+def required_executable(name: str) -> str:
+    executable = shutil.which(name, path=SAFE_PATH)
+    if executable is None:
+        raise ReleaseProofError(f"required executable is unavailable: {name}")
+    return executable
+
+
+def utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+
+
+def utc_text(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_moment(value: object, label: str) -> dt.datetime:
+    if not isinstance(value, str):
+        raise ReleaseProofError(f"{label} must be an RFC 3339 timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ReleaseProofError(f"{label} is not a valid RFC 3339 timestamp") from error
+    if parsed.tzinfo is None:
+        raise ReleaseProofError(f"{label} must include a timezone")
+    normalized = parsed.astimezone(dt.timezone.utc).replace(microsecond=0)
+    if value != utc_text(normalized):
+        raise ReleaseProofError(f"{label} must use UTC whole seconds ending in Z")
+    return normalized
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    record: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in record:
+            raise ReleaseProofError(f"JSON repeats key: {key}")
+        record[key] = value
+    return record
+
+
+def canonical_bytes(record: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ReleaseProofError(f"{label} does not exist: {absolute}") from error
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise ReleaseProofError(f"{label} must be a regular, nonsymlink file")
+    if metadata.st_nlink != 1:
+        raise ReleaseProofError(f"{label} must have exactly one hard link")
+    if metadata.st_size > maximum:
+        raise ReleaseProofError(f"{label} exceeds {maximum} bytes")
+    return absolute.read_bytes()
+
+
+def load_json_bytes(data: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ReleaseProofError(f"{label} is not UTF-8") from error
+    try:
+        result = json.loads(decoded, object_pairs_hook=reject_duplicate_keys)
+    except json.JSONDecodeError as error:
+        raise ReleaseProofError(f"{label} is not valid JSON") from error
+    if not isinstance(result, dict):
+        raise ReleaseProofError(f"{label} must be a JSON object")
+    return result
+
+
+def load_json_file(path: Path, label: str, maximum: int) -> dict[str, Any]:
+    return load_json_bytes(read_regular(path, label, maximum), label)
+
+
+def require_exact_keys(
+    record: dict[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
+    actual = set(record)
+    if actual == expected:
+        return
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    detail = []
+    if missing:
+        detail.append(f"missing {', '.join(missing)}")
+    if extra:
+        detail.append(f"unknown {', '.join(extra)}")
+    raise ReleaseProofError(f"{label} has {'; '.join(detail)}")
+
+
+def public_id(value: object, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) > 96
+        or PUBLIC_ID_PATTERN.fullmatch(value) is None
+    ):
+        raise ReleaseProofError(f"{label} must be a lowercase hyphenated identifier")
+    return value
+
+
+def repository_name(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 200:
+        raise ReleaseProofError("repository must be OWNER/NAME")
+    parts = value.split("/")
+    if (
+        len(parts) != 2
+        or any(REPOSITORY_PART_PATTERN.fullmatch(part) is None for part in parts)
+        or parts[1].endswith(".git")
+    ):
+        raise ReleaseProofError("repository must be a bounded GitHub OWNER/NAME")
+    return value
+
+
+def tag_name(value: object) -> str:
+    if not isinstance(value, str) or not 1 <= len(value) <= 128:
+        raise ReleaseProofError("tag must contain between 1 and 128 characters")
+    if (
+        value.startswith(("/", "."))
+        or value.endswith(("/", "."))
+        or ".." in value
+        or "//" in value
+        or "@{" in value
+        or "\\" in value
+        or any(ord(character) < 33 or ord(character) == 127 for character in value)
+    ):
+        raise ReleaseProofError("tag is not a safe Git reference component")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/+-]*", value) is None:
+        raise ReleaseProofError("tag contains an unsupported character")
+    return value
+
+
+def hex40(value: object, label: str) -> str:
+    if not isinstance(value, str) or HEX40_PATTERN.fullmatch(value) is None:
+        raise ReleaseProofError(f"{label} must be a lowercase 40-digit Git object id")
+    return value
+
+
+def repository_urls(repository: str, tag: str) -> dict[str, str]:
+    owner, name = repository.split("/", 1)
+    api_repository = f"{quote(owner, safe='')}/{quote(name, safe='')}"
+    encoded_tag = quote(tag, safe="")
+    return {
+        "repository_url": f"{GITHUB_ORIGIN}/{owner}/{name}",
+        "release_url": f"{GITHUB_ORIGIN}/{owner}/{name}/releases/tag/{encoded_tag}",
+        "ref_url": (
+            f"{GITHUB_API_ORIGIN}/repos/{api_repository}/git/ref/tags/{encoded_tag}"
+        ),
+    }
+
+
+def public_addresses() -> list[str]:
+    try:
+        answers = socket.getaddrinfo(
+            GITHUB_API_HOST,
+            443,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror as error:
+        raise ReleaseProofError(f"GitHub API DNS resolution failed: {error}") from error
+    addresses = sorted({answer[4][0] for answer in answers})
+    if not addresses:
+        raise ReleaseProofError("GitHub API DNS returned no addresses")
+    for address in addresses:
+        if not ipaddress.ip_address(address).is_global:
+            raise ReleaseProofError(
+                f"GitHub API DNS includes a non-public address: {address}"
+            )
+    return addresses
+
+
+def github_get(url: str, address: str) -> dict[str, Any]:
+    if not url.startswith(f"{GITHUB_API_ORIGIN}/") or "?" in url or "#" in url:
+        raise ReleaseProofError("unsafe GitHub API URL")
+    pinned = f"{GITHUB_API_HOST}:443:{address}"
+    if ":" in address:
+        pinned = f"{GITHUB_API_HOST}:443:[{address}]"
+    with tempfile.TemporaryDirectory(prefix="wywa-release-provider-") as temporary:
+        output = Path(temporary) / "response.json"
+        result = subprocess.run(
+            [
+                required_executable("curl"),
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--tlsv1.2",
+                "--max-redirs",
+                "0",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "20",
+                "--max-filesize",
+                str(MAX_PROVIDER_BYTES),
+                "--noproxy",
+                "*",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--resolve",
+                pinned,
+                "--header",
+                "Accept: application/vnd.github+json",
+                "--header",
+                f"X-GitHub-Api-Version: {GITHUB_API_VERSION}",
+                "--header",
+                "User-Agent: wywa-release-proof/1",
+                "--output",
+                str(output),
+                url,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip().splitlines()
+            summary = detail[-1] if detail else f"curl exited {result.returncode}"
+            raise ReleaseProofError(f"GitHub API request failed: {summary}")
+        data = read_regular(output, "GitHub API response", MAX_PROVIDER_BYTES)
+    return load_json_bytes(data, "GitHub API response")
+
+
+def provider_object(
+    record: dict[str, Any],
+    *,
+    label: str,
+    expected_type: str,
+    expected_url: str,
+) -> str:
+    value = record.get("object")
+    if not isinstance(value, dict):
+        raise ReleaseProofError(f"{label} omits its object")
+    if value.get("type") != expected_type:
+        raise ReleaseProofError(
+            f"{label} must resolve to a Git {expected_type} object"
+        )
+    object_id = hex40(value.get("sha"), f"{label} object sha")
+    if value.get("url") != expected_url:
+        raise ReleaseProofError(f"{label} object URL differs from the expected API URL")
+    return object_id
+
+
+def compile_github_bundle(
+    reference: dict[str, Any],
+    tag_record: dict[str, Any],
+    commit_record: dict[str, Any],
+    *,
+    bundle_id_value: str,
+    product_id_value: str,
+    repository_value: str,
+    tag_value: str,
+    verified_at: dt.datetime,
+    validity: dt.timedelta,
+) -> dict[str, Any]:
+    bundle_id = public_id(bundle_id_value, "bundle_id")
+    product_id = public_id(product_id_value, "product_id")
+    repository = repository_name(repository_value)
+    tag = tag_name(tag_value)
+    if validity <= dt.timedelta(0) or validity > MAX_VALIDITY:
+        raise ReleaseProofError("release proof validity must be between one second and 7 days")
+    urls = repository_urls(repository, tag)
+    if reference.get("ref") != f"refs/tags/{tag}":
+        raise ReleaseProofError("GitHub ref response differs from the requested tag")
+    reference_object = reference.get("object")
+    if not isinstance(reference_object, dict):
+        raise ReleaseProofError("GitHub ref response omits its object")
+    tag_object_guess = hex40(
+        reference_object.get("sha"),
+        "annotated tag object sha",
+    )
+    tag_api_url = (
+        f"{GITHUB_API_ORIGIN}/repos/{repository}/git/tags/{tag_object_guess}"
+    )
+    tag_object = provider_object(
+        reference,
+        label="GitHub ref",
+        expected_type="tag",
+        expected_url=tag_api_url,
+    )
+    if tag_record.get("sha") != tag_object or tag_record.get("tag") != tag:
+        raise ReleaseProofError("GitHub annotated-tag response differs from the ref")
+    tag_target = tag_record.get("object")
+    if not isinstance(tag_target, dict):
+        raise ReleaseProofError("GitHub annotated-tag response omits its target")
+    commit_guess = hex40(tag_target.get("sha"), "release commit sha")
+    commit_api_url = (
+        f"{GITHUB_API_ORIGIN}/repos/{repository}/git/commits/{commit_guess}"
+    )
+    commit = provider_object(
+        tag_record,
+        label="GitHub annotated tag",
+        expected_type="commit",
+        expected_url=commit_api_url,
+    )
+    if commit_record.get("sha") != commit:
+        raise ReleaseProofError("GitHub commit response differs from the tag target")
+    tree_record = commit_record.get("tree")
+    if not isinstance(tree_record, dict):
+        raise ReleaseProofError("GitHub commit response omits its tree")
+    tree = hex40(tree_record.get("sha"), "release tree sha")
+    tree_api_url = f"{GITHUB_API_ORIGIN}/repos/{repository}/git/trees/{tree}"
+    if tree_record.get("url") != tree_api_url:
+        raise ReleaseProofError("GitHub commit tree URL differs from the expected API URL")
+    observed = verified_at.astimezone(dt.timezone.utc).replace(microsecond=0)
+    return {
+        "schema_version": 1,
+        "bundle_id": bundle_id,
+        "product_id": product_id,
+        "provider": "github",
+        "adapter": ADAPTER,
+        "verified_at": utc_text(observed),
+        "expires_at": utc_text(observed + validity),
+        "observation": {
+            "repository": repository,
+            "repository_url": urls["repository_url"],
+            "release_url": urls["release_url"],
+            "tag": tag,
+            "tag_object_sha": tag_object,
+            "commit_sha": commit,
+            "tree_sha": tree,
+            "ref_url": urls["ref_url"],
+            "tag_object_url": tag_api_url,
+            "commit_url": commit_api_url,
+        },
+        "boundary": BOUNDARY,
+    }
+
+
+def validate_bundle(
+    bundle: dict[str, Any],
+    *,
+    at: dt.datetime,
+    require_current: bool,
+) -> dict[str, Any]:
+    require_exact_keys(
+        bundle,
+        {
+            "schema_version",
+            "bundle_id",
+            "product_id",
+            "provider",
+            "adapter",
+            "verified_at",
+            "expires_at",
+            "observation",
+            "boundary",
+        },
+        "release proof bundle",
+    )
+    if bundle["schema_version"] != 1:
+        raise ReleaseProofError("release proof bundle has an unsupported schema_version")
+    bundle_id = public_id(bundle["bundle_id"], "bundle_id")
+    product_id = public_id(bundle["product_id"], "product_id")
+    if bundle["provider"] != "github" or bundle["adapter"] != ADAPTER:
+        raise ReleaseProofError("release proof bundle has an unsupported provider adapter")
+    verified_at = parse_moment(bundle["verified_at"], "verified_at")
+    expires_at = parse_moment(bundle["expires_at"], "expires_at")
+    if expires_at <= verified_at or expires_at - verified_at > MAX_VALIDITY:
+        raise ReleaseProofError("release proof bundle has an invalid validity window")
+    if verified_at > at + CLOCK_SKEW:
+        raise ReleaseProofError("release proof bundle is issued too far in the future")
+    if require_current and expires_at <= at:
+        raise ReleaseProofError("release proof bundle is stale")
+    observation = bundle["observation"]
+    if not isinstance(observation, dict):
+        raise ReleaseProofError("release proof observation must be an object")
+    require_exact_keys(
+        observation,
+        {
+            "repository",
+            "repository_url",
+            "release_url",
+            "tag",
+            "tag_object_sha",
+            "commit_sha",
+            "tree_sha",
+            "ref_url",
+            "tag_object_url",
+            "commit_url",
+        },
+        "release proof observation",
+    )
+    repository = repository_name(observation["repository"])
+    tag = tag_name(observation["tag"])
+    tag_object = hex40(observation["tag_object_sha"], "tag_object_sha")
+    commit = hex40(observation["commit_sha"], "commit_sha")
+    tree = hex40(observation["tree_sha"], "tree_sha")
+    urls = repository_urls(repository, tag)
+    expected = {
+        "repository_url": urls["repository_url"],
+        "release_url": urls["release_url"],
+        "ref_url": urls["ref_url"],
+        "tag_object_url": (
+            f"{GITHUB_API_ORIGIN}/repos/{repository}/git/tags/{tag_object}"
+        ),
+        "commit_url": (
+            f"{GITHUB_API_ORIGIN}/repos/{repository}/git/commits/{commit}"
+        ),
+    }
+    for field, value in expected.items():
+        if observation[field] != value:
+            raise ReleaseProofError(
+                f"release proof observation {field} differs from its identifiers"
+            )
+    if bundle["boundary"] != BOUNDARY:
+        raise ReleaseProofError("release proof boundary differs from the reviewed adapter")
+    return {
+        "schema_version": 1,
+        "bundle_id": bundle_id,
+        "product_id": product_id,
+        "provider": "github",
+        "adapter": ADAPTER,
+        "verified_at": utc_text(verified_at),
+        "expires_at": utc_text(expires_at),
+        "observation": {
+            "repository": repository,
+            "repository_url": expected["repository_url"],
+            "release_url": expected["release_url"],
+            "tag": tag,
+            "tag_object_sha": tag_object,
+            "commit_sha": commit,
+            "tree_sha": tree,
+            "ref_url": expected["ref_url"],
+            "tag_object_url": expected["tag_object_url"],
+            "commit_url": expected["commit_url"],
+        },
+        "boundary": BOUNDARY,
+    }
+
+
+def validate_public_key(path: Path) -> str:
+    data = read_regular(path, "release proof public key", 4096)
+    try:
+        value = data.decode("ascii").strip()
+    except UnicodeDecodeError as error:
+        raise ReleaseProofError("release proof public key is not ASCII") from error
+    match = SSH_KEY_PATTERN.fullmatch(value)
+    if match is None:
+        raise ReleaseProofError(
+            "release proof public key must be comment-free ssh-ed25519"
+        )
+    try:
+        base64.b64decode(match.group(1), validate=True)
+    except ValueError as error:
+        raise ReleaseProofError("release proof public key has invalid base64") from error
+    return value
+
+
+def validate_private_key(path: Path) -> Path:
+    absolute = path.expanduser().absolute()
+    try:
+        metadata = absolute.lstat()
+    except FileNotFoundError as error:
+        raise ReleaseProofError("release proof private key does not exist") from error
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+    ):
+        raise ReleaseProofError(
+            "release proof private key must be one regular, nonsymlink file"
+        )
+    if metadata.st_mode & 0o077:
+        raise ReleaseProofError(
+            "release proof private key must not be accessible by group or others"
+        )
+    return absolute
+
+
+def atomic_write(path: Path, content: bytes, mode: int) -> None:
+    temporary = path.parent / f".{path.name}.{os.getpid()}.tmp"
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.chmod(mode)
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def write_signed_bundle(
+    bundle: dict[str, Any],
+    *,
+    key: Path,
+    output: Path,
+    replace: bool,
+) -> tuple[Path, Path]:
+    private_key = validate_private_key(key)
+    directory = output.expanduser().absolute()
+    if directory.exists() and (directory.is_symlink() or not directory.is_dir()):
+        raise ReleaseProofError("output must be a nonsymlink directory")
+    directory.mkdir(mode=0o755, parents=True, exist_ok=True)
+    directory.chmod(0o755)
+    target = directory / f"{bundle['bundle_id']}.json"
+    signature_target = directory / f"{bundle['bundle_id']}.sig"
+    if not replace and (
+        target.exists()
+        or target.is_symlink()
+        or signature_target.exists()
+        or signature_target.is_symlink()
+    ):
+        raise ReleaseProofError("release proof already exists; use --replace")
+    with tempfile.TemporaryDirectory(
+        prefix=".wywa-release-proof-",
+        dir=directory,
+    ) as temporary:
+        staging = Path(temporary) / target.name
+        staging.write_bytes(canonical_bytes(bundle))
+        staging.chmod(0o644)
+        result = subprocess.run(
+            [
+                required_executable("ssh-keygen"),
+                "-Y",
+                "sign",
+                "-q",
+                "-f",
+                str(private_key),
+                "-n",
+                NAMESPACE,
+                str(staging),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise ReleaseProofError("release proof signing failed")
+        staged_signature = Path(f"{staging}.sig")
+        if not staged_signature.is_file() or staged_signature.is_symlink():
+            raise ReleaseProofError("release proof signer omitted its signature")
+        staged_signature.chmod(0o644)
+        os.replace(staging, target)
+        os.replace(staged_signature, signature_target)
+    return target, signature_target
+
+
+def verify_signature(
+    bundle_bytes: bytes,
+    signature: Path,
+    public_key: Path,
+) -> None:
+    read_regular(signature, "release proof signature", MAX_SIGNATURE_BYTES)
+    key = validate_public_key(public_key)
+    with tempfile.TemporaryDirectory(prefix="wywa-release-verify-") as temporary:
+        allowed = Path(temporary) / "allowed_signers"
+        allowed.write_text(
+            f"{SIGNER_IDENTITY} {key}\n",
+            encoding="ascii",
+        )
+        result = subprocess.run(
+            [
+                required_executable("ssh-keygen"),
+                "-Y",
+                "verify",
+                "-f",
+                str(allowed),
+                "-I",
+                SIGNER_IDENTITY,
+                "-n",
+                NAMESPACE,
+                "-s",
+                str(signature.expanduser().absolute()),
+            ],
+            input=bundle_bytes,
+            capture_output=True,
+        )
+    if result.returncode != 0:
+        raise ReleaseProofError("release proof signature verification failed")
+
+
+def verification_record(
+    bundle: dict[str, Any],
+    bundle_bytes: bytes,
+) -> dict[str, Any]:
+    record = dict(bundle)
+    record.update(
+        {
+            "eligible": True,
+            "bundle_sha256": hashlib.sha256(bundle_bytes).hexdigest(),
+            "evidence": "signed-provider-release-observation",
+        }
+    )
+    return record
+
+
+def verify_bundle(args: argparse.Namespace) -> int:
+    at = utc_now() if args.at is None else parse_moment(args.at, "--at")
+    bundle_bytes = read_regular(args.bundle, "release proof bundle", MAX_BUNDLE_BYTES)
+    bundle = validate_bundle(
+        load_json_bytes(bundle_bytes, "release proof bundle"),
+        at=at,
+        require_current=not args.allow_stale,
+    )
+    if canonical_bytes(bundle) != bundle_bytes:
+        raise ReleaseProofError("release proof bundle is not canonical JSON")
+    verify_signature(bundle_bytes, args.signature, args.public_key)
+    print(json.dumps(verification_record(bundle, bundle_bytes), indent=2, sort_keys=True))
+    return 0
+
+
+def github_tag(args: argparse.Namespace) -> int:
+    repository = repository_name(args.repository)
+    tag = tag_name(args.tag)
+    urls = repository_urls(repository, tag)
+    failures: list[str] = []
+    for address in public_addresses():
+        try:
+            reference = github_get(urls["ref_url"], address)
+            reference_object = reference.get("object")
+            if not isinstance(reference_object, dict):
+                raise ReleaseProofError("GitHub ref response omits its object")
+            tag_object = hex40(
+                reference_object.get("sha"),
+                "annotated tag object sha",
+            )
+            tag_url = (
+                f"{GITHUB_API_ORIGIN}/repos/{repository}/git/tags/{tag_object}"
+            )
+            tag_record = github_get(tag_url, address)
+            target = tag_record.get("object")
+            if not isinstance(target, dict):
+                raise ReleaseProofError("GitHub annotated tag omits its target")
+            commit = hex40(target.get("sha"), "release commit sha")
+            commit_url = (
+                f"{GITHUB_API_ORIGIN}/repos/{repository}/git/commits/{commit}"
+            )
+            commit_record = github_get(commit_url, address)
+            observed = utc_now()
+            bundle = compile_github_bundle(
+                reference,
+                tag_record,
+                commit_record,
+                bundle_id_value=args.bundle_id,
+                product_id_value=args.product_id,
+                repository_value=repository,
+                tag_value=tag,
+                verified_at=observed,
+                validity=dt.timedelta(days=args.expires_days),
+            )
+            bundle = validate_bundle(bundle, at=observed, require_current=True)
+            bundle_path, signature_path = write_signed_bundle(
+                bundle,
+                key=args.key,
+                output=args.output,
+                replace=args.replace,
+            )
+            bundle_bytes = read_regular(
+                bundle_path,
+                "release proof bundle",
+                MAX_BUNDLE_BYTES,
+            )
+            public_key = Path(f"{args.key.expanduser().absolute()}.pub")
+            verify_signature(bundle_bytes, signature_path, public_key)
+            print(
+                json.dumps(
+                    verification_record(bundle, bundle_bytes),
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        except ReleaseProofError as error:
+            failures.append(f"{address}: {error}")
+    raise ReleaseProofError(
+        "no resolved GitHub API address returned one valid annotated-tag chain ("
+        + "; ".join(failures)
+        + ")"
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Observe one bounded public release-provider claim and verify its "
+            "signed bundle."
+        )
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    github_parser = subparsers.add_parser(
+        "github-tag",
+        help="observe one GitHub annotated tag, commit, and tree through the public API",
+    )
+    github_parser.add_argument("--bundle-id", required=True)
+    github_parser.add_argument("--product-id", required=True)
+    github_parser.add_argument("--repository", required=True)
+    github_parser.add_argument("--tag", required=True)
+    github_parser.add_argument("--key", type=Path, required=True)
+    github_parser.add_argument("--output", type=Path, required=True)
+    github_parser.add_argument("--expires-days", type=int, default=7)
+    github_parser.add_argument("--replace", action="store_true")
+    github_parser.set_defaults(handler=github_tag)
+
+    verify_parser = subparsers.add_parser("verify-bundle")
+    verify_parser.add_argument("bundle", type=Path)
+    verify_parser.add_argument("signature", type=Path)
+    verify_parser.add_argument("--public-key", type=Path, required=True)
+    verify_parser.add_argument("--at")
+    verify_parser.add_argument("--allow-stale", action="store_true")
+    verify_parser.set_defaults(handler=verify_bundle)
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    if getattr(args, "expires_days", 1) < 1 or getattr(args, "expires_days", 1) > 7:
+        raise ReleaseProofError("--expires-days must be between 1 and 7")
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except ReleaseProofError as error:
+        print(f"{PROGRAM}: {error}", file=sys.stderr)
+        raise SystemExit(2) from None

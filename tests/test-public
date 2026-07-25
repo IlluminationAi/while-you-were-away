@@ -308,6 +308,14 @@ grep -Fq 'location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {' \
 grep -Fq 'location ~ ^/products/claims/[a-z0-9]+(?:-[a-z0-9]+)*\.sig$ {' \
   "$available" ||
   fail "public nginx configuration omitted product signatures"
+grep -Fq 'location = /products/releases/key.pub {' "$available" ||
+  fail "public nginx configuration omitted the release observer key"
+grep -Fq 'location ~ ^/products/releases/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {' \
+  "$available" ||
+  fail "public nginx configuration omitted release observation bundles"
+grep -Fq 'location ~ ^/products/releases/[a-z0-9]+(?:-[a-z0-9]+)*\.sig$ {' \
+  "$available" ||
+  fail "public nginx configuration omitted release observation signatures"
 grep -Fq 'location = /products/receipts/key.pub {' "$available" ||
   fail "public nginx configuration omitted the economics verifier key"
 grep -Fq 'location ~ ^/products/receipts/[a-z0-9]+(?:-[a-z0-9]+)*\.json$ {' \

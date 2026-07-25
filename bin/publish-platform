@@ -28,6 +28,7 @@ SITE_CSS = PROJECT / "platform" / "site.css"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
 RECEIPT = PROJECT / "bin" / "wywa-receipt"
+RELEASE_PROOF = PROJECT / "bin" / "wywa-release-proof"
 DEFAULT_SITE_ROOT = Path("/var/www/while-you-were-away")
 DEFAULT_RUNTIME_ROOT = Path("/var/lib/agent-life/runtime")
 DEFAULT_BASE_URL = "https://while-you-were-away.online"
@@ -40,6 +41,8 @@ MAX_PRODUCT_CLAIM_BYTES = 64 * 1024
 MAX_PRODUCT_SIGNATURE_BYTES = 16 * 1024
 MAX_ECONOMICS_BUNDLE_BYTES = 256 * 1024
 MAX_ECONOMICS_SIGNATURE_BYTES = 16 * 1024
+MAX_RELEASE_BUNDLE_BYTES = 128 * 1024
+MAX_RELEASE_SIGNATURE_BYTES = 16 * 1024
 MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
 MAX_REGISTRY_AUDIT_BYTES = 2 * 1024 * 1024
 MAX_REGISTRY_PAGE_BYTES = 512 * 1024
@@ -104,6 +107,7 @@ def validate_products(record: dict[str, Any]) -> None:
         if isinstance(item, dict)
     }
     bundle_ids: set[str] = set()
+    release_bundle_ids: set[str] = set()
     for product in record["products"]:
         product_id = product.get("id")
         if (
@@ -139,6 +143,21 @@ def validate_products(record: dict[str, Any]) -> None:
             or not proof["url"].startswith("https://")
         ):
             raise ValueError(f"product {product_id} has invalid release evidence")
+        release_proof_bundles = product.get("release_proof_bundles")
+        if not isinstance(release_proof_bundles, list):
+            raise ValueError(
+                f"product {product_id} release_proof_bundles must be a list"
+            )
+        for bundle_id in release_proof_bundles:
+            if (
+                not isinstance(bundle_id, str)
+                or PUBLIC_ID_PATTERN.fullmatch(bundle_id) is None
+                or bundle_id in release_bundle_ids
+            ):
+                raise ValueError(
+                    "release proof bundle ids must be unique public ids"
+                )
+            release_bundle_ids.add(bundle_id)
         economics = product.get("economics")
         if not isinstance(economics, dict):
             raise ValueError(f"product {product_id} omits economics")
@@ -292,10 +311,30 @@ def compile_product_catalog(
     economics_policy: dict[str, Any],
     generated_at: str,
     identity_claims: dict[str, dict[str, Any]] | None = None,
+    release_observations: dict[str, list[dict[str, Any]]] | None = None,
+    release_provider_verification: dict[str, Any] | None = None,
     economics_events: dict[str, list[dict[str, Any]]] | None = None,
     provider_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     claims = {} if identity_claims is None else identity_claims
+    observed_releases = (
+        {} if release_observations is None else release_observations
+    )
+    release_provider_state = (
+        {
+            "status": "not-configured",
+            "adapter": "github-annotated-tag-v1",
+            "signed_bundles": 0,
+            "verified_products": 0,
+            "uncovered_products": len(products),
+            "boundary": (
+                "No signed release-observation directory was supplied to this "
+                "publisher profile."
+            ),
+        }
+        if release_provider_verification is None
+        else copy.deepcopy(release_provider_verification)
+    )
     verified_events = {} if economics_events is None else economics_events
     provider_state = (
         {
@@ -395,6 +434,9 @@ def compile_product_catalog(
                 "description": product["description"],
                 "url": product["url"],
                 "release_evidence": copy.deepcopy(product["release_evidence"]),
+                "release_observations": copy.deepcopy(
+                    observed_releases.get(product["id"], [])
+                ),
                 "identity_claim": copy.deepcopy(
                     claims.get(
                         product["id"],
@@ -444,10 +486,11 @@ def compile_product_catalog(
         ),
     )
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": generated_at,
         "admission": "reviewed-closed",
-        "evidence_contract": "signed-provider-bundles-v1",
+        "evidence_contract": "signed-provider-release-and-settlement-bundles-v1",
+        "release_verification": release_provider_state,
         "provider_verification": provider_state,
         "currency": economics_policy["currency"],
         "definition": economics_policy["definition"],
@@ -462,6 +505,9 @@ def compile_product_catalog(
             ),
             "ranking_eligible_products": ranking_eligible,
             "provider_verified_events": total_events,
+            "provider_observed_releases": sum(
+                len(items) for items in observed_releases.values()
+            ),
         },
         "ranking": {
             "measure": "verified_gross_revenue_usd",
@@ -661,6 +707,7 @@ def build_snapshot(
             "admission": product_catalog["admission"],
             "catalog": f"{site['base_url']}/products/index.json",
             "evidence_contract": product_catalog["evidence_contract"],
+            "release_verification": product_catalog["release_verification"],
             "provider_verification": product_catalog["provider_verification"],
             "ranking": product_catalog["ranking"],
             "popularity": product_catalog["popularity"],
@@ -752,10 +799,13 @@ def render_metric(
 
 def product_catalog_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": snapshot["generated_at"],
         "admission": snapshot["product_hub"]["admission"],
         "evidence_contract": snapshot["product_hub"]["evidence_contract"],
+        "release_verification": snapshot["product_hub"][
+            "release_verification"
+        ],
         "provider_verification": snapshot["product_hub"][
             "provider_verification"
         ],
@@ -777,6 +827,7 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
     summary = snapshot["economics"]["summary"]
     ranking = snapshot["economics"]["ranking"]
     popularity = snapshot["economics"]["popularity"]
+    release_verification = snapshot["product_hub"]["release_verification"]
     provider_verification = snapshot["product_hub"]["provider_verification"]
     product_cards = []
     for product in snapshot["products"]:
@@ -841,6 +892,26 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
             if isinstance(origin_claim, dict)
             else ""
         )
+        release_observation_rows = "".join(
+            f"""
+            <div class="product-proof">
+              <span>{esc(observation['provider'])} annotated tag observed · checked {esc(visible_time(observation['verified_at']))}</span>
+              <p>{esc(observation['tag'])} → commit {esc(observation['commit_sha'][:12])} → tree {esc(observation['tree_sha'][:12])}</p>
+              <p>{esc(observation['boundary'])}</p>
+              <a href="{esc(observation['record_url'])}" rel="noreferrer">signed provider observation ↗</a>
+              <a href="{esc(observation['signature_url'])}" rel="noreferrer">detached signature ↗</a>
+            </div>"""
+            for observation in product["release_observations"]
+        )
+        release_observation_block = (
+            release_observation_rows
+            if release_observation_rows
+            else """
+            <div class="product-proof">
+              <span>provider release observation unavailable</span>
+              <p>No fresh signed code-provider observation is published for this product. Its maker claim and live service remain separate evidence.</p>
+            </div>"""
+        )
         product_cards.append(
             f"""
           <article class="product-record">
@@ -850,10 +921,11 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
             {identity_block}
             {origin_block}
             <div class="product-proof">
-              <span>{esc(product['release_evidence']['kind'])}</span>
+              <span>maker release claim · {esc(product['release_evidence']['kind'])}</span>
               <p>{esc(product['release_evidence']['claim'])}</p>
-              <a href="{esc(product['release_evidence']['url'])}" rel="noreferrer">inspect release evidence ↗</a>
+              <a href="{esc(product['release_evidence']['url'])}" rel="noreferrer">inspect claimed release ↗</a>
             </div>
+            {release_observation_block}
             <dl class="product-money">
               <div><dt>Gross revenue</dt><dd>${esc(product_economics['verified_gross_revenue_usd'])}</dd></div>
               <div><dt>Refunds</dt><dd>${esc(product_economics['verified_refunds_usd'])}</dd></div>
@@ -950,7 +1022,8 @@ def render_product_hub(snapshot: dict[str, Any]) -> str:
           <div class="method-grid">
             <div><h3>Included</h3><p>Only fresh signed provider bundles enter the sums. Inline amounts and receipt URLs without provider state are refused.</p></div>
             <div><h3>Still unknown</h3><p>An empty evidence set means no qualifying event has been published. It does not prove that actual revenue, cost, use, or value is zero.</p></div>
-            <div><h3>Verifier</h3><p>{esc(provider_verification['status'])} · {esc(provider_verification['adapter'])} · {esc(provider_verification['boundary'])}</p></div>
+            <div><h3>Release observer</h3><p>{esc(release_verification['status'])} · {esc(release_verification['adapter'])} · {esc(release_verification['boundary'])}</p></div>
+            <div><h3>Settlement verifier</h3><p>{esc(provider_verification['status'])} · {esc(provider_verification['adapter'])} · {esc(provider_verification['boundary'])}</p></div>
           </div>
         </details>
       </section>
@@ -1527,10 +1600,168 @@ def read_product_proofs(
     return content, verifications
 
 
+def read_release_proofs(
+    directory: Path | None,
+    public_key: Path | None,
+    products: list[dict[str, Any]],
+    snapshot: dict[str, Any],
+) -> tuple[
+    dict[str, bytes],
+    dict[str, list[dict[str, Any]]],
+    dict[str, Any] | None,
+]:
+    expected: dict[str, str] = {}
+    for product in products:
+        for bundle_id in product["release_proof_bundles"]:
+            if bundle_id in expected:
+                raise ValueError(f"release proof bundle id is reused: {bundle_id}")
+            expected[bundle_id] = product["id"]
+    if directory is None:
+        if expected:
+            raise ValueError("reviewed release proofs require --release-proof-dir")
+        if public_key is not None:
+            raise ValueError("release public key requires --release-proof-dir")
+        return {}, {}, None
+    if public_key is None:
+        raise ValueError("release proof directory requires --release-public-key")
+    if not directory.is_absolute() or not public_key.is_absolute():
+        raise ValueError("release proof paths must be absolute")
+    if not directory.is_dir() or directory.is_symlink():
+        raise ValueError("release proof directory must be a nonsymlink directory")
+    if not public_key.is_file() or public_key.is_symlink():
+        raise ValueError("release public key must be a regular file")
+    if not RELEASE_PROOF.is_file() or RELEASE_PROOF.is_symlink():
+        raise ValueError("release proof verifier is unavailable")
+    key_bytes = public_key.read_bytes()
+    if len(key_bytes) > 4096:
+        raise ValueError("release public key is too large")
+    content: dict[str, bytes] = {
+        "products/releases/key.pub": key_bytes,
+    }
+    observations: dict[str, list[dict[str, Any]]] = {
+        product["id"]: [] for product in products
+    }
+    products_by_id = {product["id"]: product for product in products}
+    expected_names: set[str] = set()
+    base_url = snapshot["site"]["base_url"]
+    for bundle_id, product_id in sorted(expected.items()):
+        bundle = directory / f"{bundle_id}.json"
+        signature = directory / f"{bundle_id}.sig"
+        expected_names.update({bundle.name, signature.name})
+        for path, label, maximum in (
+            (bundle, f"release proof bundle {bundle_id}", MAX_RELEASE_BUNDLE_BYTES),
+            (
+                signature,
+                f"release proof signature {bundle_id}",
+                MAX_RELEASE_SIGNATURE_BYTES,
+            ),
+        ):
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"{label} must be a regular, nonsymlink file")
+            if path.stat().st_size > maximum:
+                raise ValueError(f"{label} is too large")
+        result = subprocess.run(
+            [
+                str(RELEASE_PROOF),
+                "verify-bundle",
+                str(bundle),
+                str(signature),
+                "--public-key",
+                str(public_key),
+                "--at",
+                snapshot["generated_at"],
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = result.stderr.strip().splitlines()
+            summary = detail[-1] if detail else "verification failed"
+            raise ValueError(f"release proof bundle {bundle_id} is invalid: {summary}")
+        try:
+            verified = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise ValueError(
+                f"release proof verifier returned invalid JSON: {bundle_id}"
+            ) from error
+        product = products_by_id[product_id]
+        if (
+            verified.get("eligible") is not True
+            or verified.get("bundle_id") != bundle_id
+            or verified.get("product_id") != product_id
+            or verified.get("observation", {}).get("release_url")
+            != product["release_evidence"]["url"]
+        ):
+            raise ValueError(
+                f"release proof bundle {bundle_id} differs from reviewed scope"
+            )
+        observation = verified["observation"]
+        record_url = f"{base_url}/products/releases/{bundle_id}.json"
+        signature_url = f"{base_url}/products/releases/{bundle_id}.sig"
+        observations[product_id].append(
+            {
+                "status": "provider-observed",
+                "provider": verified["provider"],
+                "adapter": verified["adapter"],
+                "bundle_id": bundle_id,
+                "verified_at": verified["verified_at"],
+                "expires_at": verified["expires_at"],
+                "repository": observation["repository"],
+                "repository_url": observation["repository_url"],
+                "release_url": observation["release_url"],
+                "tag": observation["tag"],
+                "tag_object_sha": observation["tag_object_sha"],
+                "commit_sha": observation["commit_sha"],
+                "tree_sha": observation["tree_sha"],
+                "record_url": record_url,
+                "signature_url": signature_url,
+                "boundary": verified["boundary"],
+            }
+        )
+        content[f"products/releases/{bundle_id}.json"] = bundle.read_bytes()
+        content[f"products/releases/{bundle_id}.sig"] = signature.read_bytes()
+    extras = sorted(
+        path.name
+        for path in directory.iterdir()
+        if path.name not in expected_names and path.name != "README.md"
+    )
+    if extras:
+        raise ValueError(
+            "release proof directory contains unexpected entries: "
+            + ", ".join(extras)
+        )
+    verified_products = sum(bool(items) for items in observations.values())
+    state = {
+        "status": (
+            "configured-current"
+            if verified_products == len(products)
+            else "configured-partial"
+            if verified_products
+            else "configured-no-observations"
+        ),
+        "adapter": "github-annotated-tag-v1",
+        "signed_bundles": len(expected),
+        "verified_products": verified_products,
+        "uncovered_products": len(products) - verified_products,
+        "public_key_url": f"{base_url}/products/releases/key.pub",
+        "public_key_sha256": hashlib.sha256(key_bytes).hexdigest(),
+        "boundary": (
+            "Fresh bundles are signed by Lumen's separate same-operator "
+            "observer key only after GitHub's public API resolves an annotated "
+            "tag to one commit and tree. This is provider-state evidence, not "
+            "an independent witness, outside review, test execution, "
+            "reproducibility, quality, or independent operation."
+        ),
+    }
+    return content, observations, state
+
+
 def apply_product_claims(
     snapshot: dict[str, Any],
     public: dict[str, Any],
     claims: dict[str, dict[str, Any]],
+    release_observations: dict[str, list[dict[str, Any]]],
+    release_provider_verification: dict[str, Any] | None,
     economics_events: dict[str, list[dict[str, Any]]],
     provider_verification: dict[str, Any] | None,
 ) -> None:
@@ -1539,6 +1770,8 @@ def apply_product_claims(
         public["economics"],
         snapshot["generated_at"],
         claims,
+        release_observations,
+        release_provider_verification,
         economics_events,
         provider_verification,
     )
@@ -1557,6 +1790,7 @@ def apply_product_claims(
         "admission": catalog["admission"],
         "catalog": f"{snapshot['site']['base_url']}/products/index.json",
         "evidence_contract": catalog["evidence_contract"],
+        "release_verification": catalog["release_verification"],
         "provider_verification": catalog["provider_verification"],
         "ranking": catalog["ranking"],
         "popularity": catalog["popularity"],
@@ -2383,6 +2617,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="comment-free Ed25519 public key for economics bundle verification",
     )
     parser.add_argument(
+        "--release-proof-dir",
+        type=Path,
+        help=(
+            "optional signed release-provider observations selected by the "
+            "reviewed product records"
+        ),
+    )
+    parser.add_argument(
+        "--release-public-key",
+        type=Path,
+        help="comment-free Ed25519 public key for release bundle verification",
+    )
+    parser.add_argument(
         "--registry-export-dir",
         type=Path,
         help=(
@@ -2439,6 +2686,14 @@ def main() -> int:
         public["products"],
         snapshot,
     )
+    release_proofs, release_observations, release_provider_verification = (
+        read_release_proofs(
+            args.release_proof_dir,
+            args.release_public_key,
+            public["products"],
+            snapshot,
+        )
+    )
     economics_proofs, economics_events, provider_verification = (
         read_economics_proofs(
             args.economics_proof_dir,
@@ -2449,11 +2704,18 @@ def main() -> int:
     )
     if set(product_proofs).intersection(economics_proofs):
         raise SystemExit("publish-platform: product proof paths collide")
+    if set(product_proofs).intersection(release_proofs):
+        raise SystemExit("publish-platform: release proof paths collide")
+    product_proofs.update(release_proofs)
+    if set(product_proofs).intersection(economics_proofs):
+        raise SystemExit("publish-platform: economics proof paths collide")
     product_proofs.update(economics_proofs)
     apply_product_claims(
         snapshot,
         public,
         product_claims,
+        release_observations,
+        release_provider_verification,
         economics_events,
         provider_verification,
     )
@@ -2476,6 +2738,19 @@ def main() -> int:
                     "settled revenue",
                     "settled refunds",
                     "direct payment-processing costs",
+                ],
+            }
+        )
+    if release_provider_verification is not None:
+        snapshot["sources"].append(
+            {
+                "id": "signed-provider-release-observations",
+                "label": "Fresh signed provider release observations",
+                "path": "products/releases/*.json + detached signatures",
+                "covers": [
+                    "annotated release tag",
+                    "provider-resolved commit",
+                    "provider-resolved tree",
                 ],
             }
         )
