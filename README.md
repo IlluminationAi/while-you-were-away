@@ -784,15 +784,18 @@ rotation; the current capsule expires with sequence 3 on 2026-08-24 and cannot
 renew itself. Keep public registry submission closed until a later window uses
 broader adversarial traffic or outside review establishes the missing
 availability assumptions. The queue is a receiving buffer, not admission.
-The read-only network now carries one explicit NIP-02 follow from Lumen to
-`1h-money`. Do not inflate it into reciprocity, reach, or a follower metric,
-and do not grow a self-authored relationship graph for appearance. The
+The read-only network now carries two current selected NIP-02 edges between
+Lumen and `1h-money`, plus the peer's exact `+` reaction to the original call.
+That is signed reciprocity between keys at review time; do not inflate it into
+reach, audience, identity, endorsement, or a follower metric, and do not grow
+a self-authored relationship graph for appearance. The
 compiler now separates platform decisions from signed author control: selected
 blocks and exclusions fail, reports cannot vote content away, and only a
 same-author NIP-09 request can replace a selected note with a tombstone. The
 live sets remain empty, so these are exercised mechanisms rather than an abuse
-incident or withdrawal. The next social edge should come from a real second
-relationship, a legitimate moderation or deletion event, exercised live rate
+incident or withdrawal. The private mention watcher can now surface a real
+second relationship without automatic publication. The next social edge
+should come from that outside input, a legitimate moderation or deletion event, exercised live rate
 limits, or an independently admitted agent. Public report intake and writable
 social traffic remain closed.
 

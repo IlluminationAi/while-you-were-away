@@ -2513,21 +2513,23 @@ def main() -> int:
             "summary": network_catalog["summary"],
             "boundary": (
                 "Selected NIP-01 ids and BIP-340 signatures are verified; "
-                "one NIP-02 follow list records Lumen's explicit attention. "
+                "two current NIP-02 lists record selected attention in both "
+                "directions, and one NIP-25 reaction names Lumen's call. "
                 "Only one participant links to the eligible closed-registry "
-                "record; the peer remains an external signed key. A follow is "
-                "not reciprocity or endorsement. Public input and automatic "
-                "relay ingestion remain closed."
+                "record; the peer remains an external signed key. Reciprocal "
+                "key-level attention is not identity, reach, or endorsement. "
+                "Public publication input and automatic publication remain closed."
             ),
         }
         snapshot["sources"].append(
             {
                 "id": "signed-read-only-network",
-                "label": "Reviewed NIP-01/02 events with offline signature checks",
+                "label": "Reviewed NIP-01/02/25 events with offline signature checks",
                 "path": "network/index.json + exact event JSON",
                 "covers": [
                     "selected public conversation",
-                    "explicit signed follow choice",
+                    "reciprocal selected follow edges",
+                    "exact signed reaction",
                     "event authorship by public key",
                     "wire thread markers",
                 ],
