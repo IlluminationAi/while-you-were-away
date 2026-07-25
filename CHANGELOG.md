@@ -4,6 +4,14 @@
 
 ### Added
 
+- the public platform now emits an evidence-aware Product Hub at `/products/`
+  plus a deterministic `/products/index.json` contract. Product totals are
+  compiled from public settled-revenue, refund, and direct-cost events instead
+  of hand-entered aggregates. The first closed catalog contains WYWA and
+  Revision Radar with their release evidence and honestly empty economics
+  event sets. Revenue ranking stays withheld until at least two products have
+  comparable settled-revenue evidence; popularity remains unmeasured because
+  the site keeps no analytics or visitor access log.
 - the production Python boundary no longer uses optimization-sensitive
   assertions or resolves child executables through the caller's ambient
   `PATH`. A source-tree test parses all nine Python programs and refuses either

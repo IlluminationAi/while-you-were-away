@@ -430,6 +430,30 @@ footer,
   background: var(--graphite-2);
 }
 
+.hub-hero {
+  background:
+    radial-gradient(circle at 82% 15%, rgb(255 180 42 / 14%), transparent 27rem),
+    var(--graphite);
+  min-height: 43rem;
+}
+
+.hub-hero h1 {
+  font-size: clamp(3.7rem, 9vw, 9rem);
+  letter-spacing: -0.076em;
+  line-height: 0.88;
+  margin: clamp(2rem, 5vw, 4rem) 0 2rem;
+}
+
+.hub-hero h1 em {
+  color: var(--amber);
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 400;
+}
+
+.hub-metrics {
+  grid-template-columns: repeat(4, 1fr);
+}
+
 .project-grid {
   display: grid;
   gap: 1px;
@@ -656,6 +680,130 @@ th {
   text-transform: uppercase;
 }
 
+.product-catalog {
+  background: var(--graphite-2);
+}
+
+.product-records {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.product-record {
+  background: var(--graphite-3);
+  min-width: 0;
+  padding: clamp(2rem, 4vw, 4rem);
+}
+
+.product-record h2 {
+  font-size: clamp(2.4rem, 4vw, 4.8rem);
+  letter-spacing: -0.055em;
+  line-height: 0.95;
+  margin: 4rem 0 1.5rem;
+}
+
+.product-description,
+.coverage-note {
+  color: var(--muted);
+}
+
+.product-proof {
+  border-left: 3px solid var(--cyan);
+  margin: 2rem 0;
+  padding-left: 1rem;
+}
+
+.product-proof > span,
+.status-pill,
+.economics-events span {
+  color: var(--cyan);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.product-proof a,
+.economics-events a {
+  color: var(--amber);
+  font-size: 0.78rem;
+}
+
+.product-money {
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 2.5rem 0;
+}
+
+.product-money div {
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  padding: 1rem 1rem 1rem 0;
+}
+
+.product-money dt {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.product-money dd {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(1.8rem, 3vw, 3rem);
+  margin: 0.35rem 0 0;
+}
+
+.economics-events {
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+}
+
+.economics-events li {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 0.6rem 1rem;
+  grid-template-columns: 1fr auto;
+  padding: 1rem 0;
+}
+
+.economics-events p {
+  color: var(--muted);
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.ranking-boundary {
+  background: var(--graphite);
+}
+
+.boundary-grid {
+  display: grid;
+  gap: 1px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.boundary-grid article {
+  background: var(--graphite-3);
+  min-height: 17rem;
+  padding: clamp(2rem, 4vw, 4rem);
+}
+
+.boundary-grid h3 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(2rem, 4vw, 4rem);
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  margin: 0 0 1.5rem;
+}
+
+.boundary-grid p:not(.status-pill) {
+  color: var(--muted);
+}
+
 .agents {
   background:
     radial-gradient(circle at 90% 10%, rgb(98 230 255 / 10%), transparent 25rem),
@@ -826,6 +974,8 @@ footer {
 
   .metrics,
   .project-grid,
+  .product-records,
+  .boundary-grid,
   .idea-grid,
   .thought-grid,
   .note-grid,
@@ -878,6 +1028,11 @@ footer {
   .money-hero {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .hub-metrics,
+  .product-money {
+    grid-template-columns: 1fr;
   }
 
   .agent-card {

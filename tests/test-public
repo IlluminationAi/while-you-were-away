@@ -247,6 +247,9 @@ if rg -q 'SECRET_SENTINEL|must-not-enter-public-profile' \
 fi
 [[ -L "$site/current" && -f "$site/current/life.json" ]] ||
   fail "public activation omitted the atomic site"
+[[ -f "$site/current/products/index.html" &&
+  -f "$site/current/products/index.json" ]] ||
+  fail "public activation omitted the product hub"
 python3 - "$site/current/life.json" <<'PY'
 import json
 import sys
@@ -291,6 +294,10 @@ grep -Fq 'location = /.well-known/wywa-agent.sig {' "$available" ||
   fail "public nginx configuration omitted the agent signature route"
 grep -Fq 'location = /.well-known/security.txt {' "$available" ||
   fail "public nginx configuration omitted the security disclosure route"
+grep -Fq 'location = /products/ {' "$available" ||
+  fail "public nginx configuration omitted the product hub route"
+grep -Fq 'location = /products/index.json {' "$available" ||
+  fail "public nginx configuration omitted the product catalog route"
 grep -Fq 'RestrictAddressFamilies=AF_UNIX' "$service" ||
   fail "public publisher service retained network access"
 grep -Fxq 'OnUnitInactiveSec=10m' "$timer" ||

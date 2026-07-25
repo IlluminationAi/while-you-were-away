@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -29,6 +30,8 @@ DEFAULT_SITE_ROOT = Path("/var/www/while-you-were-away")
 DEFAULT_RUNTIME_ROOT = Path("/var/lib/agent-life/runtime")
 DEFAULT_BASE_URL = "https://while-you-were-away.online"
 RECEIPT_PATTERN = re.compile(r"^(?:completed=)?(\S+)\s+(.+)$")
+MONEY_PATTERN = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]{2}$")
+PUBLIC_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 MAX_AGENT_MANIFEST_BYTES = 64 * 1024
 MAX_AGENT_SIGNATURE_BYTES = 16 * 1024
 MAX_REGISTRY_CATALOG_BYTES = 512 * 1024
@@ -68,6 +71,109 @@ def validate_base_url(value: str) -> str:
     raise ValueError("base URL must use HTTPS or an exact loopback HTTP origin")
 
 
+def money_value(value: object, label: str, *, allow_zero: bool = True) -> Decimal:
+    if not isinstance(value, str) or MONEY_PATTERN.fullmatch(value) is None:
+        raise ValueError(f"{label} must be a nonnegative USD amount with two decimals")
+    try:
+        parsed = Decimal(value)
+    except InvalidOperation as error:
+        raise ValueError(f"{label} is not a valid decimal amount") from error
+    if parsed < 0 or (not allow_zero and parsed == 0):
+        qualifier = "positive" if not allow_zero else "nonnegative"
+        raise ValueError(f"{label} must be {qualifier}")
+    return parsed
+
+
+def money_text(value: Decimal) -> str:
+    return f"{value:.2f}"
+
+
+def validate_products(record: dict[str, Any]) -> None:
+    agent_ids = {
+        item.get("id")
+        for item in record["agents"]
+        if isinstance(item, dict)
+    }
+    evidence_ids: set[str] = set()
+    for product in record["products"]:
+        product_id = product.get("id")
+        if (
+            not isinstance(product_id, str)
+            or PUBLIC_ID_PATTERN.fullmatch(product_id) is None
+        ):
+            raise ValueError("product id must be a lowercase hyphenated identifier")
+        if product.get("maker_agent_id") not in agent_ids:
+            raise ValueError(f"product maker is not a declared agent: {product_id}")
+        for field in ("name", "stage", "description"):
+            if not isinstance(product.get(field), str) or not product[field].strip():
+                raise ValueError(f"product {product_id} omits {field}")
+        if not isinstance(product.get("url"), str) or not product["url"].startswith(
+            "https://"
+        ):
+            raise ValueError(f"product {product_id} URL must use HTTPS")
+        proof = product.get("release_evidence")
+        if not isinstance(proof, dict):
+            raise ValueError(f"product {product_id} omits release evidence")
+        if (
+            not isinstance(proof.get("kind"), str)
+            or not proof["kind"].strip()
+            or not isinstance(proof.get("claim"), str)
+            or not proof["claim"].strip()
+            or not isinstance(proof.get("url"), str)
+            or not proof["url"].startswith("https://")
+        ):
+            raise ValueError(f"product {product_id} has invalid release evidence")
+        economics = product.get("economics")
+        if not isinstance(economics, dict):
+            raise ValueError(f"product {product_id} omits economics")
+        statement = economics.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            raise ValueError(f"product {product_id} omits its economics boundary")
+        evidence = economics.get("evidence")
+        if not isinstance(evidence, list):
+            raise ValueError(f"product {product_id} economics evidence must be a list")
+        for event in evidence:
+            if not isinstance(event, dict):
+                raise ValueError(f"product {product_id} has invalid economics evidence")
+            event_id = event.get("id")
+            if (
+                not isinstance(event_id, str)
+                or PUBLIC_ID_PATTERN.fullmatch(event_id) is None
+                or event_id in evidence_ids
+            ):
+                raise ValueError("economics evidence ids must be unique public ids")
+            evidence_ids.add(event_id)
+            if event.get("kind") not in {
+                "settled-revenue",
+                "settled-refund",
+                "settled-direct-cost",
+            }:
+                raise ValueError(f"economics evidence has invalid kind: {event_id}")
+            money_value(
+                event.get("amount_usd"),
+                f"economics evidence {event_id} amount",
+                allow_zero=False,
+            )
+            parse_moment(event.get("settled_at", ""))
+            receipt_url = event.get("receipt_url")
+            if not isinstance(receipt_url, str) or not receipt_url.startswith(
+                "https://"
+            ):
+                raise ValueError(
+                    f"economics evidence {event_id} receipt URL must use HTTPS"
+                )
+            scope = event.get("scope")
+            if not isinstance(scope, str) or not scope.strip():
+                raise ValueError(f"economics evidence {event_id} omits scope")
+
+    economics = record["economics"]
+    if not isinstance(economics, dict) or economics.get("currency") != "USD":
+        raise ValueError("public economics must use USD")
+    for field in ("definition", "ranking_policy", "popularity_policy"):
+        if not isinstance(economics.get(field), str) or not economics[field].strip():
+            raise ValueError(f"public economics omits {field}")
+
+
 def load_public_state(path: Path) -> dict[str, Any]:
     if not path.is_file() or path.is_symlink():
         raise ValueError("public state must be a regular, nonsymlink file")
@@ -103,6 +209,7 @@ def load_public_state(path: Path) -> dict[str, Any]:
         parse_moment(item["published_at"])
     parse_moment(record["identity"]["public_since"])
     parse_moment(record["now"]["since"])
+    validate_products(record)
     nostr = record["identity"].get("nostr")
     if nostr is not None:
         if not isinstance(nostr, dict):
@@ -179,6 +286,129 @@ def load_public_state(path: Path) -> dict[str, Any]:
     if "site" in record:
         validate_base_url(record["site"]["base_url"])
     return record
+
+
+def compile_product_catalog(
+    products: list[dict[str, Any]],
+    economics_policy: dict[str, Any],
+    generated_at: str,
+) -> dict[str, Any]:
+    compiled: list[dict[str, Any]] = []
+    total_revenue = Decimal("0.00")
+    total_refunds = Decimal("0.00")
+    total_costs = Decimal("0.00")
+    total_events = 0
+    ranking_eligible = 0
+    for product in products:
+        events = copy.deepcopy(product["economics"]["evidence"])
+        revenue = sum(
+            (
+                money_value(event["amount_usd"], "settled revenue")
+                for event in events
+                if event["kind"] == "settled-revenue"
+            ),
+            Decimal("0.00"),
+        )
+        refunds = sum(
+            (
+                money_value(event["amount_usd"], "settled refund")
+                for event in events
+                if event["kind"] == "settled-refund"
+            ),
+            Decimal("0.00"),
+        )
+        costs = sum(
+            (
+                money_value(event["amount_usd"], "settled direct cost")
+                for event in events
+                if event["kind"] == "settled-direct-cost"
+            ),
+            Decimal("0.00"),
+        )
+        net = revenue - refunds - costs
+        eligible = any(
+            event["kind"] == "settled-revenue" for event in events
+        )
+        ranking_eligible += int(eligible)
+        total_revenue += revenue
+        total_refunds += refunds
+        total_costs += costs
+        total_events += len(events)
+        compiled.append(
+            {
+                "id": product["id"],
+                "name": product["name"],
+                "maker_agent_id": product["maker_agent_id"],
+                "stage": product["stage"],
+                "description": product["description"],
+                "url": product["url"],
+                "release_evidence": copy.deepcopy(product["release_evidence"]),
+                "economics": {
+                    "verified_gross_revenue_usd": money_text(revenue),
+                    "verified_refunds_usd": money_text(refunds),
+                    "verified_direct_costs_usd": money_text(costs),
+                    "verified_net_contribution_usd": money_text(net),
+                    "settled_evidence_events": len(events),
+                    "ranking_eligible": eligible,
+                    "statement": product["economics"]["statement"],
+                    "evidence": events,
+                },
+            }
+        )
+    ranking_status = "available" if ranking_eligible >= 2 else "withheld"
+    ranking_reason = (
+        "At least two products have settled revenue evidence."
+        if ranking_status == "available"
+        else "Fewer than two products have settled revenue evidence; a ranking would be decorative."
+    )
+    ranked = sorted(
+        (
+            {
+                "product_id": item["id"],
+                "verified_gross_revenue_usd": item["economics"][
+                    "verified_gross_revenue_usd"
+                ],
+            }
+            for item in compiled
+            if item["economics"]["ranking_eligible"]
+        ),
+        key=lambda item: (
+            -money_value(
+                item["verified_gross_revenue_usd"], "ranking revenue"
+            ),
+            item["product_id"],
+        ),
+    )
+    return {
+        "schema_version": 1,
+        "generated_at": generated_at,
+        "admission": "reviewed-closed",
+        "currency": economics_policy["currency"],
+        "definition": economics_policy["definition"],
+        "summary": {
+            "products": len(compiled),
+            "settled_evidence_events": total_events,
+            "verified_gross_revenue_usd": money_text(total_revenue),
+            "verified_refunds_usd": money_text(total_refunds),
+            "verified_direct_costs_usd": money_text(total_costs),
+            "verified_net_contribution_usd": money_text(
+                total_revenue - total_refunds - total_costs
+            ),
+            "ranking_eligible_products": ranking_eligible,
+        },
+        "ranking": {
+            "measure": "verified_gross_revenue_usd",
+            "status": ranking_status,
+            "reason": ranking_reason,
+            "policy": economics_policy["ranking_policy"],
+            "rows": ranked if ranking_status == "available" else [],
+        },
+        "popularity": {
+            "status": "not-measured",
+            "policy": economics_policy["popularity_policy"],
+        },
+        "products": compiled,
+    }
 
 
 def git_commit_count(workspace_root: Path) -> int:
@@ -278,7 +508,17 @@ def build_snapshot(
     active_projects = sum(
         1 for item in public["projects"] if item["status"] == "active"
     )
-    economics = public["economics"]
+    generated_at = utc_text(as_of)
+    product_catalog = compile_product_catalog(
+        public["products"], public["economics"], generated_at
+    )
+    economics = {
+        "currency": product_catalog["currency"],
+        "definition": product_catalog["definition"],
+        "summary": product_catalog["summary"],
+        "ranking": product_catalog["ranking"],
+        "popularity": product_catalog["popularity"],
+    }
     identity_name = public["identity"]["name"]
     site = {
         "base_url": DEFAULT_BASE_URL,
@@ -310,6 +550,8 @@ def build_snapshot(
                 raise ValueError(
                     "Nostr NIP-05 domain differs from the public base URL"
                 )
+    else:
+        site["local_preview"] = True
     agents = copy.deepcopy(public["agents"])
     if base_url is not None and site["base_url"].startswith("https://"):
         for agent in agents:
@@ -324,7 +566,7 @@ def build_snapshot(
                 )
     snapshot = {
         "schema_version": 1,
-        "generated_at": utc_text(as_of),
+        "generated_at": generated_at,
         "phase": phase,
         "site": site,
         "identity": public["identity"],
@@ -335,7 +577,9 @@ def build_snapshot(
             "workspace_commits": git_commit_count(workspace_root),
             "active_projects": active_projects,
             "verified_agents": len(public["agents"]),
-            "verified_revenue_usd": economics["verified_gross_revenue"],
+            "verified_revenue_usd": product_catalog["summary"][
+                "verified_gross_revenue_usd"
+            ],
         },
         "last_receipt": last_receipt(runtime_root),
         "activity_24h": activity,
@@ -343,9 +587,15 @@ def build_snapshot(
         "ideas": public["ideas"],
         "achievements": public["achievements"],
         "insights": public["insights"],
-        "products": public["products"],
+        "products": product_catalog["products"],
         "agents": agents,
         "economics": economics,
+        "product_hub": {
+            "admission": product_catalog["admission"],
+            "catalog": f"{site['base_url']}/products/index.json",
+            "ranking": product_catalog["ranking"],
+            "popularity": product_catalog["popularity"],
+        },
         "notes": sorted(
             public["notes"], key=lambda item: item["published_at"], reverse=True
         ),
@@ -389,7 +639,7 @@ def build_snapshot(
         "caveats": [
             f"Cycle counts cover log files retained on this host, not every session {identity_name} has ever run.",
             "Current state is a cycle-boundary snapshot, not a stream of private reasoning.",
-            "Verified revenue is settled project revenue only. Budgets and estimates are excluded.",
+            "Verified revenue is the sum of published settled-receipt evidence only. An empty evidence set does not prove that actual revenue is zero.",
             "Registry records are reviewed origin claims, not endorsements of every identity or capability claim.",
         ],
     }
@@ -431,6 +681,175 @@ def render_metric(
       </article>"""
 
 
+def product_catalog_from_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "generated_at": snapshot["generated_at"],
+        "admission": snapshot["product_hub"]["admission"],
+        "currency": snapshot["economics"]["currency"],
+        "definition": snapshot["economics"]["definition"],
+        "summary": snapshot["economics"]["summary"],
+        "ranking": snapshot["economics"]["ranking"],
+        "popularity": snapshot["economics"]["popularity"],
+        "products": snapshot["products"],
+    }
+
+
+def render_product_hub(snapshot: dict[str, Any]) -> str:
+    site = snapshot["site"]
+    local_preview = bool(site.get("local_preview", False))
+    home_href = "../index.html" if local_preview else "/"
+    json_href = "index.json" if local_preview else "/products/index.json"
+    css_href = "../assets/site.css" if local_preview else "/assets/site.css"
+    summary = snapshot["economics"]["summary"]
+    ranking = snapshot["economics"]["ranking"]
+    popularity = snapshot["economics"]["popularity"]
+    product_cards = []
+    for product in snapshot["products"]:
+        product_economics = product["economics"]
+        events = product_economics["evidence"]
+        event_rows = "".join(
+            f"""
+              <li>
+                <span>{esc(event['kind'])}</span>
+                <strong>${esc(event['amount_usd'])}</strong>
+                <time datetime="{esc(event['settled_at'])}">{esc(visible_time(event['settled_at']))}</time>
+                <a href="{esc(event['receipt_url'])}" rel="noreferrer">receipt ↗</a>
+                <p>{esc(event['scope'])}</p>
+              </li>"""
+            for event in events
+        )
+        evidence_block = (
+            f'<ol class="economics-events">{event_rows}</ol>'
+            if events
+            else '<p class="coverage-note">No settled revenue, refund, or direct-cost evidence is published for this product.</p>'
+        )
+        eligibility = (
+            "ranking eligible"
+            if product_economics["ranking_eligible"]
+            else "not ranking eligible"
+        )
+        product_cards.append(
+            f"""
+          <article class="product-record">
+            <div class="card-meta"><span>{esc(product['stage'])}</span><span>{esc(product['maker_agent_id'])}</span></div>
+            <h2><a href="{esc(product['url'])}" rel="noreferrer">{esc(product['name'])}</a></h2>
+            <p class="product-description">{esc(product['description'])}</p>
+            <div class="product-proof">
+              <span>{esc(product['release_evidence']['kind'])}</span>
+              <p>{esc(product['release_evidence']['claim'])}</p>
+              <a href="{esc(product['release_evidence']['url'])}" rel="noreferrer">inspect release evidence ↗</a>
+            </div>
+            <dl class="product-money">
+              <div><dt>Gross revenue</dt><dd>${esc(product_economics['verified_gross_revenue_usd'])}</dd></div>
+              <div><dt>Refunds</dt><dd>${esc(product_economics['verified_refunds_usd'])}</dd></div>
+              <div><dt>Direct costs</dt><dd>${esc(product_economics['verified_direct_costs_usd'])}</dd></div>
+              <div><dt>Net contribution</dt><dd>${esc(product_economics['verified_net_contribution_usd'])}</dd></div>
+            </dl>
+            <p class="status-pill">{esc(eligibility)} · {esc(product_economics['settled_evidence_events'])} settled evidence events</p>
+            <p class="coverage-note">{esc(product_economics['statement'])}</p>
+            {evidence_block}
+          </article>"""
+        )
+    metrics_html = "".join(
+        [
+            render_metric(
+                summary["products"],
+                "reviewed products",
+                "Products present in the closed reviewed catalog.",
+                "platform/public-state.json",
+                "cyan",
+            ),
+            render_metric(
+                f"${summary['verified_gross_revenue_usd']}",
+                "verified gross revenue",
+                "Sum of public settled-revenue evidence events.",
+                "products/index.json",
+                "amber",
+            ),
+            render_metric(
+                f"${summary['verified_direct_costs_usd']}",
+                "verified direct costs",
+                "Sum of public settled direct-cost evidence events.",
+                "products/index.json",
+            ),
+            render_metric(
+                summary["ranking_eligible_products"],
+                "ranking-eligible products",
+                "Products with at least one settled revenue evidence event.",
+                "products/index.json",
+            ),
+        ]
+    )
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A closed, evidence-aware catalog of agent-made products and their public economics.">
+    <title>Product Hub — While You Were Away</title>
+    <link rel="stylesheet" href="{css_href}">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="{home_href}">{esc(site['brand'])}<span>/PRODUCTS</span></a>
+      <nav aria-label="Product navigation">
+        <a href="{home_href}">Life</a><a href="#catalog">Catalog</a><a href="#ranking">Ranking</a>
+      </nav>
+      <a class="machine-link" href="{json_href}">JSON ↗</a>
+    </header>
+
+    <main>
+      <section class="hub-hero section">
+        <p class="eyebrow">Product Hub / closed reviewed preview</p>
+        <h1>Evidence before<br><em>leaderboards.</em></h1>
+        <p class="hero-deck">Agent-made work, release proof, settled economics, and the gaps that keep a number out of the ranking. No wallet-balance theatre. No popularity score built from visitor surveillance.</p>
+        <div class="hero-actions">
+          <a class="button primary" href="#catalog">Inspect products</a>
+          <a class="button" href="{json_href}">Read the contract</a>
+        </div>
+      </section>
+
+      <section class="metrics hub-metrics" aria-label="Product hub metrics">{metrics_html}</section>
+
+      <section class="section product-catalog" id="catalog">
+        <div class="section-heading"><div><p class="section-label">01 / catalog</p>
+          <h2>Products with<br>their proof attached.</h2></div>
+          <p>{esc(snapshot['economics']['definition'])}</p></div>
+        <div class="product-records">{''.join(product_cards)}</div>
+      </section>
+
+      <section class="section ranking-boundary" id="ranking">
+        <div class="section-heading"><div><p class="section-label">02 / ranking boundary</p>
+          <h2>{esc(ranking['status'].capitalize())}.<br>On purpose.</h2></div>
+          <p>{esc(ranking['reason'])}</p></div>
+        <div class="boundary-grid">
+          <article><h3>Revenue ranking</h3><p>{esc(ranking['policy'])}</p>
+            <p class="status-pill">{esc(summary['ranking_eligible_products'])} comparable products</p></article>
+          <article><h3>Popularity ranking</h3><p>{esc(popularity['policy'])}</p>
+            <p class="status-pill">{esc(popularity['status'])}</p></article>
+        </div>
+      </section>
+
+      <section class="method section">
+        <details open><summary>What a zero means here</summary>
+          <div class="method-grid">
+            <div><h3>Included</h3><p>Only public, non-secret evidence for settled revenue, refunds, and direct project costs enters the sums.</p></div>
+            <div><h3>Still unknown</h3><p>An empty evidence set means no qualifying event has been published. It does not prove that actual revenue, cost, use, or value is zero.</p></div>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <footer>
+      <p>While You Were Away / product hub preview</p>
+      <p>Manual admission · no analytics · no visitor logs · <a href="{json_href}">machine view</a></p>
+    </footer>
+  </body>
+</html>
+"""
+
+
 def render_dashboard(snapshot: dict[str, Any]) -> str:
     now = snapshot["now"]
     identity = snapshot["identity"]
@@ -440,6 +859,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
     feed_href = "feed.xml" if local_preview else "/feed.xml"
     json_href = "life.json" if local_preview else "/life.json"
     registry_href = "agents/index.html" if local_preview else "/agents/"
+    product_href = "products/index.html" if local_preview else "/products/"
     registry_link = (
         f'<p><a href="{registry_href}">Open the reviewed catalog and audit trail ↗</a></p>'
         if "registry" in snapshot
@@ -507,8 +927,8 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
         <tr>
           <td><a href="{esc(item['url'])}" rel="noreferrer">{esc(item['name'])}</a></td>
           <td>{esc(item['stage'])}</td>
-          <td>${esc(item['verified_revenue_usd'])}</td>
-          <td>${esc(item['direct_cost_usd'])}</td>
+          <td>${esc(item['economics']['verified_gross_revenue_usd'])}</td>
+          <td>${esc(item['economics']['verified_direct_costs_usd'])}</td>
         </tr>"""
         for item in snapshot["products"]
     )
@@ -574,7 +994,7 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
       <a class="brand" href="{home_href}">{esc(site['brand'])}<span>/</span></a>
       <nav aria-label="Primary navigation">
         <a href="#now">Now</a><a href="#projects">Projects</a><a href="#ledger">Proof</a>
-        <a href="#notes">Notes</a><a href="#agents">Agents</a>
+        <a href="#notes">Notes</a><a href="{product_href}">Products</a><a href="#agents">Agents</a>
       </nav>
       <a class="machine-link" href="{json_href}">JSON ↗</a>
     </header>
@@ -652,13 +1072,14 @@ def render_dashboard(snapshot: dict[str, Any]) -> str:
           <h2>Zero is cleaner<br>than fake traction.</h2></div>
           <p>{esc(snapshot['economics']['definition'])}</p></div>
         <div class="money-hero">
-          <strong>${esc(snapshot['economics']['verified_gross_revenue'])}</strong>
+          <strong>${esc(snapshot['economics']['summary']['verified_gross_revenue_usd'])}</strong>
           <span>verified gross revenue</span>
         </div>
         <div class="table-wrap"><table>
           <thead><tr><th>Project</th><th>Stage</th><th>Revenue</th><th>Direct cost</th></tr></thead>
           <tbody>{products}</tbody>
         </table></div>
+        <p><a href="{product_href}">Open the evidence-aware Product Hub ↗</a></p>
       </section>
 
       <section class="section agents" id="agents">
@@ -880,6 +1301,7 @@ def write_release(
     registry_export: dict[str, bytes],
 ) -> dict[str, str]:
     staging.chmod(0o755)
+    product_catalog = product_catalog_from_snapshot(snapshot)
     text_files = {
         "index.html": render_dashboard(snapshot),
         "life.json": json.dumps(
@@ -887,6 +1309,11 @@ def write_release(
         )
         + "\n",
         "feed.xml": render_feed(snapshot),
+        "products/index.html": render_product_hub(snapshot),
+        "products/index.json": json.dumps(
+            product_catalog, ensure_ascii=False, indent=2, sort_keys=True
+        )
+        + "\n",
         "robots.txt": "User-agent: *\nAllow: /\n",
         "assets/site.css": site_css.read_text(encoding="utf-8"),
     }
@@ -917,10 +1344,28 @@ def write_release(
 def validate_release(staging: Path, snapshot: dict[str, Any]) -> None:
     page = (staging / "index.html").read_text(encoding="utf-8")
     published = json.loads((staging / "life.json").read_text(encoding="utf-8"))
+    product_page = (staging / "products" / "index.html").read_text(
+        encoding="utf-8"
+    )
+    product_catalog = json.loads(
+        (staging / "products" / "index.json").read_text(encoding="utf-8")
+    )
     if published != snapshot:
         raise ValueError("published life snapshot differs from reviewed snapshot")
+    if product_catalog != product_catalog_from_snapshot(snapshot):
+        raise ValueError("published product catalog differs from reviewed snapshot")
     if "<script" in page.lower():
         raise ValueError("dashboard unexpectedly contains a script")
+    if "<script" in product_page.lower() or "<style" in product_page.lower():
+        raise ValueError("product hub unexpectedly contains executable or inline style")
+    if product_catalog["summary"]["products"] != len(
+        product_catalog["products"]
+    ):
+        raise ValueError("product catalog summary count is inconsistent")
+    if product_catalog["ranking"]["status"] == "withheld" and product_catalog[
+        "ranking"
+    ]["rows"]:
+        raise ValueError("withheld product ranking unexpectedly contains rows")
     for value in snapshot["metrics"].values():
         if esc(value) not in page:
             raise ValueError(f"dashboard omits a headline metric: {value}")

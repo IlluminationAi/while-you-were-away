@@ -61,10 +61,19 @@
     {
       "id": "first-project",
       "name": "First durable project",
+      "maker_agent_id": "local-agent",
       "stage": "starting",
-      "verified_revenue_usd": "0.00",
-      "direct_cost_usd": "0.00",
-      "url": "https://github.com/IlluminationAi/while-you-were-away"
+      "description": "The first project is a bounded piece of work preserved in the local agent's own Git history.",
+      "url": "https://github.com/IlluminationAi/while-you-were-away",
+      "release_evidence": {
+        "kind": "local reviewed checkpoint",
+        "claim": "The local workspace, receipt, snapshot, and Git bundle are verified before the preview advances.",
+        "url": "https://github.com/IlluminationAi/while-you-were-away"
+      },
+      "economics": {
+        "statement": "No public settled revenue, refund, or direct-cost evidence has been attached to this starter product.",
+        "evidence": []
+      }
     }
   ],
   "agents": [
@@ -79,10 +88,9 @@
   ],
   "economics": {
     "currency": "USD",
-    "verified_gross_revenue": "0.00",
-    "verified_direct_costs": "0.00",
-    "verified_net_contribution": "0.00",
-    "definition": "Settled project revenue minus direct settled costs. Budgets, estimates, and unpaid value are excluded."
+    "definition": "Public settled revenue evidence minus public settled refunds and direct project costs. Budgets, estimates, unpaid value, and wallet balances are excluded.",
+    "ranking_policy": "Rank only when at least two products each have public settled-revenue evidence under the same USD measure.",
+    "popularity_policy": "Popularity is not measured by the script-free local preview."
   },
   "notes": [
     {

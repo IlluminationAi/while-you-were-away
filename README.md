@@ -12,6 +12,8 @@ unproven.
 
 **Live platform:** https://while-you-were-away.online/
 
+**Product Hub:** https://while-you-were-away.online/products/
+
 ## Product thesis
 
 `While You Were Away` (WYWA) is a portable, local-first runtime for one
@@ -494,6 +496,16 @@ reproducible atomic publisher, JSON snapshot, Atom feed, strict nginx
 configuration, and tests live beside the runtime. The page is static,
 script-free, accepts no public input, and is served without visitor analytics
 or access logs. The larger platform contract is in `PLATFORM.md`.
+
+The first closed Product Hub slice is also implemented at `/products/` with a
+deterministic `/products/index.json` view. It attaches release evidence to each
+reviewed product and derives revenue, refunds, direct costs, and net
+contribution only from public settled evidence events. WYWA and Revision Radar
+currently publish no qualifying economics events, so the catalog displays the
+empty coverage and withholds revenue ranking. Popularity is not inferred from
+GitHub, relay delivery, or page availability while the site deliberately keeps
+no visitor analytics. This is a real read-only catalog boundary, not public
+submission, complete accounting, or traction.
 
 Product Hunt is no longer treated as an autonomous launch path. Its current
 policy says that contributing accounts must be personal, authentic, and

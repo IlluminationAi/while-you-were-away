@@ -207,6 +207,12 @@ def main() -> None:
 
         page = (current / "index.html").read_text(encoding="utf-8")
         life = json.loads((current / "life.json").read_text(encoding="utf-8"))
+        product_page = (current / "products" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        product_catalog = json.loads(
+            (current / "products" / "index.json").read_text(encoding="utf-8")
+        )
         assert life["generated_at"] == INSTANTS[-1]
         assert life["phase"] == "active"
         assert life["metrics"]["observed_cycles"] == 3
@@ -215,6 +221,19 @@ def main() -> None:
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1
         assert life["metrics"]["verified_revenue_usd"] == "0.00"
+        assert life["product_hub"]["admission"] == "reviewed-closed"
+        assert life["product_hub"]["ranking"]["status"] == "withheld"
+        assert product_catalog["summary"] == life["economics"]["summary"]
+        assert product_catalog["summary"]["products"] == 2
+        assert product_catalog["summary"]["settled_evidence_events"] == 0
+        assert product_catalog["summary"]["verified_gross_revenue_usd"] == "0.00"
+        assert product_catalog["summary"]["verified_direct_costs_usd"] == "0.00"
+        assert product_catalog["ranking"]["rows"] == []
+        assert product_catalog["popularity"]["status"] == "not-measured"
+        assert all(
+            item["economics"]["ranking_eligible"] is False
+            for item in product_catalog["products"]
+        )
         assert life["last_receipt"] == {
             "completed_at": "2026-07-24T17:31:00Z",
             "outcome": "success",
@@ -223,7 +242,13 @@ def main() -> None:
         assert "/private/path" not in json.dumps(life)
         assert "<script" not in page.lower()
         assert "style=" not in page.lower()
+        assert "<script" not in product_page.lower()
+        assert "<style" not in product_page.lower()
+        assert "Evidence before" in product_page
+        assert "Withheld." in product_page
+        assert "empty evidence set" in product_page
         assert "public operating system" in page
+        assert "/products/" in page
         assert "$0.00" in page
         assert len(life["activity_24h"]) == 24
         assert sum(row["count"] for row in life["activity_24h"]) == 3
@@ -285,6 +310,7 @@ def main() -> None:
             current / "assets",
             current / ".well-known",
             current / "agents",
+            current / "products",
         ):
             assert directory.stat().st_mode & 0o777 == 0o755
         for file_path in (
@@ -300,6 +326,8 @@ def main() -> None:
             current / "agents" / "index.html",
             current / "agents" / "index.json",
             current / "agents" / "audit.json",
+            current / "products" / "index.html",
+            current / "products" / "index.json",
         ):
             assert file_path.is_file()
             assert not file_path.is_symlink()
@@ -347,6 +375,47 @@ def main() -> None:
         assert mismatch_result.returncode != 0
         assert "NIP-05 domain differs" in mismatch_result.stderr
 
+        invalid_economics_state = root / "invalid-economics-public-state.json"
+        invalid_economics = json.loads(
+            (PROJECT / "platform" / "public-state.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        invalid_economics["products"][0]["economics"]["evidence"] = [
+            {
+                "id": "bad-precision",
+                "kind": "settled-revenue",
+                "amount_usd": "1.001",
+                "settled_at": "2026-07-24T17:39:00Z",
+                "receipt_url": "https://example.test/receipt",
+                "scope": "Invalid fixture.",
+            }
+        ]
+        invalid_economics_state.write_text(
+            json.dumps(invalid_economics), encoding="utf-8"
+        )
+        invalid_economics_result = subprocess.run(
+            [
+                str(PUBLISH),
+                "--site-root",
+                str(root / "invalid-economics-site"),
+                "--logs-root",
+                str(logs),
+                "--runtime-root",
+                str(runtime),
+                "--workspace-root",
+                str(workspace),
+                "--public-state",
+                str(invalid_economics_state),
+                "--as-of",
+                "2026-07-24T17:43:30Z",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert invalid_economics_result.returncode != 0
+        assert "two decimals" in invalid_economics_result.stderr
+
         portable_site = root / "portable-site"
         (runtime / "last-run").write_text(
             "2026-07-24T17:43:00Z status=0 sandbox=workspace-write "
@@ -390,6 +459,8 @@ def main() -> None:
         }
         assert "registry" not in portable_life
         assert not (portable_site / "current" / "agents").exists()
+        assert (portable_site / "current" / "products" / "index.html").is_file()
+        assert (portable_site / "current" / "products" / "index.json").is_file()
         assert "reviewed catalog and audit trail" not in (
             portable_site / "current" / "index.html"
         ).read_text(encoding="utf-8")
@@ -401,6 +472,11 @@ def main() -> None:
         assert not (
             portable_site / "current" / ".well-known" / "security.txt"
         ).exists()
+        portable_product_page = (
+            portable_site / "current" / "products" / "index.html"
+        ).read_text(encoding="utf-8")
+        assert '../assets/site.css' in portable_product_page
+        assert 'href="../index.html"' in portable_product_page
 
     print("PASS source-backed WYWA platform publication")
 
