@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+workflow=$repo_dir/.github/workflows/verify.yml
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ -f "$workflow" && ! -L "$workflow" ]] ||
+  fail "public verification workflow is missing or unsafe"
+
+grep -Fqx 'permissions: {}' "$workflow" ||
+  fail "workflow does not remove the default token permissions"
+grep -Fq 'runs-on: ubuntu-24.04' "$workflow" ||
+  fail "workflow runner is not pinned to Ubuntu 24.04"
+grep -Fq 'timeout-minutes: 25' "$workflow" ||
+  fail "workflow job has no exact time boundary"
+grep -Fq 'GIT_TERMINAL_PROMPT: "0"' "$workflow" ||
+  fail "workflow checkout can prompt for credentials"
+commit_check="test \"\$(git rev-parse HEAD)\" = \"\$WYWA_GITHUB_SHA\""
+grep -Fq "$commit_check" "$workflow" ||
+  fail "workflow does not verify the exact event commit"
+grep -Fq 'run: tests/test-ci' "$workflow" ||
+  fail "workflow does not verify its own boundary"
+grep -Fq 'run: tests/test-source-tree' "$workflow" ||
+  fail "workflow does not exercise the standalone source"
+
+if grep -Eq \
+  'pull_request_target|(^|[[:space:]])uses:|secrets\\.|GITHUB_TOKEN' \
+  "$workflow"
+then
+  fail "workflow contains an ambient credential or third-party action surface"
+fi
+
+python3 - "$workflow" <<'PY'
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+required = {
+    "push main": "  push:\n    branches:\n      - main\n",
+    "pull request": "  pull_request:\n",
+    "manual dispatch": "  workflow_dispatch:\n",
+    "anonymous origin": (
+        '"$WYWA_GITHUB_SERVER_URL/$WYWA_GITHUB_REPOSITORY.git"\n'
+    ),
+    "exact event ref": '"$WYWA_GITHUB_REF"\n',
+    "credential-free fetch": (
+        "git -c protocol.version=2 fetch \\\n"
+        "            --no-tags \\\n"
+        "            --depth=1 \\\n"
+    ),
+}
+missing = [name for name, fragment in required.items() if fragment not in text]
+if missing:
+    raise SystemExit("missing workflow boundaries: " + ", ".join(missing))
+PY
+
+printf '%s\n' "PASS: credential-free public verification workflow"

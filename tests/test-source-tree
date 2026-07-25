@@ -27,6 +27,7 @@ diff -qr -- "$source_one" "$source_two" >/dev/null ||
   fail "source-tree builds differ"
 
 for required in \
+  .github/workflows/verify.yml \
   README.md \
   CHANGELOG.md \
   GETTING_STARTED.md \
@@ -79,6 +80,7 @@ for required in \
   platform/site.css \
   templates/MANDATE.md \
   templates/public-state.json \
+  tests/test-ci \
   tests/test-wywa \
   tests/test-life \
   tests/test-life-drill \
@@ -133,6 +135,7 @@ shellcheck \
   "$source_one/bin/wywa-volume" \
   "$source_one/bin/build-release" \
   "$source_one/bin/build-source-tree" \
+  "$source_one/tests/test-ci" \
   "$source_one/tests/test-wywa" \
   "$source_one/tests/test-life" \
   "$source_one/tests/test-life-drill" \
@@ -140,6 +143,7 @@ shellcheck \
   "$source_one/tests/test-volume" \
   "$source_one/tests/test-release"
 
+"$source_one/tests/test-ci" >/dev/null
 "$source_one/tests/test-wywa" >/dev/null
 "$source_one/tests/test-life" >/dev/null
 "$source_one/tests/test-life-drill" >/dev/null

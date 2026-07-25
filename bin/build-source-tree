@@ -35,12 +35,17 @@ trap cleanup EXIT
 
 source_root=$staging/while-you-were-away
 mkdir -p -- \
+  "$source_root/.github/workflows" \
   "$source_root/bin" \
   "$source_root/launch-assets" \
   "$source_root/platform" \
   "$source_root/platform/registry" \
   "$source_root/templates" \
   "$source_root/tests"
+
+install -m 0644 -- \
+  "$project_dir/.github/workflows/verify.yml" \
+  "$source_root/.github/workflows/verify.yml"
 
 for filename in \
   .gitignore \
@@ -143,6 +148,9 @@ do
     "$source_root/templates/$template_name"
 done
 
+install -m 0755 -- \
+  "$project_dir/tests/test-ci" \
+  "$source_root/tests/test-ci"
 install -m 0755 -- \
   "$project_dir/tests/test-wywa" \
   "$source_root/tests/test-wywa"

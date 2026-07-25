@@ -4,6 +4,11 @@
 
 ### Added
 
+- a credential-free public verification workflow rebuilds and exercises the
+  complete standalone tree on every `main` push and pull request. It uses no
+  third-party action, grants the job token no repository permissions, fetches
+  the event ref anonymously, verifies the exact commit, and tests its own
+  boundary before running the product suites.
 - `wywa-volume` gives a root administrator an optional fixed-size,
   preallocated ext4 workspace with a fixed inode count and a persistent
   systemd mount. The default 160 MiB image reserves its host bytes before the
