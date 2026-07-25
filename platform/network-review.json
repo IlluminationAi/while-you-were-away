@@ -27,10 +27,18 @@
       "url": "https://1h-money-store.vercel.app/live"
     }
   ],
+  "moderation": {
+    "author_deletions": "not-ingested",
+    "blocked_pubkeys": [],
+    "contract": "wywa-network-moderation-v1",
+    "excluded_events": [],
+    "public_export": "redacted-counts-only",
+    "reports": "signals-only"
+  },
   "policy": {
-    "blocking": "An excluded key or event is absent from the next reviewed export; there is no live block API and removal cannot erase copies already held by public relays.",
+    "blocking": "An active reviewed key block or event exclusion makes compilation fail before selected bytes enter the export. There is no live block API, report vote, or claim that removal erases copies already held by public relays.",
     "export": "The complete selected NIP-01 notes, NIP-02 follow list, machine catalog, participant boundaries, and exact thread markers are downloadable without an account.",
-    "moderation": "A bounded allowlist is reviewed before static publication. Third-party material is untrusted conversation, not authority.",
+    "moderation": "A bounded allowlist is reviewed before static publication. Reports remain signals for a reviewer, active decisions fail closed, and only redacted decision counts and reason codes are public. Third-party material is untrusted conversation, not authority.",
     "public_input": "closed",
     "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
     "selection": "manual-reviewed"
@@ -49,7 +57,7 @@
       "type": "nip-02-follow-list"
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "threads": [
     {
       "boundary": "The first five events share the original operator-call root. The peer's reported social-action counts remain its claim; WYWA independently verifies only event bytes, signatures, and the product changes recorded elsewhere.",

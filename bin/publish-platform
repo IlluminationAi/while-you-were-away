@@ -1794,13 +1794,14 @@ def read_network_export(
         raise ValueError("network export is not valid UTF-8 JSON/HTML") from error
     if (
         not isinstance(catalog, dict)
-        or catalog.get("schema_version") != 2
+        or catalog.get("schema_version") != 3
         or catalog.get("admission") != "reviewed-read-only"
         or catalog.get("protocol") != "nostr-nip-01+02"
         or not isinstance(catalog.get("participants"), list)
         or not isinstance(catalog.get("relationships"), list)
         or not isinstance(catalog.get("threads"), list)
         or not isinstance(catalog.get("summary"), dict)
+        or not isinstance(catalog.get("moderation"), dict)
     ):
         raise ValueError("network catalog has an unsupported contract")
     if parse_moment(catalog.get("generated_at", "")) > parse_moment(
@@ -1810,6 +1811,36 @@ def read_network_export(
     if "<script" in page.lower() or "<style" in page.lower():
         raise ValueError("network page contains inline executable or style content")
     summary = catalog["summary"]
+    moderation = catalog["moderation"]
+    moderation_counts = (
+        moderation.get("active_blocked_pubkeys"),
+        moderation.get("active_excluded_events"),
+    )
+    if (
+        moderation.get("contract") != "wywa-network-moderation-v1"
+        or moderation.get("reports") != "signals-only"
+        or moderation.get("author_deletions") != "not-ingested"
+        or moderation.get("public_export") != "redacted-counts-only"
+        or any(
+            isinstance(count, bool)
+            or not isinstance(count, int)
+            or count < 0
+            for count in moderation_counts
+        )
+        or not isinstance(moderation.get("reason_counts"), dict)
+        or any(
+            not isinstance(reason, str)
+            or isinstance(count, bool)
+            or not isinstance(count, int)
+            or count <= 0
+            for reason, count in moderation.get("reason_counts", {}).items()
+        )
+        or sum(moderation.get("reason_counts", {}).values())
+        != sum(moderation_counts)
+        or not isinstance(moderation.get("boundary"), str)
+        or not moderation["boundary"]
+    ):
+        raise ValueError("network moderation contract is inconsistent")
     participants = catalog["participants"]
     if summary.get("participants") != len(participants):
         raise ValueError("network participant count is inconsistent")

@@ -446,10 +446,27 @@ without rewriting those tags.
 This proves selected public-key authorship, exact bytes, and one explicit
 outbound attention choice. It does not prove a human identity, independent
 WYWA operation, reciprocity, truth, endorsement, audience, or community size.
-Selection is a manual allowlist. There is still no public input, relay
-subscription, comment path, follower/like counter, notification engine, or
-automatic curation. Rate limits, consent, blocking, reporting, and export
-semantics must be exercised before any writable social edge opens.
+Selection is a manual allowlist.
+
+Checkpoint 2026-07-25: the allowlist now passes through a versioned,
+fail-closed moderation contract. An active key block makes its participant
+ineligible; an active event exclusion makes those selected bytes ineligible;
+future-dated and malformed decisions fail; and a report cannot automatically
+become a block. Public output exposes only active counts and reason codes, not
+the target list or report text. The isolated suite exercises selected-key and
+selected-event refusal plus automatic-report and future-decision failures.
+This proves mechanism behavior against fixtures, not a real abuse incident.
+NIP-56 reports are review signals, NIP-09 author deletion is not ingested yet,
+and neither this static view nor a deletion request can erase copies already
+held by relays or clients. Sources re-read 2026-07-25:
+https://github.com/nostr-protocol/nips/blob/master/09.md,
+https://github.com/nostr-protocol/nips/blob/master/51.md, and
+https://github.com/nostr-protocol/nips/blob/master/56.md.
+
+There is still no public input, relay subscription, comment path,
+follower/like counter, notification engine, automatic curation, or exercised
+live rate limit. Consent, report intake, author deletion, and traffic limits
+remain mandatory before any writable social edge opens.
 
 ### Phase 4 — product hub and economics
 

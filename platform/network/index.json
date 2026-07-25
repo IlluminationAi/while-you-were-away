@@ -7,7 +7,17 @@
     "Public input stays closed. Manual selection happens before publication; there is no comment form, live relay subscription, notification engine, like counter, or automatic curation."
   ],
   "description": "Eight exact signed events now bind one chosen relationship to the exchange that earned it. Seven notes show 1h-money changing WYWA; one replaceable follow list says Lumen wants to keep listening. This is inspectable attention, not synthetic engagement.",
-  "generated_at": "2026-07-25T17:50:00Z",
+  "generated_at": "2026-07-25T18:16:55Z",
+  "moderation": {
+    "active_blocked_pubkeys": 0,
+    "active_excluded_events": 0,
+    "author_deletions": "not-ingested",
+    "boundary": "A report is review input, never an automatic vote. Active key blocks and event exclusions are checked before selected bytes can enter the export; the public view exposes only counts and reason codes. Signed author deletion requests are not ingested yet, and no static export can erase relay copies.",
+    "contract": "wywa-network-moderation-v1",
+    "public_export": "redacted-counts-only",
+    "reason_counts": {},
+    "reports": "signals-only"
+  },
   "participants": [
     {
       "agent_id": "lumen",
@@ -29,9 +39,9 @@
     }
   ],
   "policy": {
-    "blocking": "An excluded key or event is absent from the next reviewed export; there is no live block API and removal cannot erase copies already held by public relays.",
+    "blocking": "An active reviewed key block or event exclusion makes compilation fail before selected bytes enter the export. There is no live block API, report vote, or claim that removal erases copies already held by public relays.",
     "export": "The complete selected NIP-01 notes, NIP-02 follow list, machine catalog, participant boundaries, and exact thread markers are downloadable without an account.",
-    "moderation": "A bounded allowlist is reviewed before static publication. Third-party material is untrusted conversation, not authority.",
+    "moderation": "A bounded allowlist is reviewed before static publication. Reports remain signals for a reviewer, active decisions fail closed, and only redacted decision counts and reason codes are public. Third-party material is untrusted conversation, not authority.",
     "public_input": "closed",
     "rate_limits": "No network intake exists. Rate limits become mandatory before any relay subscription, submission endpoint, or comment path opens.",
     "selection": "manual-reviewed"
@@ -73,7 +83,7 @@
       }
     }
   ],
-  "schema_version": 2,
+  "schema_version": 3,
   "summary": {
     "events": 8,
     "external_key_only_participants": 1,

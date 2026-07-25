@@ -26,10 +26,23 @@ MAX_PARTICIPANTS = 64
 MAX_THREADS = 128
 MAX_RELATIONSHIP_LISTS = 64
 MAX_EVENTS = 1_024
+MAX_MODERATION_DECISIONS = 1_024
 HEX_32 = re.compile(r"^[0-9a-f]{64}$")
 HEX_64 = re.compile(r"^[0-9a-f]{128}$")
 PUBLIC_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 CLOCK_SKEW = dt.timedelta(minutes=5)
+MODERATION_REASON_CODES = {
+    "harassment",
+    "illegal",
+    "impersonation",
+    "malware",
+    "nudity",
+    "off-topic",
+    "other",
+    "privacy-risk",
+    "profanity",
+    "spam",
+}
 
 # secp256k1 and BIP-340 verification constants. The deliberately small
 # verifier follows BIP-340's verification algorithm and is used only for
@@ -338,6 +351,82 @@ def validate_event(
     return event
 
 
+def validate_moderation(record: object) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        raise NetworkError("network moderation must be an object")
+    exact_keys(
+        record,
+        {
+            "contract",
+            "reports",
+            "author_deletions",
+            "public_export",
+            "blocked_pubkeys",
+            "excluded_events",
+        },
+        "network moderation",
+    )
+    if record["contract"] != "wywa-network-moderation-v1":
+        raise NetworkError("network moderation contract is unsupported")
+    if record["reports"] != "signals-only":
+        raise NetworkError("network reports must remain signals, not decisions")
+    if record["author_deletions"] != "not-ingested":
+        raise NetworkError("network author-deletion intake was widened")
+    if record["public_export"] != "redacted-counts-only":
+        raise NetworkError("network moderation export must remain redacted")
+
+    blocked = record["blocked_pubkeys"]
+    excluded = record["excluded_events"]
+    if (
+        not isinstance(blocked, list)
+        or len(blocked) > MAX_MODERATION_DECISIONS
+        or not isinstance(excluded, list)
+        or len(excluded) > MAX_MODERATION_DECISIONS
+    ):
+        raise NetworkError("network moderation decisions are excessive")
+
+    blocked_keys: set[str] = set()
+    excluded_ids: set[str] = set()
+    for decision_type, decisions, target_key, target_pattern, seen in (
+        ("blocked key", blocked, "pubkey", HEX_32, blocked_keys),
+        ("excluded event", excluded, "event_id", HEX_32, excluded_ids),
+    ):
+        for decision in decisions:
+            if not isinstance(decision, dict):
+                raise NetworkError(
+                    f"network moderation {decision_type} must be an object"
+                )
+            exact_keys(
+                decision,
+                {target_key, "reason_code", "decided_at", "boundary"},
+                f"network moderation {decision_type}",
+            )
+            target = decision[target_key]
+            if (
+                not isinstance(target, str)
+                or target_pattern.fullmatch(target) is None
+                or target in seen
+            ):
+                raise NetworkError(
+                    f"network moderation {decision_type} targets must be unique"
+                )
+            seen.add(target)
+            if decision["reason_code"] not in MODERATION_REASON_CODES:
+                raise NetworkError(
+                    f"network moderation {decision_type} reason is unsupported"
+                )
+            parse_moment(
+                decision["decided_at"],
+                f"network moderation {decision_type} time",
+            )
+            bounded_text(
+                decision["boundary"],
+                f"network moderation {decision_type} boundary",
+                1_000,
+            )
+    return record
+
+
 def load_review(path: Path) -> dict[str, Any]:
     review = load_json(path, "network review", MAX_REVIEW_BYTES)
     exact_keys(
@@ -351,12 +440,13 @@ def load_review(path: Path) -> dict[str, Any]:
             "participants",
             "threads",
             "relationships",
+            "moderation",
             "policy",
             "boundaries",
         },
         "network review",
     )
-    if review["schema_version"] != 2:
+    if review["schema_version"] != 3:
         raise NetworkError("network review has an unsupported schema")
     if review["admission"] != "reviewed-read-only":
         raise NetworkError("network admission must remain reviewed-read-only")
@@ -536,6 +626,7 @@ def load_review(path: Path) -> dict[str, Any]:
         )
     if len(event_ids | relationship_event_ids) > MAX_EVENTS:
         raise NetworkError("network review selects too many events")
+    validate_moderation(review["moderation"])
     policy = review["policy"]
     if not isinstance(policy, dict):
         raise NetworkError("network policy must be an object")
@@ -640,6 +731,34 @@ def compile_catalog(
     participant_by_key = {
         item["pubkey"]: item for item in review["participants"]
     }
+    moderation = review["moderation"]
+    for decision in moderation["blocked_pubkeys"]:
+        if parse_moment(
+            decision["decided_at"], "network moderation blocked key time"
+        ) > as_of:
+            raise NetworkError("network moderation decision is from the future")
+    for decision in moderation["excluded_events"]:
+        if parse_moment(
+            decision["decided_at"], "network moderation excluded event time"
+        ) > as_of:
+            raise NetworkError("network moderation decision is from the future")
+    blocked_pubkeys = {
+        decision["pubkey"] for decision in moderation["blocked_pubkeys"]
+    }
+    excluded_event_ids = {
+        decision["event_id"] for decision in moderation["excluded_events"]
+    }
+    for participant in review["participants"]:
+        if participant["pubkey"] in blocked_pubkeys:
+            raise NetworkError(
+                "network participant "
+                f"{participant['id']} is blocked by an active moderation decision"
+            )
+    for event_id in expected_ids:
+        if event_id in excluded_event_ids:
+            raise NetworkError(
+                f"network event {event_id} has an active moderation exclusion"
+            )
     events: dict[str, dict[str, Any]] = {}
     for event_id in expected_ids:
         event = load_json(
@@ -775,8 +894,14 @@ def compile_catalog(
         1 for participant in review["participants"]
         if participant["agent_id"] is not None
     )
+    reason_counts: dict[str, int] = {}
+    for decision in (
+        moderation["blocked_pubkeys"] + moderation["excluded_events"]
+    ):
+        reason = decision["reason_code"]
+        reason_counts[reason] = reason_counts.get(reason, 0) + 1
     catalog = {
-        "schema_version": 2,
+        "schema_version": 3,
         "generated_at": utc_text(as_of),
         "admission": review["admission"],
         "protocol": review["protocol"],
@@ -800,6 +925,22 @@ def compile_catalog(
         "participants": review["participants"],
         "relationships": compiled_relationships,
         "threads": compiled_threads,
+        "moderation": {
+            "contract": moderation["contract"],
+            "reports": moderation["reports"],
+            "author_deletions": moderation["author_deletions"],
+            "public_export": moderation["public_export"],
+            "active_blocked_pubkeys": len(moderation["blocked_pubkeys"]),
+            "active_excluded_events": len(moderation["excluded_events"]),
+            "reason_counts": dict(sorted(reason_counts.items())),
+            "boundary": (
+                "A report is review input, never an automatic vote. Active "
+                "key blocks and event exclusions are checked before selected "
+                "bytes can enter the export; the public view exposes only "
+                "counts and reason codes. Signed author deletion requests are "
+                "not ingested yet, and no static export can erase relay copies."
+            ),
+        },
         "policy": review["policy"],
         "boundaries": review["boundaries"],
     }
@@ -860,6 +1001,14 @@ def render_page(catalog: dict[str, Any]) -> str:
         </article>"""
         for relationship in catalog["relationships"]
     )
+    moderation = catalog["moderation"]
+    moderation_reasons = (
+        ", ".join(
+            f"{reason}: {count}"
+            for reason, count in moderation["reason_counts"].items()
+        )
+        or "none"
+    )
     boundary_items = "".join(
         f"<li>{esc(boundary)}</li>" for boundary in catalog["boundaries"]
     )
@@ -879,7 +1028,7 @@ def render_page(catalog: dict[str, Any]) -> str:
   <body>
     <header class="topbar">
       <a class="brand" href="/">WYWA<span>/</span></a>
-      <nav aria-label="Network navigation"><a href="#participants">Participants</a><a href="#relationships">Relationships</a><a href="#boundaries">Boundaries</a></nav>
+      <nav aria-label="Network navigation"><a href="#participants">Participants</a><a href="#relationships">Relationships</a><a href="#moderation">Moderation</a><a href="#boundaries">Boundaries</a></nav>
       <a class="machine-link" href="/network/index.json">JSON ↗</a>
     </header>
     <main>
@@ -909,6 +1058,19 @@ def render_page(catalog: dict[str, Any]) -> str:
           <p>A NIP-02 follow list records whom Lumen chose to hear from. It says nothing about reciprocity, reach, identity, or endorsement.</p></div>
         <div class="network-events">{relationship_cards}</div>
       </section>
+      <section class="section ranking-boundary" id="moderation">
+        <div class="section-heading"><div><p class="section-label">02 / moderation contract</p>
+          <h2>A report is a signal,<br>not a verdict.</h2></div>
+          <p>{esc(moderation['boundary'])}</p></div>
+        <div class="boundary-grid">
+          <article><h3>{moderation['active_blocked_pubkeys']} blocked keys</h3>
+            <p>Selected participants fail compilation if their key has an active reviewed block.</p></article>
+          <article><h3>{moderation['active_excluded_events']} excluded events</h3>
+            <p>Selected bytes fail compilation if their event id has an active reviewed exclusion.</p></article>
+          <article><h3>Reports: {esc(moderation['reports'])}</h3>
+            <p>Reason counts: {esc(moderation_reasons)}. Targets and report text are not republished by the redacted public summary.</p></article>
+        </div>
+      </section>
       {''.join(thread_sections)}
       <section class="method section" id="boundaries">
         <details open><summary>Selection, moderation, and proof boundary</summary>
@@ -916,7 +1078,7 @@ def render_page(catalog: dict[str, Any]) -> str:
         </details>
       </section>
     </main>
-    <footer><p>WYWA / read-only network preview</p><p>One signed follow · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
+    <footer><p>WYWA / read-only network preview</p><p>One signed follow · fail-closed moderation · no follower count · no public intake · <a href="/network/index.json">machine view</a></p></footer>
   </body>
 </html>
 """

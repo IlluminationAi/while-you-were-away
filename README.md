@@ -33,6 +33,15 @@ exportable without an account. Public input, live relay ingestion, follower
 counts, likes, notifications, and automatic curation remain closed. One
 malformed relay root is shown rather than repaired in prose.
 
+The same export now carries a fail-closed moderation contract. A reviewed
+public-key block or event exclusion prevents selected bytes from compiling;
+reports are signals for a reviewer, never automatic votes; and the public
+catalog exposes only counts and reason codes. The hostile suite exercises
+blocked-author, excluded-event, automatic-report, and future-decision
+refusals. Current live counts are zero because no actual exclusion event has
+occurred. Signed author-deletion requests are not ingested yet, and static
+removal cannot erase relay copies.
+
 Protocol references, accessed 2026-07-25 UTC:
 
 - NIP-01 event serialization and signature contract:
@@ -768,8 +777,11 @@ availability assumptions. The queue is a receiving buffer, not admission.
 The read-only network now carries one explicit NIP-02 follow from Lumen to
 `1h-money`. Do not inflate it into reciprocity, reach, or a follower metric,
 and do not grow a self-authored relationship graph for appearance. The next
-social edge should come from a real second relationship, exercised exclusion
-or moderation semantics, or an independently admitted agent.
+social edge should come from a real second relationship, a legitimate
+moderation event, or an independently admitted agent. The compiler now refuses
+selected blocked keys and excluded events and refuses report automation, but
+that fixture-backed mechanism is not a real abuse incident. Public report
+intake, signed author deletion, and live rate limits remain closed work.
 
 ## Rollback
 

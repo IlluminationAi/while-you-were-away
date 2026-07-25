@@ -64,7 +64,7 @@ def main() -> None:
             assert (first / relative).read_bytes() == (second / relative).read_bytes()
 
         catalog = json.loads((first / "index.json").read_text(encoding="utf-8"))
-        assert catalog["schema_version"] == 2
+        assert catalog["schema_version"] == 3
         assert catalog["admission"] == "reviewed-read-only"
         assert catalog["protocol"] == "nostr-nip-01+02"
         assert catalog["summary"] == {
@@ -91,6 +91,22 @@ def main() -> None:
         assert follow["target_participant_ids"] == ["one-hour-money"]
         assert follow["content"] == ""
         assert follow["verification"]["semantics"] == "nip-02-follow-list"
+        assert catalog["moderation"] == {
+            "active_blocked_pubkeys": 0,
+            "active_excluded_events": 0,
+            "author_deletions": "not-ingested",
+            "boundary": (
+                "A report is review input, never an automatic vote. Active "
+                "key blocks and event exclusions are checked before selected "
+                "bytes can enter the export; the public view exposes only "
+                "counts and reason codes. Signed author deletion requests are "
+                "not ingested yet, and no static export can erase relay copies."
+            ),
+            "contract": "wywa-network-moderation-v1",
+            "public_export": "redacted-counts-only",
+            "reason_counts": {},
+            "reports": "signals-only",
+        }
         custody = catalog["threads"][1]
         assert custody["events"][0]["wire_root"] is None
         assert custody["events"][0]["reply_to"].startswith("d0cd2e6b")
@@ -100,6 +116,8 @@ def main() -> None:
         assert "<style" not in page.lower()
         assert "Relationship," in page
         assert "Follows 1h-money" in page
+        assert "A report is a signal" in page
+        assert "fail-closed moderation" in page
         assert "root drift" in page
         assert len(list((first / "events").glob("*.json"))) == 8
 
@@ -164,7 +182,82 @@ def main() -> None:
         assert reordered.returncode != 0
         assert "not chronological" in reordered.stderr
 
-    print("PASS read-only signed WYWA network")
+        blocked_review = root / "blocked-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["moderation"]["blocked_pubkeys"] = [
+            {
+                "pubkey": (
+                    "bac6dc1825431a8918c43fc4ec803d3ddf029d3e4544cbfda8df"
+                    "baef58f323b1"
+                ),
+                "reason_code": "spam",
+                "decided_at": "2026-07-25T17:59:00Z",
+                "boundary": "Hostile fixture: a selected blocked key must fail closed.",
+            }
+        ]
+        blocked_review.write_text(json.dumps(record), encoding="utf-8")
+        blocked = run_build(blocked_review, EVENTS, root / "blocked-output")
+        assert blocked.returncode != 0
+        assert "blocked by an active moderation decision" in blocked.stderr
+
+        excluded_review = root / "excluded-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["moderation"]["excluded_events"] = [
+            {
+                "event_id": (
+                    "f05a77def6ec4fa20b80f07802b2ac7bef03138a7816018796"
+                    "f712edc301aa3f"
+                ),
+                "reason_code": "off-topic",
+                "decided_at": "2026-07-25T17:59:00Z",
+                "boundary": (
+                    "Hostile fixture: a selected excluded event must fail closed."
+                ),
+            }
+        ]
+        excluded_review.write_text(json.dumps(record), encoding="utf-8")
+        excluded = run_build(
+            excluded_review, EVENTS, root / "excluded-output"
+        )
+        assert excluded.returncode != 0
+        assert "active moderation exclusion" in excluded.stderr
+
+        automatic_report_review = root / "automatic-report-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["moderation"]["reports"] = "automatic-block"
+        automatic_report_review.write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        automatic_report = run_build(
+            automatic_report_review,
+            EVENTS,
+            root / "automatic-report-output",
+        )
+        assert automatic_report.returncode != 0
+        assert "signals, not decisions" in automatic_report.stderr
+
+        future_decision_review = root / "future-decision-review.json"
+        record = json.loads(REVIEW.read_text(encoding="utf-8"))
+        record["moderation"]["excluded_events"] = [
+            {
+                "event_id": "ab" * 32,
+                "reason_code": "other",
+                "decided_at": "2026-07-25T18:00:01Z",
+                "boundary": "A future moderation decision cannot affect this build.",
+            }
+        ]
+        future_decision_review.write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+        future_decision = run_build(
+            future_decision_review,
+            EVENTS,
+            root / "future-decision-output",
+        )
+        assert future_decision.returncode != 0
+        assert "moderation decision is from the future" in future_decision.stderr
+
+    print("PASS read-only signed WYWA network and fail-closed moderation")
 
 
 if __name__ == "__main__":

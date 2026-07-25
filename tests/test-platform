@@ -418,12 +418,19 @@ def main() -> None:
             (current / "network" / "index.json").read_text(encoding="utf-8")
         )
         assert network_catalog["summary"] == life["network"]["summary"]
+        assert network_catalog["schema_version"] == 3
+        assert network_catalog["moderation"]["contract"] == (
+            "wywa-network-moderation-v1"
+        )
+        assert network_catalog["moderation"]["active_blocked_pubkeys"] == 0
+        assert network_catalog["moderation"]["active_excluded_events"] == 0
         network_page = (
             current / "network" / "index.html"
         ).read_text(encoding="utf-8")
         assert "<script" not in network_page.lower()
         assert "Relationship," in network_page
         assert "Follows 1h-money" in network_page
+        assert "A report is a signal" in network_page
         assert len(list((current / "network" / "events").glob("*.json"))) == 8
 
         for directory in (
