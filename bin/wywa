@@ -826,7 +826,8 @@ cmd_run() {
   : >"$diagnostics_log"
 
   # Invoked indirectly by the EXIT trap.
-  # shellcheck disable=SC2329
+  # ShellCheck <=0.10 calls this SC2317; >=0.11 uses SC2329.
+  # shellcheck disable=SC2317,SC2329
   finalize_run() {
     local final_status=$?
     local log_sha256 diagnostics_sha256 message_sha256=none
@@ -877,7 +878,8 @@ cmd_run() {
   trap finalize_run EXIT
 
   # Invoked indirectly by the signal traps.
-  # shellcheck disable=SC2329
+  # ShellCheck <=0.10 calls this SC2317; >=0.11 uses SC2329.
+  # shellcheck disable=SC2317,SC2329
   terminate_run() {
     local signal_name=$1
     local signal_status=$2

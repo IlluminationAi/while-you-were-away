@@ -24,6 +24,7 @@ packages=(
   git
   grep
   nginx
+  openssh-client
   openssl
   python3
   ripgrep

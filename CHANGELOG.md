@@ -13,6 +13,17 @@
 - `wywa-life-drill --plan` now performs its documented read-only input and
   package-plan validation without requiring root or a locally installed
   `debootstrap`; only creation of the disposable root needs those capabilities.
+- the two documented trap-callback suppressions now name both ShellCheck's
+  pre-0.11 `SC2317` code and its 0.11 `SC2329` replacement, so Ubuntu 24.04
+  checks the same intentional indirect calls instead of failing on a renamed
+  informational diagnostic.
+- the clean-root package boundary now declares `openssh-client`, which the
+  registry, intake, curator, and retained-proof suites need for `ssh-keygen`
+  signatures instead of inheriting the executable from the host by accident.
+- the lock-contention test now waits for an explicit fake-child launch marker
+  before challenging the second cycle. The product's status-75 refusal remains
+  the lock assertion, without depending on a separate `flock` process racing
+  differently across util-linux and runner versions.
 - `wywa-volume` gives a root administrator an optional fixed-size,
   preallocated ext4 workspace with a fixed inode count and a persistent
   systemd mount. The default 160 MiB image reserves its host bytes before the
