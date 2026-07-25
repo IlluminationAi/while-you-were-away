@@ -13,6 +13,7 @@ Usage:
   $program doctor WORKSPACE
   $program run WORKSPACE [--max-runtime DURATION] [--dry-run]
   $program status WORKSPACE
+  $program verify-receipt WORKSPACE
   $program install-user WORKSPACE [--dry-run] [--session-only]
   $program uninstall-user WORKSPACE
 
@@ -21,6 +22,8 @@ Commands:
   doctor   Verify the workspace, non-root boundary, Codex, and login.
   run      Run one bounded, unattended cycle with workspace-write.
   status   Show the last cycle receipt and final message, when available.
+  verify-receipt
+           Verify the last successful host checkpoint and private evidence.
   install-user
            Install and start a completion-relative systemd user timer.
   uninstall-user
@@ -271,9 +274,9 @@ checkpoint_workspace() {
     return 73
   fi
 
-  checkpoint_result=$(
-    checkpoint_git "$workspace" rev-parse --short=12 HEAD
-  )
+  checkpoint_commit=$(checkpoint_git "$workspace" rev-parse HEAD)
+  checkpoint_tree=$(checkpoint_git "$workspace" rev-parse 'HEAD^{tree}')
+  checkpoint_result=${checkpoint_commit:0:12}
   if [[ -n "$(checkpoint_git "$workspace" status --porcelain)" ]]; then
     printf '%s\n' "checkpoint: working tree changed during checkpoint creation"
     return 73
@@ -432,7 +435,7 @@ cmd_run() {
   local codex_bin runtime_dir logs_dir lock_file last_message
   local last_run prompt run_stamp run_log message_tmp receipt_tmp
   local codex_pid='' termination_status='' run_status=0 checkpoint_status=0
-  local checkpoint_result=skipped
+  local checkpoint_result=skipped checkpoint_commit=none checkpoint_tree=none
   local -a clean_env command_line
   codex_bin=$(resolve_codex_bin)
   runtime_dir=$(prepare_runtime_dir "$workspace")
@@ -484,16 +487,23 @@ cmd_run() {
   # shellcheck disable=SC2329
   finalize_run() {
     local final_status=$?
+    local log_sha256 message_sha256=none
     set +e
     if [[ "$final_status" -eq 0 && -s "$message_tmp" ]]; then
       mv -f -- "$message_tmp" "$last_message"
+      message_sha256=$(sha256sum -- "$last_message" | cut -d ' ' -f 1)
     else
       rm -f -- "$message_tmp"
     fi
-    printf '%s status=%s sandbox=workspace-write checkpoint=%s log=%s\n' \
+    log_sha256=$(sha256sum -- "$run_log" | cut -d ' ' -f 1)
+    printf '%s receipt=2 status=%s sandbox=workspace-write checkpoint=%s commit=%s tree=%s log_sha256=%s message_sha256=%s log=%s\n' \
       "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       "$final_status" \
       "$checkpoint_result" \
+      "$checkpoint_commit" \
+      "$checkpoint_tree" \
+      "$log_sha256" \
+      "$message_sha256" \
       "$run_log" >"$receipt_tmp"
     mv -f -- "$receipt_tmp" "$last_run"
     (
@@ -585,6 +595,93 @@ cmd_status() {
   else
     printf '%s\n' "last message: none"
   fi
+}
+
+cmd_verify_receipt() {
+  require_single_workspace_arg "$@"
+  local workspace runtime_dir receipt line prefix log_path
+  local receipt_version='' status='' sandbox='' checkpoint=''
+  local commit='' tree='' log_sha256='' message_sha256='' token
+  local actual_commit actual_tree actual_log_sha256 actual_message_sha256
+  workspace=$(canonical_workspace_path "$1")
+  validate_workspace_path "$workspace"
+  runtime_dir=$(runtime_dir_for "$workspace")
+  receipt=$runtime_dir/last-run
+
+  [[ -d "$runtime_dir" && ! -L "$runtime_dir" ]] ||
+    die "private runtime directory is missing or unsafe"
+  [[ -f "$receipt" && ! -L "$receipt" ]] ||
+    die "last-run receipt is missing or unsafe"
+  IFS= read -r line <"$receipt" ||
+    die "last-run receipt is empty"
+  [[ "$line" == *" log="* ]] ||
+    die "last-run receipt omits its private log"
+  prefix=${line% log=*}
+  log_path=${line#* log=}
+  for token in $prefix; do
+    case "$token" in
+      receipt=*) receipt_version=${token#receipt=} ;;
+      status=*) status=${token#status=} ;;
+      sandbox=*) sandbox=${token#sandbox=} ;;
+      checkpoint=*) checkpoint=${token#checkpoint=} ;;
+      commit=*) commit=${token#commit=} ;;
+      tree=*) tree=${token#tree=} ;;
+      log_sha256=*) log_sha256=${token#log_sha256=} ;;
+      message_sha256=*) message_sha256=${token#message_sha256=} ;;
+    esac
+  done
+
+  [[ "$receipt_version" == 2 ]] ||
+    die "last-run receipt is not a verifiable version-2 receipt"
+  if [[ "$status" != 0 ]]; then
+    printf 'verify-receipt: last run was not successful (status %s)\n' \
+      "${status:-unknown}" >&2
+    return 4
+  fi
+  [[ "$sandbox" == workspace-write ]] ||
+    die "last-run receipt records an unexpected sandbox"
+  [[ "$checkpoint" =~ ^[0-9a-f]{12}$ ]] ||
+    die "last-run receipt has an invalid checkpoint abbreviation"
+  [[ "$commit" =~ ^[0-9a-f]{40,64}$ ]] ||
+    die "last-run receipt has an invalid commit object id"
+  [[ "$tree" =~ ^[0-9a-f]{40,64}$ ]] ||
+    die "last-run receipt has an invalid tree object id"
+  [[ "$log_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+    die "last-run receipt has an invalid log digest"
+  [[ "$message_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+    die "last-run receipt has an invalid message digest"
+  [[ "$checkpoint" == "${commit:0:12}" ]] ||
+    die "checkpoint abbreviation does not match the recorded commit"
+
+  actual_commit=$(
+    checkpoint_git "$workspace" rev-parse --verify "$commit^{commit}" 2>/dev/null
+  ) || die "recorded checkpoint commit is unavailable"
+  [[ "$actual_commit" == "$commit" ]] ||
+    die "recorded checkpoint does not resolve to the exact commit"
+  actual_tree=$(
+    checkpoint_git "$workspace" rev-parse "$commit^{tree}" 2>/dev/null
+  ) || die "recorded checkpoint tree is unavailable"
+  [[ "$actual_tree" == "$tree" ]] ||
+    die "recorded tree does not match the checkpoint commit"
+
+  [[ "$log_path" == "$runtime_dir/logs/"* ]] ||
+    die "recorded log is outside the private runtime"
+  [[ -f "$log_path" && ! -L "$log_path" ]] ||
+    die "recorded log is missing or unsafe"
+  [[ -f "$runtime_dir/last-message.txt" &&
+     ! -L "$runtime_dir/last-message.txt" ]] ||
+    die "recorded final message is missing or unsafe"
+  actual_log_sha256=$(sha256sum -- "$log_path" | cut -d ' ' -f 1)
+  [[ "$actual_log_sha256" == "$log_sha256" ]] ||
+    die "private log digest does not match the receipt"
+  actual_message_sha256=$(
+    sha256sum -- "$runtime_dir/last-message.txt" | cut -d ' ' -f 1
+  )
+  [[ "$actual_message_sha256" == "$message_sha256" ]] ||
+    die "final-message digest does not match the receipt"
+
+  printf 'receipt: verified commit=%s tree=%s\n' \
+    "${commit:0:12}" "${tree:0:12}"
 }
 
 cmd_run_state() {
@@ -823,6 +920,9 @@ main() {
       ;;
     status)
       cmd_status "$@"
+      ;;
+    verify-receipt)
+      cmd_verify_receipt "$@"
       ;;
     install-user)
       cmd_install_user "$@"

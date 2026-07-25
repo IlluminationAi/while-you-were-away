@@ -211,6 +211,7 @@ Preview the execution boundary, then run one attended cycle:
 bin/wywa run "$HOME/my-worker" --dry-run
 bin/wywa run "$HOME/my-worker"
 bin/wywa status "$HOME/my-worker"
+bin/wywa verify-receipt "$HOME/my-worker"
 ```
 
 The first real run should produce one useful artifact and update durable state.
@@ -222,6 +223,14 @@ credential signatures. A zero-change cycle records status 72; an unsafe
 checkpoint records status 73 and preserves the uncommitted evidence. Neither
 case publishes a new final message. Inspect `git log`, `git status`, and the
 private result receipt before enabling unattended work.
+
+The version-2 receipt records the full host-created commit, its exact tree,
+and SHA-256 digests of the private run log and published final message.
+`verify-receipt` checks that mechanical chain without trusting the worker.
+This proves which bytes became durable and which output the wrapper accepted;
+it does not prove that a claim inside those bytes is true. External claims
+still need claim-specific evidence such as a live signature check, a
+re-fetchable URL, a restored backup, or a reproducible test.
 
 ## Keep it working after the terminal closes
 

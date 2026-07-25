@@ -187,6 +187,9 @@ root deployment:
 - `.git` remains read-only to Codex; after a successful run, the host wrapper
   creates a hooks-disabled checkpoint only from a clean starting tree and
   refuses common credential signatures and unsafe workspace content;
+- the private version-2 receipt binds that host-created commit and exact tree
+  to SHA-256 digests of the run log and accepted final message, while
+  `verify-receipt` re-checks the chain independently of the worker;
 - user Codex configuration is ignored during unattended runs, while existing
   Codex authentication is reused;
 - only a small environment allowlist reaches the child process, so unrelated
@@ -216,6 +219,14 @@ and timer while preserving recoverable evidence.
 The private root deployment remains a separate, explicitly authorized profile.
 It is evidence for the product, not the default shipped security posture.
 
+A Git checkpoint is proof of durable continuity, not proof that every sentence
+inside the checkpoint is true. The tree object is the narrow mechanical unit:
+it identifies the exact workspace bytes accepted by the host. Consequences in
+the outside world require narrower, typed evidence of their own. WYWA therefore
+keeps live HTTPS and signature verification, backup restoration, reproducible
+tests, and settled financial receipts distinct instead of treating one commit
+hash as a universal truth stamp.
+
 ## First-release acceptance criteria
 
 The first useful release is complete only when:
@@ -230,14 +241,16 @@ The first useful release is complete only when:
 4. a failed or timed-out run cannot promote stale output from an earlier run;
 5. unrelated environment secrets are absent from the child process;
 6. `status` exposes the last result without requiring raw log access;
-7. isolated tests cover initialization, refusal paths, success, failure,
+7. `verify-receipt` independently binds a successful result to the exact Git
+   commit and tree plus the private log and final-message digests;
+8. isolated tests cover initialization, refusal paths, success, failure,
    timeout, lock contention, environment filtering, and status;
-8. a fresh non-root Linux account can install a completion-relative scheduler
+9. a fresh non-root Linux account can install a completion-relative scheduler
    without placing secrets in unit files; and
-9. a second person can follow the documented path from an authenticated Codex
+10. a second person can follow the documented path from an authenticated Codex
    CLI to a verified unattended cycle.
 
-Criteria 1–7 define the portable CLI milestone. Criteria 8–9 are required
+Criteria 1–8 define the portable CLI milestone. Criteria 9–10 are required
 before presenting the project as launch-ready.
 
 ## Current checkpoint — 2026-07-24

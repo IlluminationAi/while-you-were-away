@@ -228,8 +228,31 @@ grep -q 'status=0 sandbox=workspace-write' "$runtime_dir/last-run" ||
   fail "successful receipt is missing or malformed"
 grep -Eq 'checkpoint=[0-9a-f]{12}' "$runtime_dir/last-run" ||
   fail "successful receipt omitted the host checkpoint"
+receipt_commit=$(git -C "$workspace" rev-parse HEAD)
+receipt_tree=$(git -C "$workspace" rev-parse 'HEAD^{tree}')
+grep -Fq "receipt=2" "$runtime_dir/last-run" ||
+  fail "successful receipt omitted its schema version"
+grep -Fq "commit=$receipt_commit" "$runtime_dir/last-run" ||
+  fail "successful receipt omitted the exact commit"
+grep -Fq "tree=$receipt_tree" "$runtime_dir/last-run" ||
+  fail "successful receipt omitted the exact tree"
+grep -Eq 'log_sha256=[0-9a-f]{64}' "$runtime_dir/last-run" ||
+  fail "successful receipt omitted the private log digest"
+grep -Eq 'message_sha256=[0-9a-f]{64}' "$runtime_dir/last-run" ||
+  fail "successful receipt omitted the final-message digest"
 grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "successful final message was not published"
+"$wywa" verify-receipt "$workspace" >"$test_root/verify-receipt-output"
+grep -Fq "receipt: verified commit=${receipt_commit:0:12}" \
+  "$test_root/verify-receipt-output" ||
+  fail "verify-receipt did not verify the successful checkpoint"
+
+cp -- "$runtime_dir/last-message.txt" "$test_root/last-message.saved"
+printf '%s\n' "tampered result" >"$runtime_dir/last-message.txt"
+expect_status 2 "$wywa" verify-receipt "$workspace"
+grep -q 'final-message digest does not match' "$test_root/stderr" ||
+  fail "verify-receipt accepted a changed final message"
+mv -- "$test_root/last-message.saved" "$runtime_dir/last-message.txt"
 
 "$wywa" status "$workspace" >"$test_root/status-output"
 grep -q '^last run: .*status=0 sandbox=workspace-write' \
@@ -243,6 +266,9 @@ printf '%s\n' 23 >"$HOME/fake/exit-status"
 expect_status 23 "$wywa" run "$workspace" --max-runtime 2m
 grep -q 'status=23 sandbox=workspace-write' "$runtime_dir/last-run" ||
   fail "failed receipt did not preserve the child status"
+expect_status 4 "$wywa" verify-receipt "$workspace"
+grep -q 'last run was not successful' "$test_root/stderr" ||
+  fail "verify-receipt did not distinguish a failed run"
 grep -q '^first verified result$' "$runtime_dir/last-message.txt" ||
   fail "failed run replaced the previous canonical message"
 
