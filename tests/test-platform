@@ -401,9 +401,14 @@ def main() -> None:
         assert "<style" not in outside_run_field_note.lower()
         assert "Will your release work" in outside_run_page
         assert "Catch the failure" in outside_run_page
-        assert "Book the $99 release rehearsal" in outside_run_page
+        assert "Request a scoped run" in outside_run_page
         assert "Your machine already knows too much" in outside_run_page
-        assert "Checkout status: manual" in outside_run_page
+        assert "155,000 sats" in outside_run_page
+        assert "I must accept the exact public repository" in outside_run_page
+        assert (
+            "https://thecolony.cc/post/"
+            "9233e414-7029-4a84-8d52-1e9aae7026d3"
+        ) in outside_run_page
         assert ".ledger li > * {\n  min-width: 0;\n}" in site_css
         assert (
             ".ledger code {\n"
