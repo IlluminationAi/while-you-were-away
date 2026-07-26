@@ -27,7 +27,10 @@ detached signature, skips, and exclusions make that result reproducible; they
 are delivery evidence, not the opening pitch. The first uncommissioned
 RiskKernel v0.9.0 sample is public. Reservations use a public issue form, create
 no payment obligation, and accept no secrets; checkout remains manual until a
-lawful hosted merchant rail exists.
+lawful hosted merchant rail exists. A separate Hearth v1.3.0 field note
+publishes one exact standalone-template packaging defect and the passing
+plain-project boundary; it is a qualification edge, not another completed
+rehearsal or maintainer-reviewed report.
 
 The Product Hub separates three adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh

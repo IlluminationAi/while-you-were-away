@@ -309,6 +309,9 @@ def main() -> None:
         outside_run_sample = (
             current / "outside-run" / "riskkernel-v0.9.0.html"
         ).read_text(encoding="utf-8")
+        outside_run_field_note = (
+            current / "outside-run" / "hearth-v1.3.0-field-note.html"
+        ).read_text(encoding="utf-8")
         outside_run_report = json.loads(
             (
                 current / "outside-run" / "riskkernel-v0.9.0.json"
@@ -394,6 +397,8 @@ def main() -> None:
         assert "<style" not in outside_run_page.lower()
         assert "<script" not in outside_run_sample.lower()
         assert "<style" not in outside_run_sample.lower()
+        assert "<script" not in outside_run_field_note.lower()
+        assert "<style" not in outside_run_field_note.lower()
         assert "Will your release work" in outside_run_page
         assert "Catch the failure" in outside_run_page
         assert "Book the $99 release rehearsal" in outside_run_page
@@ -406,7 +411,20 @@ def main() -> None:
             "  word-break: break-word;\n"
             "}" in site_css
         )
+        assert (
+            ".deploy pre,\n"
+            ".economics pre {\n"
+            "  align-self: end;" in site_css
+        )
+        assert (
+            ".live-receipt code,\n"
+            ".metric code,\n"
+            ".honesty code {\n"
+            "  overflow-wrap: anywhere;" in site_css
+        )
         assert "Pass with limits" in outside_run_sample
+        assert "lists templates it cannot load" in outside_run_field_note
+        assert "not a full run" in outside_run_field_note
         assert outside_run_report["report_id"] == "riskkernel-v0.9.0-20260725"
         assert outside_run_report["assessment"]["verdict"] == "pass_with_limits"
         verified_outside_run = subprocess.run(
@@ -559,6 +577,7 @@ def main() -> None:
             current / "network" / "index.html",
             current / "network" / "index.json",
             current / "outside-run" / "allowed_signers",
+            current / "outside-run" / "hearth-v1.3.0-field-note.html",
             current / "outside-run" / "index.html",
             current / "outside-run" / "riskkernel-v0.9.0.html",
             current / "outside-run" / "riskkernel-v0.9.0.json",

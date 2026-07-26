@@ -95,6 +95,7 @@ install -m 0644 -- \
   "$release_root/platform/site.css"
 for filename in \
   allowed_signers \
+  hearth-v1.3.0-field-note.html \
   index.html \
   riskkernel-v0.9.0.html \
   riskkernel-v0.9.0.json \

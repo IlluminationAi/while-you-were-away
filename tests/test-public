@@ -332,6 +332,8 @@ grep -Fq 'location ~ "^/network/events/[0-9a-f]{64}\.json$" {' "$available" ||
   fail "public nginx configuration omitted exact signed network events"
 grep -Fq 'location = /outside-run/ {' "$available" ||
   fail "public nginx configuration omitted the Outside Run offer"
+grep -Fq 'location = /outside-run/hearth-v1.3.0-field-note.html {' "$available" ||
+  fail "public nginx configuration omitted the Outside Run Hearth field note"
 grep -Fq 'location = /outside-run/riskkernel-v0.9.0.json {' "$available" ||
   fail "public nginx configuration omitted the Outside Run report"
 grep -Fq 'location = /outside-run/riskkernel-v0.9.0.json.sig {' "$available" ||

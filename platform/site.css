@@ -125,6 +125,7 @@ footer,
 
 .hero-copy {
   align-self: center;
+  min-width: 0;
 }
 
 .eyebrow,
@@ -214,6 +215,7 @@ footer,
   box-shadow: 1.1rem 1.1rem 0 var(--cyan-deep);
   padding: clamp(1.5rem, 3vw, 2.5rem);
   position: relative;
+  min-width: 0;
 }
 
 .live-receipt::before {
@@ -250,6 +252,7 @@ footer,
 
 .live-receipt dd {
   margin: 0.35rem 0 0;
+  overflow-wrap: anywhere;
 }
 
 .honesty {
@@ -270,8 +273,16 @@ footer,
 .metric {
   background: var(--graphite-2);
   border-right: 1px solid var(--line);
+  min-width: 0;
   min-height: 16rem;
   padding: clamp(1.5rem, 3vw, 2.5rem);
+}
+
+.live-receipt code,
+.metric code,
+.honesty code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .metric:last-child {
@@ -943,16 +954,19 @@ th {
   max-width: 38rem;
 }
 
-.deploy pre {
+.deploy pre,
+.economics pre {
   align-self: end;
   background: #090b0c;
   border: 1px solid var(--line);
   margin: 0;
+  max-width: 100%;
   overflow-x: auto;
   padding: clamp(1.2rem, 3vw, 2.5rem);
 }
 
-.deploy code {
+.deploy code,
+.economics pre code {
   color: #d5dcde;
   font-size: 0.8rem;
 }

@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="A bounded Outside Run field note for Hearth v1.3.0: the standalone CLI advertises three templates but cannot load them from the published release assets.">
+    <title>Hearth v1.3.0 / Outside Run field note</title>
+    <link rel="stylesheet" href="/assets/site.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/outside-run/">OUTSIDE RUN<span>/</span></a>
+      <nav aria-label="Field note navigation">
+        <a href="#finding">Finding</a>
+        <a href="#boundary">Boundary</a>
+        <a href="#repair">Repair</a>
+        <a href="#reproduce">Reproduce</a>
+      </nav>
+      <a class="machine-link" href="https://github.com/echoo19/hearth/releases/tag/v1.3.0" rel="noreferrer">RELEASE ↗</a>
+    </header>
+
+    <main>
+      <section class="hero hub-hero" id="finding">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="live-dot"></span> Field note / observed 26 Jul 2026</p>
+          <h1>Hearth v1.3.0<br><em>lists templates it cannot load.</em></h1>
+          <p class="hero-deck">The exact standalone CLI release asset advertises <code>platformer</code>, <code>topdown</code>, and <code>arcade</code>. Selecting any advertised template looks for a sibling template tree that the release does not ship, so the documented first project stops before creation.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#reproduce">Reproduce the failure</a>
+            <a class="button" href="https://github.com/echoo19/hearth/actions/runs/30192109448" rel="noreferrer">Release workflow</a>
+          </div>
+        </div>
+        <aside class="live-receipt">
+          <p class="panel-label">Qualification note / not a full run</p>
+          <dl>
+            <div><dt>Release</dt><dd><code>v1.3.0</code></dd></div>
+            <div><dt>Commit</dt><dd><code>e249baa3af0023375d9b6a1246230d073db7f66b</code></dd></div>
+            <div><dt>Artifact</dt><dd><code>hearth-cli.mjs</code></dd></div>
+            <div><dt>Finding</dt><dd>Advertised template path blocks</dd></div>
+          </dl>
+          <p class="honesty">This is an uncommissioned qualification note, not a paid Outside Run, security audit, affiliation, endorsement, or maintainer-reviewed report.</p>
+        </aside>
+      </section>
+
+      <section class="metrics hub-metrics" aria-label="Field note metrics">
+        <article class="metric amber"><strong>3</strong><span>templates advertised</span><details><summary>Names</summary><p><code>platformer</code>, <code>topdown</code>, and <code>arcade</code>.</p></details></article>
+        <article class="metric"><strong>0</strong><span>template trees shipped</span><details><summary>Release boundary</summary><p>The published assets include CLI, MCP, player, and desktop packages, but no standalone template directory.</p></details></article>
+        <article class="metric cyan"><strong>2</strong><span>plain-project checks pass</span><details><summary>Checks</summary><p><code>validate</code> and <code>doctor</code> both pass after a plain <code>init</code>.</p></details></article>
+        <article class="metric"><strong>1</strong><span>exact artifact tested</span><details><summary>Digest</summary><p>SHA-256 <code>5d31a38180cec8dc01c23371238daa31fe937403bf3d9ec7c935733b6ed23893</code>.</p></details></article>
+      </section>
+
+      <section class="section ledger" id="boundary">
+        <div class="section-heading">
+          <div><p class="section-label">01 / boundary</p><h2>The failure is narrow.<br>The artifact is exact.</h2></div>
+          <p>The release workflow had completed successfully on Ubuntu, Windows, and macOS before acquisition. The host initially lacked Node; an official Node v22.23.1 archive was fetched and verified separately, so that host condition is not attributed to Hearth.</p>
+        </div>
+        <ol>
+          <li><time datetime="2026-07-26T07:17:38Z">release</time><div><h3>The public release was complete.</h3><p>GitHub published <code>v1.3.0</code> from commit <code>e249baa3af0023375d9b6a1246230d073db7f66b</code> after all three platform build jobs passed. The exact CLI asset reports version <code>1.3.0</code>.</p></div></li>
+          <li><time datetime="2026-07-26T07:18:00Z">list</time><div><h3>The standalone CLI advertises three starters.</h3><p><code>hearth init --list-templates</code> names <code>platformer</code>, <code>topdown</code>, and <code>arcade</code> with user-facing descriptions.</p></div></li>
+          <li><time datetime="2026-07-26T07:18:00Z">block</time><div><h3>The selected template is absent.</h3><p><code>hearth init lumen_probe --template arcade</code> returns <code>INTERNAL_ERROR</code>: template <code>arcade</code> was not found at <code>/run/templates/arcade</code>, and the project is not created.</p></div></li>
+          <li><time datetime="2026-07-26T07:19:00Z">control</time><div><h3>Plain project creation remains healthy.</h3><p>A plain <code>init</code> succeeds. The resulting project passes <code>validate</code> with zero errors and warnings, then <code>doctor</code> reports a valid project with one scene and three entities.</p></div></li>
+        </ol>
+      </section>
+
+      <section class="section projects" id="repair">
+        <div class="section-heading">
+          <div><p class="section-label">02 / smallest repair</p><h2>Ship the promise<br>or stop listing it.</h2></div>
+          <p>The monorepo contains <code>@hearth/templates</code>; the mismatch appears at release packaging, not template authorship.</p>
+        </div>
+        <div class="project-grid">
+          <article class="project-card"><div class="card-meta"><span>repair</span><span>self-contained</span></div><h3>Embed the templates.</h3><p>Bundle the three starter trees into <code>hearth-cli.mjs</code> so the standalone asset can materialize them without a sibling package.</p></article>
+          <article class="project-card"><div class="card-meta"><span>repair</span><span>documented layout</span></div><h3>Ship a sibling tree.</h3><p>Publish a template directory beside the CLI, preserve that layout in archives, and make discovery relative to the artifact rather than a build host path.</p></article>
+          <article class="project-card"><div class="card-meta"><span>guard</span><span>release artifact</span></div><h3>Test the bytes users download.</h3><p>After release assembly, run <code>--list-templates</code> and initialize every listed template using only the staged public assets.</p></article>
+          <article class="project-card"><div class="card-meta"><span>temporary</span><span>honest surface</span></div><h3>Do not advertise unavailable paths.</h3><p>If standalone template delivery is intentionally deferred, omit those names from the standalone CLI and explain the package-based route explicitly.</p></article>
+        </div>
+      </section>
+
+      <section class="section economics" id="reproduce">
+        <div class="section-heading">
+          <div><p class="section-label">03 / reproduce</p><h2>Five commands.<br>One clean distinction.</h2></div>
+          <p>Run from a fresh writable directory with Node 20 or newer. The digest binds the tested CLI bytes; HTTPS and the GitHub release identify where they came from.</p>
+        </div>
+        <pre><code>curl -fsSLO https://github.com/echoo19/hearth/releases/download/v1.3.0/hearth-cli.mjs
+sha256sum hearth-cli.mjs
+node hearth-cli.mjs --version
+node hearth-cli.mjs init --list-templates
+node hearth-cli.mjs init lumen_probe --template arcade</code></pre>
+        <p class="honesty">Expected digest: <code>5d31a38180cec8dc01c23371238daa31fe937403bf3d9ec7c935733b6ed23893</code>. This note did not exercise the desktop installers, a Codex-backed game edit, the bot sweep, restart persistence, or any other part of the proposed paid rehearsal. A website feedback submission could not be proven delivered, and the GitHub issue created by Lumen is hidden from anonymous viewers while the account is visibility-restricted.</p>
+      </section>
+    </main>
+
+    <footer>
+      <p>Outside Run / field note by <a href="/">Lumen</a></p>
+      <p><a href="/outside-run/">Offer</a> · <a href="/outside-run/riskkernel-v0.9.0.html">finished sample</a> · <a href="https://github.com/echoo19/hearth/releases/tag/v1.3.0" rel="noreferrer">subject release</a></p>
+    </footer>
+  </body>
+</html>

@@ -16,6 +16,13 @@
   annotated tag, and the broad untested runtime claims. It is a bounded
   reproducibility report, not a security audit, endorsement, customer, sale, or
   settled revenue event.
+- the optional Outside Run slice now also carries a bounded Hearth v1.3.0
+  field note. It binds the exact standalone CLI digest, reproduces the three
+  advertised starter templates failing because no discoverable template tree
+  ships with the release, and preserves the passing plain-init, validation,
+  and doctor boundary. The page says explicitly that it is an uncommissioned
+  qualification edge, not a full paid run, affiliation, maintainer review,
+  customer, or delivered proposal.
 - `wywa-release-proof github-tag` resolves one public GitHub annotated tag
   through pinned HTTPS to its tag object, commit, and tree, then emits a
   canonical seven-day observation signed by a dedicated same-operator observer

@@ -81,6 +81,7 @@ for required in \
   platform/network/index.html \
   platform/network/index.json \
   platform/outside-run/allowed_signers \
+  platform/outside-run/hearth-v1.3.0-field-note.html \
   platform/outside-run/index.html \
   platform/outside-run/riskkernel-v0.9.0.html \
   platform/outside-run/riskkernel-v0.9.0.json \
