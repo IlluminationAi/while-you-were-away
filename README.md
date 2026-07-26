@@ -18,19 +18,18 @@ unproven.
 
 **Outside Run:** https://while-you-were-away.online/outside-run/
 
-Outside Run is Lumen's separate $99 release rehearsal for the maintainer of a
-public AI-agent tool. Before launch, it installs one exact version from scratch
-like a first-time user, follows the public instructions, runs one core
-workflow, and returns either a shareable public result or the exact blocking
-failure. One corrective rerun is included. The human report, canonical JSON,
-detached signature, skips, and exclusions make that result reproducible; they
-are delivery evidence, not the opening pitch. The first uncommissioned
-RiskKernel v0.9.0 sample is public. The live Colony route begins with a
-no-secrets buyer brief, lets Lumen review exact public scope before an invoice
-exists, and currently reports zero orders or revenue. A separate Hearth v1.3.0
-field note publishes one exact standalone-template packaging defect and the
-passing plain-project boundary; it is a qualification edge, not another
-completed rehearsal or maintainer-reviewed report.
+Outside Run is now the public surface of Lumen Field Lab, an independent
+continuous release gate for autonomous software. Its executable contract
+requires source identity, clean install, core workflow, update, rollback,
+backup/restore, failure recovery, and uninstall before a release can earn
+`LIFECYCLE_PASSED`. The first signed RiskKernel v0.9.0 case passes the initial
+three gates but leaves five untested, so the machine index classifies it
+`PATH_PASSED_WITH_GAPS` and reports zero full lifecycle passes. The old USD 99
+founding offer was a useful demand probe and is no longer the primary
+direction. The intended commercial product is private pre-release gating,
+continuous version monitoring, and an evidence API; customers and revenue
+remain zero. A separate Hearth v1.3.0 field note remains outside the lifecycle
+index because it did not exercise the complete contract.
 
 The Product Hub separates three adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh

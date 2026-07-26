@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd -- "$repo_dir"
+
+verifier=$repo_dir/bin/outside-run-lab-verify
+assets=$repo_dir/platform/outside-run
+index=$assets/lab-index.json
+test_root=$(mktemp -d)
+
+cleanup() {
+  chmod -R u+rwX -- "$test_root" 2>/dev/null || true
+  rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL %s\n' "$*" >&2
+  exit 1
+}
+
+assert_rejected() {
+  local candidate=$1
+  if "$verifier" "$candidate" --asset-dir "$assets" >/dev/null 2>&1; then
+    fail "mutated lifecycle index was accepted: ${candidate##*/}"
+  fi
+}
+
+result=$("$verifier" "$index")
+python3 - "$result" <<'PY'
+import json
+import sys
+
+result = json.loads(sys.argv[1])
+assert result["ok"] is True
+assert result["contract"] == "outside-run-field-lab/v1"
+assert result["summary"] == {
+    "failed_cases": 0,
+    "full_lifecycle_passes": 0,
+    "incomplete": 0,
+    "independent_operator_cases": 0,
+    "total_cases": 1,
+    "with_gaps": 1,
+}
+assert result["cases"] == [
+    {
+        "case_id": "riskkernel-v0.9.0-20260725",
+        "classification": "PATH_PASSED_WITH_GAPS",
+        "independence": "outside_project_same_host",
+    }
+]
+PY
+
+python3 - "$index" "$test_root/missing-stage.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text())
+record["cases"][0]["stages"].pop()
+Path(sys.argv[2]).write_text(json.dumps(record))
+PY
+assert_rejected "$test_root/missing-stage.json"
+
+python3 - "$index" "$test_root/fake-pass.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text())
+record["cases"][0]["classification"] = "LIFECYCLE_PASSED"
+record["summary"]["full_lifecycle_passes"] = 1
+record["summary"]["with_gaps"] = 0
+Path(sys.argv[2]).write_text(json.dumps(record))
+PY
+assert_rejected "$test_root/fake-pass.json"
+
+python3 - "$index" "$test_root/fake-independence.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text())
+record["cases"][0]["relationship"]["operator_independence"] = (
+    "independent_operator"
+)
+Path(sys.argv[2]).write_text(json.dumps(record))
+PY
+assert_rejected "$test_root/fake-independence.json"
+
+python3 - "$index" "$test_root/fake-hash.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text())
+record["cases"][0]["report"]["sha256"] = "0" * 64
+Path(sys.argv[2]).write_text(json.dumps(record))
+PY
+assert_rejected "$test_root/fake-hash.json"
+
+python3 - "$index" "$test_root/evidence-on-untested.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+record = json.loads(Path(sys.argv[1]).read_text())
+record["cases"][0]["stages"][3]["evidence"] = ["invented"]
+Path(sys.argv[2]).write_text(json.dumps(record))
+PY
+assert_rejected "$test_root/evidence-on-untested.json"
+
+python3 - "$index" "$test_root/duplicate.json" <<'PY'
+import sys
+from pathlib import Path
+
+raw = Path(sys.argv[1]).read_text()
+Path(sys.argv[2]).write_text(raw.replace(
+    '"contract": "outside-run-field-lab/v1",',
+    '"contract": "outside-run-field-lab/v1", '
+    '"contract": "outside-run-field-lab/v1",',
+    1,
+))
+PY
+assert_rejected "$test_root/duplicate.json"
+
+ln -s -- "$index" "$test_root/index-link.json"
+assert_rejected "$test_root/index-link.json"
+
+printf 'PASS Outside Run Field Lab lifecycle classification\n'

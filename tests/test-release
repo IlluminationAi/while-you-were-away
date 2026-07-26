@@ -74,6 +74,8 @@ release_root=$(find \
   fail "release omitted the bounded life publisher"
 [[ -x "$release_root/bin/outside-run-verify" ]] ||
   fail "release omitted the Outside Run report verifier"
+[[ -x "$release_root/bin/outside-run-lab-verify" ]] ||
+  fail "release omitted the Field Lab lifecycle verifier"
 [[ -x "$release_root/bin/build-launch-assets" ]] ||
   fail "release omitted the launch-asset builder"
 [[ -f "$release_root/GETTING_STARTED.md" ]] ||
@@ -104,6 +106,8 @@ release_root=$(find \
   fail "release omitted the life-dashboard stylesheet"
 [[ -f "$release_root/platform/outside-run/riskkernel-v0.9.0.json" ]] ||
   fail "release omitted the Outside Run sample report"
+[[ -f "$release_root/platform/outside-run/lab-index.json" ]] ||
+  fail "release omitted the Field Lab lifecycle index"
 [[ -f "$release_root/platform/outside-run/riskkernel-v0.9.0.json.sig" ]] ||
   fail "release omitted the Outside Run sample signature"
 [[ -f "$release_root/platform/outside-run/hearth-v1.3.0-field-note.html" ]] ||
@@ -142,6 +146,9 @@ shellcheck \
   "$release_root/platform/outside-run/riskkernel-v0.9.0.json" \
   "$release_root/platform/outside-run/riskkernel-v0.9.0.json.sig" \
   "$release_root/platform/outside-run/allowed_signers" >/dev/null
+"$release_root/bin/outside-run-lab-verify" \
+  "$release_root/platform/outside-run/lab-index.json" \
+  --report-verifier "$release_root/bin/outside-run-verify" >/dev/null
 WYWA_STATE_ROOT="$test_root/release-state" \
   "$release_root/bin/wywa" init "$test_root/release-worker" >/dev/null
 [[ -z "$(git -C "$test_root/release-worker" status --porcelain)" ]] ||

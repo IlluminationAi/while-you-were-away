@@ -85,6 +85,9 @@ install -m 0755 -- \
   "$project_dir/bin/outside-run-verify" \
   "$release_root/bin/outside-run-verify"
 install -m 0755 -- \
+  "$project_dir/bin/outside-run-lab-verify" \
+  "$release_root/bin/outside-run-lab-verify"
+install -m 0755 -- \
   "$project_dir/bin/publish-platform" \
   "$release_root/bin/publish-platform"
 install -m 0755 -- \
@@ -97,6 +100,7 @@ for filename in \
   allowed_signers \
   hearth-v1.3.0-field-note.html \
   index.html \
+  lab-index.json \
   riskkernel-v0.9.0.html \
   riskkernel-v0.9.0.json \
   riskkernel-v0.9.0.json.sig

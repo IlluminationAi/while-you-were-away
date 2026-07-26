@@ -1,0 +1,111 @@
+{
+  "boundary": "This index classifies disclosed lifecycle stages and verifies bound report bytes and signatures. It does not prove maintainer consent, independent operation, unobserved traffic, product quality outside the named path, market adoption, or revenue.",
+  "cases": [
+    {
+      "case_id": "riskkernel-v0.9.0-20260725",
+      "classification": "PATH_PASSED_WITH_GAPS",
+      "relationship": {
+        "commissioned": false,
+        "maintainer_reviewed": false,
+        "operator_independence": "outside_project_same_host"
+      },
+      "report": {
+        "allowed_signers_path": "allowed_signers",
+        "path": "riskkernel-v0.9.0.json",
+        "report_id": "riskkernel-v0.9.0-20260725",
+        "sha256": "89d7dff6a1370ffbb226fc25dd25161287e2eb8097a73c3f243685958437de10",
+        "signature_path": "riskkernel-v0.9.0.json.sig",
+        "verdict": "pass_with_limits"
+      },
+      "stages": [
+        {
+          "boundary": "The annotated tag, commit, and tree were resolved from the named public repository; the tag itself was unsigned.",
+          "evidence": [
+            "riskkernel-v0.9.0.json#/subject/release",
+            "riskkernel-v0.9.0.json#/checks/0"
+          ],
+          "id": "source_identity",
+          "status": "PASS"
+        },
+        {
+          "boundary": "The exact public release was acquired and built in a bounded clean Linux execution environment; this was not a consumer package installer.",
+          "evidence": [
+            "riskkernel-v0.9.0.json#/checks/2",
+            "riskkernel-v0.9.0.json#/checks/3",
+            "riskkernel-v0.9.0.json#/checks/4"
+          ],
+          "id": "clean_install",
+          "status": "PASS"
+        },
+        {
+          "boundary": "Offline Go and Python test paths plus basic CLI init and doctor were exercised; live providers, PostgreSQL, and Docker were excluded.",
+          "evidence": [
+            "riskkernel-v0.9.0.json#/checks/5",
+            "riskkernel-v0.9.0.json#/checks/7",
+            "riskkernel-v0.9.0.json#/checks/9",
+            "riskkernel-v0.9.0.json#/checks/10"
+          ],
+          "id": "core_workflow",
+          "status": "PASS"
+        },
+        {
+          "boundary": "No version-to-version update was exercised.",
+          "evidence": [],
+          "id": "update",
+          "status": "UNTESTED"
+        },
+        {
+          "boundary": "No code or state rollback was exercised.",
+          "evidence": [],
+          "id": "rollback",
+          "status": "UNTESTED"
+        },
+        {
+          "boundary": "No application backup and restore cycle was exercised.",
+          "evidence": [],
+          "id": "backup_restore",
+          "status": "UNTESTED"
+        },
+        {
+          "boundary": "No process interruption, host failure, or post-failure continuation was exercised.",
+          "evidence": [],
+          "id": "failure_recovery",
+          "status": "UNTESTED"
+        },
+        {
+          "boundary": "No uninstall or residue inspection was exercised.",
+          "evidence": [],
+          "id": "uninstall",
+          "status": "UNTESTED"
+        }
+      ],
+      "subject": {
+        "commit": "a2737f69347e538a130f0f851ee2b23626e60a98",
+        "name": "RiskKernel",
+        "reference": "refs/tags/v0.9.0",
+        "repository": "https://github.com/prashar32/riskkernel",
+        "tree": "bd3847b6de9fe277d3153ccc3e5167714cb7d2a1"
+      }
+    }
+  ],
+  "contract": "outside-run-field-lab/v1",
+  "generated_at": "2026-07-26T18:00:00Z",
+  "required_stages": [
+    "source_identity",
+    "clean_install",
+    "core_workflow",
+    "update",
+    "rollback",
+    "backup_restore",
+    "failure_recovery",
+    "uninstall"
+  ],
+  "summary": {
+    "failed_cases": 0,
+    "full_lifecycle_passes": 0,
+    "incomplete": 0,
+    "independent_operator_cases": 0,
+    "total_cases": 1,
+    "with_gaps": 1
+  }
+}

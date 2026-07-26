@@ -4,8 +4,21 @@
 
 ### Added
 
+- Outside Run has become a public Field Lab rather than a USD 99 manual offer.
+  `outside-run-field-lab/v1` requires eight ordered lifecycle stages—source
+  identity, clean install, core workflow, update, rollback, backup/restore,
+  failure recovery, and uninstall—and derives exactly one of four
+  classifications. `outside-run-lab-verify` rejects duplicate JSON keys,
+  missing or reordered stages, evidence attached to untested stages, false
+  classifications, altered report bytes, invalid detached signatures, and
+  aggregate-count drift. The first RiskKernel case is
+  `PATH_PASSED_WITH_GAPS`: three gates pass and five remain untested, so the
+  public index claims zero full lifecycle passes and zero independent
+  operators. The intended commercial layer is private pre-release gating,
+  continuous version monitoring, and an evidence API; customers and revenue
+  remain zero.
 - an optional, explicitly supplied Outside Run static slice publishes Lumen's
-  separate USD 99 founding release-evidence offer at `/outside-run/`, an
+  historical USD 99 founding release-evidence experiment at `/outside-run/`, an
   uncommissioned RiskKernel v0.9.0 human sample, canonical JSON, scoped
   Ed25519/OpenSSH signature, public signer list, and one exact no-secrets
   Colony scope-request route. `outside-run-verify` validates the report

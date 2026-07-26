@@ -14,6 +14,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 PUBLISH = PROJECT / "bin" / "publish-platform"
+OUTSIDE_RUN_LAB_VERIFY = PROJECT / "bin" / "outside-run-lab-verify"
 OUTSIDE_RUN_VERIFY = PROJECT / "bin" / "outside-run-verify"
 REGISTRY = PROJECT / "bin" / "wywa-registry"
 PRODUCT = PROJECT / "bin" / "wywa-product"
@@ -319,6 +320,11 @@ def main() -> None:
                 current / "outside-run" / "riskkernel-v0.9.0.json"
             ).read_text(encoding="utf-8")
         )
+        outside_run_lab = json.loads(
+            (current / "outside-run" / "lab-index.json").read_text(
+                encoding="utf-8"
+            )
+        )
         assert life["generated_at"] == INSTANTS[-1]
         assert life["phase"] == "active"
         assert life["metrics"]["observed_cycles"] == 3
@@ -401,17 +407,25 @@ def main() -> None:
         assert "<style" not in outside_run_sample.lower()
         assert "<script" not in outside_run_field_note.lower()
         assert "<style" not in outside_run_field_note.lower()
-        assert "Will your release work" in outside_run_page
-        assert "Catch the failure" in outside_run_page
-        assert "Request a scoped run" in outside_run_page
-        assert "Your machine already knows too much" in outside_run_page
-        assert "155,000 sats" in outside_run_page
-        assert "I must accept the exact public repository" in outside_run_page
-        assert (
-            "https://thecolony.cc/post/"
-            "9233e414-7029-4a84-8d52-1e9aae7026d3"
-        ) in outside_run_page
-        assert "Request through Colony" in outside_run_page
+        assert "Don’t trust an agent release" in outside_run_page
+        assert "Eight gates." in outside_run_page
+        assert "Propose a public pilot" in outside_run_page
+        assert "Your development machine knows too much" in outside_run_page
+        assert "PATH_PASSED_WITH_GAPS" in outside_run_page
+        assert "$99" not in outside_run_page
+        assert "thecolony.cc" not in outside_run_page
+        assert outside_run_lab["contract"] == "outside-run-field-lab/v1"
+        assert outside_run_lab["summary"] == {
+            "failed_cases": 0,
+            "full_lifecycle_passes": 0,
+            "incomplete": 0,
+            "independent_operator_cases": 0,
+            "total_cases": 1,
+            "with_gaps": 1,
+        }
+        assert outside_run_lab["cases"][0]["classification"] == (
+            "PATH_PASSED_WITH_GAPS"
+        )
         assert (
             "github.com/IlluminationAi/while-you-were-away/issues/new"
             not in outside_run_page
@@ -501,6 +515,22 @@ def main() -> None:
             text=True,
         )
         assert json.loads(verified_outside_run.stdout)["ok"] is True
+        verified_lab = subprocess.run(
+            [
+                str(OUTSIDE_RUN_LAB_VERIFY),
+                str(current / "outside-run" / "lab-index.json"),
+                "--asset-dir",
+                str(current / "outside-run"),
+                "--report-verifier",
+                str(OUTSIDE_RUN_VERIFY),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert json.loads(verified_lab.stdout)["summary"] == (
+            outside_run_lab["summary"]
+        )
         tampered_outside_run = root / "tampered-outside-run.json"
         tampered_outside_run.write_bytes(
             (
@@ -641,6 +671,7 @@ def main() -> None:
             current / "outside-run" / "allowed_signers",
             current / "outside-run" / "hearth-v1.3.0-field-note.html",
             current / "outside-run" / "index.html",
+            current / "outside-run" / "lab-index.json",
             current / "outside-run" / "riskkernel-v0.9.0.html",
             current / "outside-run" / "riskkernel-v0.9.0.json",
             current / "outside-run" / "riskkernel-v0.9.0.json.sig",

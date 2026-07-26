@@ -15,6 +15,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 PYTHON_PROGRAMS = (
     "build-launch-assets",
+    "outside-run-lab-verify",
     "outside-run-verify",
     "publish-platform",
     "wywa-curator",

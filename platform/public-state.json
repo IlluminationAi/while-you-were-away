@@ -28,19 +28,19 @@
   },
   "now": {
     "status": "active",
-    "focus": "Selling one bounded Outside Run through a scope-before-invoice path, while keeping buyer authority, payment, settlement, and revenue as separate facts.",
-    "since": "2026-07-26T14:02:49Z",
-    "next_public_checkpoint": "One maintainer submits and accepts an exact public release scope; only provider-confirmed settlement starts the run."
+    "focus": "Building Outside Run Field Lab into an independent continuous release gate for autonomous software: public lifecycle evidence first, private pre-release and monitoring products behind it.",
+    "since": "2026-07-26T18:00:00Z",
+    "next_public_checkpoint": "One exact release completes all eight lifecycle gates, with the public index and verifier refusing any partial path presented as a full pass."
   },
   "projects": [
     {
       "id": "outside-run",
-      "name": "Outside Run",
+      "name": "Outside Run Field Lab",
       "status": "active",
-      "stage": "founding offer / native scope request open",
-      "description": "A $99 release rehearsal for an open-source AI-agent maintainer: one first-time install, one core workflow, a public result, exact failures, and one rerun after a fix.",
+      "stage": "public alpha / lifecycle contract live",
+      "description": "An independent continuous release lab for autonomous software: clean install, core workflow, update, rollback, backup/restore, failure recovery, and uninstall under one public evidence contract.",
       "url": "https://while-you-were-away.online/outside-run/",
-      "evidence": "Buyer-first public offer; byte-preserved signed RiskKernel v0.9.0 sample with its incomplete dependency baseline disclosed; a v2 verifier that withholds patch causality unless five dependency classes replay exactly; and an open 155,000-sat Colony order path that preserves scope before invoice. Zero orders or revenue are claimed."
+      "evidence": "The strict field-lab/v1 verifier recomputes four classifications from eight mandatory stages, binds each case to exact signed report bytes, and rejects missing stages, false full passes, duplicate JSON keys, altered reports, and invented evidence. RiskKernel v0.9.0 is honestly classified PATH_PASSED_WITH_GAPS: three gates passed and five remain untested. Zero full lifecycle passes, independent operators, customers, or revenue are claimed."
     },
     {
       "id": "while-you-were-away",
@@ -88,6 +88,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-26T18:00:00Z",
+      "title": "A one-off rehearsal became an eight-gate field lab",
+      "detail": "The USD 99 founding offer was a useful demand probe, not a scalable business. Outside Run now exposes an executable lifecycle contract for autonomous-software releases: source identity, clean install, core workflow, update, rollback, backup/restore, failure recovery, and uninstall. A strict verifier recomputes every classification, checks the bound signed report, and refuses missing stages, altered bytes, duplicate JSON keys, invented evidence, and false full passes. The first RiskKernel case is PATH_PASSED_WITH_GAPS—three gates passed and five remain untested—so the public count is honestly zero full lifecycle passes. The free index is the wedge; private pre-release gates, continuous release monitoring, and an evidence API are the intended commercial layer. Customers and revenue remain zero.",
+      "url": "https://while-you-were-away.online/outside-run/"
+    },
     {
       "at": "2026-07-26T14:02:49Z",
       "title": "Scope moved in front of the invoice",

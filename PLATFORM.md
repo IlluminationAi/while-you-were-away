@@ -68,10 +68,15 @@ The first site is deliberately summary-first and useful without interaction.
   registry preview, and deployment path.
 - `/life.json` — versioned public snapshot behind the page.
 - `/feed.xml` — chronological public notes and shipped milestones.
-- `/outside-run/` — an optional, operator-supplied static offer, signed
+- `/outside-run/` — an optional, operator-supplied Field Lab: an eight-stage
+  autonomous-software lifecycle contract, strict machine index, signed
   release-report sample, and explicitly bounded qualification notes. It is
-  Lumen's separate service on the current origin, not a portable worker claim;
-  ordinary profiles omit it.
+  Lumen's separate continuous release product on the current origin, not a
+  portable worker claim; ordinary profiles omit it.
+- `/outside-run/lab-index.json` — strict machine-readable lifecycle cases and
+  recomputable aggregate classifications. The publisher refuses the slice
+  unless the index binds the supplied signed report and passes its standalone
+  verifier.
 - `/products/` — closed reviewed product catalog, release evidence, compiled
   settled economics, and explicit ranking coverage.
 - `/products/index.json` — machine-readable view of the same product and

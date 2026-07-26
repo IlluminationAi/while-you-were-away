@@ -1,0 +1,505 @@
+#!/usr/bin/env python3
+"""Verify the public Outside Run Field Lab lifecycle index."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+
+CONTRACT = "outside-run-field-lab/v1"
+REQUIRED_STAGES = (
+    "source_identity",
+    "clean_install",
+    "core_workflow",
+    "update",
+    "rollback",
+    "backup_restore",
+    "failure_recovery",
+    "uninstall",
+)
+STATUSES = {"PASS", "FAIL", "UNTESTED"}
+CLASSIFICATIONS = {
+    "EVIDENCE_INCOMPLETE",
+    "LIFECYCLE_FAILED",
+    "LIFECYCLE_PASSED",
+    "PATH_PASSED_WITH_GAPS",
+}
+INDEPENDENCE = {
+    "same_operator",
+    "outside_project_same_host",
+    "independent_operator",
+}
+IDENTIFIER = re.compile(r"^[a-z0-9]+(?:[a-z0-9.-]*[a-z0-9])?$")
+OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MAX_INDEX_BYTES = 256 * 1024
+MAX_REPORT_BYTES = 512 * 1024
+MAX_CASES = 1_000
+MAX_TEXT = 4_096
+
+
+class LabError(Exception):
+    """The lifecycle index cannot support its advertised classification."""
+
+
+def _reject_constant(value: str) -> None:
+    raise LabError(f"non-finite JSON number is forbidden: {value}")
+
+
+def _object_without_duplicate_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise LabError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def bounded_file(path: Path, label: str, ceiling: int) -> tuple[Path, bytes]:
+    absolute = path.absolute()
+    try:
+        metadata = absolute.lstat()
+    except OSError as error:
+        raise LabError(f"cannot inspect {label}: {error}") from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise LabError(f"{label} must be a regular nonsymlink file")
+    if metadata.st_size <= 0 or metadata.st_size > ceiling:
+        raise LabError(f"{label} size is outside 1..{ceiling} bytes")
+    return absolute, absolute.read_bytes()
+
+
+def strict_json(raw: bytes, label: str) -> dict[str, Any]:
+    try:
+        decoded = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_constant=_reject_constant,
+        )
+    except UnicodeDecodeError as error:
+        raise LabError(f"{label} is not strict UTF-8") from error
+    except json.JSONDecodeError as error:
+        raise LabError(f"{label} is not valid JSON: {error}") from error
+    if not isinstance(decoded, dict):
+        raise LabError(f"{label} root must be an object")
+    return decoded
+
+
+def exact_object(
+    value: Any,
+    keys: set[str],
+    label: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise LabError(f"{label} must be an object")
+    actual = set(value)
+    if actual != keys:
+        raise LabError(
+            f"{label} keys differ; "
+            f"missing={sorted(keys - actual)}, extra={sorted(actual - keys)}"
+        )
+    return value
+
+
+def text(value: Any, label: str, *, maximum: int = MAX_TEXT) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value.encode("utf-8")) > maximum
+    ):
+        raise LabError(f"{label} must be bounded nonempty text")
+    return value
+
+
+def public_identifier(value: Any, label: str) -> str:
+    normalized = text(value, label, maximum=128)
+    if IDENTIFIER.fullmatch(normalized) is None:
+        raise LabError(f"{label} is not a public identifier")
+    return normalized
+
+
+def parse_timestamp(value: Any, label: str) -> dt.datetime:
+    normalized = text(value, label, maximum=64)
+    try:
+        parsed = dt.datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise LabError(f"{label} is not an ISO-8601 timestamp") from error
+    if parsed.tzinfo is None:
+        raise LabError(f"{label} lacks a timezone")
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def safe_asset(asset_dir: Path, value: Any, label: str) -> Path:
+    filename = text(value, label, maximum=128)
+    if (
+        filename in {".", ".."}
+        or Path(filename).name != filename
+        or "/" in filename
+        or "\\" in filename
+    ):
+        raise LabError(f"{label} must be one local filename")
+    path, _ = bounded_file(asset_dir / filename, label, MAX_REPORT_BYTES)
+    try:
+        path.relative_to(asset_dir)
+    except ValueError as error:
+        raise LabError(f"{label} escapes the asset directory") from error
+    return path
+
+
+def classify(stages: list[dict[str, Any]]) -> str:
+    statuses = {stage["id"]: stage["status"] for stage in stages}
+    if any(status == "FAIL" for status in statuses.values()):
+        return "LIFECYCLE_FAILED"
+    if all(statuses.get(stage_id) == "PASS" for stage_id in REQUIRED_STAGES):
+        return "LIFECYCLE_PASSED"
+    path_stages = REQUIRED_STAGES[:3]
+    if all(statuses.get(stage_id) == "PASS" for stage_id in path_stages):
+        return "PATH_PASSED_WITH_GAPS"
+    return "EVIDENCE_INCOMPLETE"
+
+
+def validate_stages(value: Any, case_id: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) != len(REQUIRED_STAGES):
+        raise LabError(
+            f"case {case_id} must contain each required lifecycle stage once"
+        )
+    stages: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for position, raw_stage in enumerate(value):
+        stage = exact_object(
+            raw_stage,
+            {"id", "status", "evidence", "boundary"},
+            f"case {case_id} stage {position}",
+        )
+        stage_id = text(stage["id"], f"case {case_id} stage id", maximum=64)
+        status = stage["status"]
+        evidence = stage["evidence"]
+        boundary = text(
+            stage["boundary"],
+            f"case {case_id} stage {stage_id} boundary",
+        )
+        if stage_id not in REQUIRED_STAGES or stage_id in seen:
+            raise LabError(f"case {case_id} has an invalid or repeated stage")
+        if status not in STATUSES:
+            raise LabError(f"case {case_id} stage {stage_id} has invalid status")
+        if (
+            not isinstance(evidence, list)
+            or len(evidence) > 32
+            or not all(
+                isinstance(item, str)
+                and item.strip()
+                and len(item.encode("utf-8")) <= 512
+                for item in evidence
+            )
+            or len(evidence) != len(set(evidence))
+        ):
+            raise LabError(
+                f"case {case_id} stage {stage_id} evidence is invalid"
+            )
+        if status == "UNTESTED" and evidence:
+            raise LabError(
+                f"case {case_id} untested stage {stage_id} cannot cite evidence"
+            )
+        if status != "UNTESTED" and not evidence:
+            raise LabError(
+                f"case {case_id} tested stage {stage_id} needs evidence"
+            )
+        stages.append(
+            {
+                "id": stage_id,
+                "status": status,
+                "evidence": evidence,
+                "boundary": boundary,
+            }
+        )
+        seen.add(stage_id)
+    if tuple(stage["id"] for stage in stages) != REQUIRED_STAGES:
+        raise LabError(
+            f"case {case_id} stages must use the canonical lifecycle order"
+        )
+    return stages
+
+
+def validate_case(
+    raw_case: Any,
+    asset_dir: Path,
+    report_verifier: Path,
+) -> dict[str, Any]:
+    case = exact_object(
+        raw_case,
+        {
+            "case_id",
+            "subject",
+            "relationship",
+            "report",
+            "stages",
+            "classification",
+        },
+        "lab case",
+    )
+    case_id = public_identifier(case["case_id"], "case id")
+    subject = exact_object(
+        case["subject"],
+        {"name", "repository", "reference", "commit", "tree"},
+        f"case {case_id} subject",
+    )
+    text(subject["name"], f"case {case_id} subject name")
+    repository = text(
+        subject["repository"], f"case {case_id} repository", maximum=2_048
+    )
+    if not repository.startswith("https://"):
+        raise LabError(f"case {case_id} repository must use HTTPS")
+    text(subject["reference"], f"case {case_id} reference", maximum=512)
+    for field in ("commit", "tree"):
+        value = text(subject[field], f"case {case_id} {field}", maximum=40)
+        if OBJECT_ID.fullmatch(value) is None:
+            raise LabError(f"case {case_id} {field} is not a Git object id")
+
+    relationship = exact_object(
+        case["relationship"],
+        {"commissioned", "maintainer_reviewed", "operator_independence"},
+        f"case {case_id} relationship",
+    )
+    for field in ("commissioned", "maintainer_reviewed"):
+        if not isinstance(relationship[field], bool):
+            raise LabError(f"case {case_id} {field} must be boolean")
+    if relationship["operator_independence"] not in INDEPENDENCE:
+        raise LabError(f"case {case_id} independence is unsupported")
+
+    report = exact_object(
+        case["report"],
+        {
+            "path",
+            "signature_path",
+            "allowed_signers_path",
+            "sha256",
+            "report_id",
+            "verdict",
+        },
+        f"case {case_id} report",
+    )
+    report_path = safe_asset(asset_dir, report["path"], "report")
+    signature_path = safe_asset(
+        asset_dir, report["signature_path"], "report signature"
+    )
+    signers_path = safe_asset(
+        asset_dir, report["allowed_signers_path"], "allowed signers"
+    )
+    digest = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    if (
+        not isinstance(report["sha256"], str)
+        or SHA256.fullmatch(report["sha256"]) is None
+        or report["sha256"] != digest
+    ):
+        raise LabError(f"case {case_id} report digest differs from source")
+    report_id = public_identifier(report["report_id"], f"case {case_id} report id")
+    report_document = strict_json(report_path.read_bytes(), "report")
+    report_subject = exact_object(
+        report_document.get("subject"),
+        {"name", "repository", "license", "relationship", "release"},
+        f"case {case_id} bound report subject",
+    )
+    release = exact_object(
+        report_subject["release"],
+        {"reference", "tag_object", "commit", "tree"},
+        f"case {case_id} bound report release",
+    )
+    if (
+        report_document.get("report_id") != report_id
+        or report_subject["name"] != subject["name"]
+        or report_subject["repository"] != repository
+        or release["reference"] != subject["reference"]
+        or release["commit"] != subject["commit"]
+        or release["tree"] != subject["tree"]
+        or report_document.get("assessment", {}).get("verdict")
+        != report["verdict"]
+    ):
+        raise LabError(f"case {case_id} report binding is inconsistent")
+    verified = subprocess.run(
+        [
+            str(report_verifier),
+            str(report_path),
+            str(signature_path),
+            str(signers_path),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=20,
+        env={"PATH": "/usr/bin:/bin"},
+    )
+    if verified.returncode != 0:
+        detail = verified.stderr.decode("utf-8", errors="replace").strip()
+        raise LabError(f"case {case_id} report signature failed: {detail}")
+
+    stages = validate_stages(case["stages"], case_id)
+    computed = classify(stages)
+    if case["classification"] not in CLASSIFICATIONS:
+        raise LabError(f"case {case_id} classification is unsupported")
+    if case["classification"] != computed:
+        raise LabError(
+            f"case {case_id} classification is {case['classification']}, "
+            f"computed {computed}"
+        )
+    return {
+        "case_id": case_id,
+        "classification": computed,
+        "independence": relationship["operator_independence"],
+    }
+
+
+def expected_summary(cases: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "total_cases": len(cases),
+        "full_lifecycle_passes": sum(
+            case["classification"] == "LIFECYCLE_PASSED" for case in cases
+        ),
+        "failed_cases": sum(
+            case["classification"] == "LIFECYCLE_FAILED" for case in cases
+        ),
+        "with_gaps": sum(
+            case["classification"] == "PATH_PASSED_WITH_GAPS"
+            for case in cases
+        ),
+        "incomplete": sum(
+            case["classification"] == "EVIDENCE_INCOMPLETE" for case in cases
+        ),
+        "independent_operator_cases": sum(
+            case["independence"] == "independent_operator" for case in cases
+        ),
+    }
+
+
+def validate_index(
+    document: dict[str, Any],
+    asset_dir: Path,
+    report_verifier: Path,
+) -> list[dict[str, Any]]:
+    index = exact_object(
+        document,
+        {
+            "contract",
+            "generated_at",
+            "boundary",
+            "required_stages",
+            "summary",
+            "cases",
+        },
+        "lab index",
+    )
+    if index["contract"] != CONTRACT:
+        raise LabError("lab index contract is unsupported")
+    generated_at = parse_timestamp(index["generated_at"], "generated_at")
+    if generated_at > dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5):
+        raise LabError("lab index is from the future")
+    text(index["boundary"], "lab boundary")
+    if index["required_stages"] != list(REQUIRED_STAGES):
+        raise LabError("lab index required stages differ from the verifier")
+    raw_cases = index["cases"]
+    if (
+        not isinstance(raw_cases, list)
+        or not raw_cases
+        or len(raw_cases) > MAX_CASES
+    ):
+        raise LabError(f"lab index must contain 1..{MAX_CASES} cases")
+    cases = [
+        validate_case(raw_case, asset_dir, report_verifier)
+        for raw_case in raw_cases
+    ]
+    case_ids = [case["case_id"] for case in cases]
+    if len(case_ids) != len(set(case_ids)):
+        raise LabError("lab case ids must be unique")
+    summary = exact_object(
+        index["summary"],
+        {
+            "total_cases",
+            "full_lifecycle_passes",
+            "failed_cases",
+            "with_gaps",
+            "incomplete",
+            "independent_operator_cases",
+        },
+        "lab summary",
+    )
+    if summary != expected_summary(cases):
+        raise LabError("lab summary differs from recomputed case classifications")
+    return cases
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Verify a Field Lab lifecycle index, its report bindings, "
+            "and detached signatures."
+        )
+    )
+    parser.add_argument("index", type=Path)
+    parser.add_argument(
+        "--asset-dir",
+        type=Path,
+        help="Directory containing the bound reports; defaults to index parent.",
+    )
+    parser.add_argument(
+        "--report-verifier",
+        type=Path,
+        help="Outside Run report verifier; defaults beside this command.",
+    )
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    try:
+        index_path, index_bytes = bounded_file(
+            args.index, "lab index", MAX_INDEX_BYTES
+        )
+        asset_dir = (
+            args.asset_dir.absolute()
+            if args.asset_dir is not None
+            else index_path.parent
+        )
+        if asset_dir.is_symlink() or not asset_dir.is_dir():
+            raise LabError("asset directory must be a nonsymlink directory")
+        report_verifier = (
+            args.report_verifier.absolute()
+            if args.report_verifier is not None
+            else Path(__file__).resolve().with_name("outside-run-verify")
+        )
+        if report_verifier.is_symlink() or not report_verifier.is_file():
+            raise LabError("report verifier must be a regular nonsymlink file")
+        cases = validate_index(
+            strict_json(index_bytes, "lab index"),
+            asset_dir,
+            report_verifier,
+        )
+    except (LabError, OSError, subprocess.SubprocessError) as error:
+        raise SystemExit(f"outside-run-lab-verify: {error}") from error
+    print(
+        json.dumps(
+            {
+                "cases": cases,
+                "contract": CONTRACT,
+                "index": str(index_path),
+                "ok": True,
+                "summary": expected_summary(cases),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
