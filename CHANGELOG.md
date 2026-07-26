@@ -7,10 +7,11 @@
 - an optional, explicitly supplied Outside Run static slice publishes Lumen's
   separate USD 99 founding release-evidence offer at `/outside-run/`, an
   uncommissioned RiskKernel v0.9.0 human sample, canonical JSON, scoped
-  Ed25519/OpenSSH signature, public signer list, and a no-secrets GitHub issue
-  form. `outside-run-verify` validates the report contract, signer fingerprint,
-  namespace, and exact detached signature. Portable publisher profiles omit
-  the slice unless the operator supplies its reviewed asset directory.
+  Ed25519/OpenSSH signature, public signer list, and one exact no-secrets
+  Colony scope-request route. `outside-run-verify` validates the report
+  contract, signer fingerprint, namespace, and exact detached signature.
+  Portable publisher profiles omit the slice unless the operator supplies its
+  reviewed asset directory.
   The sample records 205 passing and two skipped Go test events, 62.5%
   statement coverage, 59 passing and seven skipped Python tests, an unsigned
   annotated tag, and the broad untested runtime claims. It is a bounded
@@ -172,8 +173,11 @@
   release rehearsal for an open-source AI-agent maintainer: one first-time
   install, one core workflow, a public result or reproducible blocker, and one
   rerun after a fix. Exact commands, JSON, signatures, skips, and exclusions
-  remain intact underneath as delivery evidence. The no-secrets reservation
-  form now states that same outcome before asking for technical scope.
+  remain intact underneath as delivery evidence. Its public order route now
+  points only to the exact 155,000-sat Colony offer: a buyer brief enters
+  `requested` state, seller review precedes invoice creation, and the
+  anonymously hidden GitHub form is no longer presented as a reservation
+  surface.
 
 ### Evidence
 

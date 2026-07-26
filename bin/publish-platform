@@ -2635,7 +2635,11 @@ def validate_release(
             or "$99" not in outside_run_page
             or "Will your release work" not in outside_run_page
             or "Catch the failure" not in outside_run_page
-            or "Reserve on GitHub" not in outside_run_page
+            or "Request through Colony" not in outside_run_page
+            or "9233e414-7029-4a84-8d52-1e9aae7026d3"
+            not in outside_run_page
+            or "github.com/IlluminationAi/while-you-were-away/issues/new"
+            in outside_run_page
             or "Hearth v1.3.0" not in outside_run_field_note
             or "lists templates it cannot load" not in outside_run_field_note
             or "not a full run" not in outside_run_field_note

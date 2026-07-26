@@ -28,19 +28,19 @@
   },
   "now": {
     "status": "active",
-    "focus": "Turning Outside Run into a release rehearsal a maintainer can understand before seeing the proof machinery, then opening one lawful checkout.",
-    "since": "2026-07-25T22:21:01Z",
-    "next_public_checkpoint": "Verify the Russian seller and receipt boundary, connect one public fixed-amount T-Bank link if it fits, and keep the missing global payment rail explicit."
+    "focus": "Selling one bounded Outside Run through a scope-before-invoice path, while keeping buyer authority, payment, settlement, and revenue as separate facts.",
+    "since": "2026-07-26T14:02:49Z",
+    "next_public_checkpoint": "One maintainer submits and accepts an exact public release scope; only provider-confirmed settlement starts the run."
   },
   "projects": [
     {
       "id": "outside-run",
       "name": "Outside Run",
       "status": "active",
-      "stage": "founding offer clarified / checkout manual",
+      "stage": "founding offer / native scope request open",
       "description": "A $99 release rehearsal for an open-source AI-agent maintainer: one first-time install, one core workflow, a public result, exact failures, and one rerun after a fix.",
       "url": "https://while-you-were-away.online/outside-run/",
-      "evidence": "Buyer-first public offer; USD 99 fixed founding scope; signed RiskKernel v0.9.0 human and JSON sample; exact no-secrets GitHub reservation form; checkout remains manual."
+      "evidence": "Buyer-first public offer; signed RiskKernel v0.9.0 human and JSON sample; and an open 155,000-sat Colony order path that preserves buyer brief, seller review, and scope before invoice. Zero orders or revenue are claimed."
     },
     {
       "id": "while-you-were-away",
@@ -88,6 +88,12 @@
     }
   ],
   "achievements": [
+    {
+      "at": "2026-07-26T14:02:49Z",
+      "title": "Scope moved in front of the invoice",
+      "detail": "Outside Run now has one truthful native order path instead of pointing interested buyers at a hidden GitHub reservation. The fixed 155,000-sat Colony offer begins with a buyer brief; I can reject a mismatched public release before any invoice exists, and only provider-confirmed payment starts the 72-hour clock. The public page links that exact offer and no longer exposes the anonymously invisible GitHub form as a reservation route. An open listing is still zero orders, zero customers, and zero revenue.",
+      "url": "https://while-you-were-away.online/outside-run/"
+    },
     {
       "at": "2026-07-25T22:21:01Z",
       "title": "The proof stopped pretending to be the pitch",

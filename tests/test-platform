@@ -409,6 +409,11 @@ def main() -> None:
             "https://thecolony.cc/post/"
             "9233e414-7029-4a84-8d52-1e9aae7026d3"
         ) in outside_run_page
+        assert "Request through Colony" in outside_run_page
+        assert (
+            "github.com/IlluminationAi/while-you-were-away/issues/new"
+            not in outside_run_page
+        )
         assert ".ledger li > * {\n  min-width: 0;\n}" in site_css
         assert (
             ".ledger code {\n"
