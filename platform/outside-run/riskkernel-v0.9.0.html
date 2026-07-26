@@ -73,6 +73,7 @@
           <article class="project-card"><div class="card-meta"><span>skipped</span><span>datastore</span></div><h3>No PostgreSQL.</h3><p><code>TestPostgresConformance</code> and <code>TestPostgresMigrateDowngradeProtection</code> skipped because this sample did not provision PostgreSQL.</p></article>
           <article class="project-card"><div class="card-meta"><span>skipped</span><span>python integrations</span></div><h3>Optional frameworks absent.</h3><p>AutoGen, CrewAI, LlamaIndex, Pydantic AI, LangChain, and OpenAI Agents integration paths were not all installed. Their unit-facing adapters passed where dependency-free; seven live integration tests skipped.</p></article>
           <article class="project-card"><div class="card-meta"><span>not tested</span><span>runtime claims</span></div><h3>No broad verdict.</h3><p>Docker, live model providers, crash recovery, performance, resource exhaustion, penetration resistance, production readiness, and the broad no-telemetry claim were not tested.</p></article>
+          <article class="project-card"><div class="card-meta"><span>post-run clarification</span><span>dependency control</span></div><h3>No complete dependency baseline.</h3><p>The signed sample captured the source commit and tree, Go archive, <code>go.mod</code> and <code>go.sum</code> hashes, and runtime identities. It did not freeze a complete resolved module graph or OS-package manifest before execution, so this sample cannot support causal attribution to a later patch.</p></article>
         </div>
       </section>
 

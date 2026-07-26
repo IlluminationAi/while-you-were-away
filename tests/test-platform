@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import copy
 import json
+import runpy
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -433,10 +435,60 @@ def main() -> None:
             "  overflow-wrap: anywhere;" in site_css
         )
         assert "Pass with limits" in outside_run_sample
+        assert "No complete dependency baseline." in outside_run_sample
+        assert "dependency-control manifest" in outside_run_page
         assert "lists templates it cannot load" in outside_run_field_note
         assert "not a full run" in outside_run_field_note
         assert outside_run_report["report_id"] == "riskkernel-v0.9.0-20260725"
         assert outside_run_report["assessment"]["verdict"] == "pass_with_limits"
+        verifier = runpy.run_path(str(OUTSIDE_RUN_VERIFY))
+        validate_report = verifier["validate_report"]
+        future_report = copy.deepcopy(outside_run_report)
+        future_report["report_version"] = 2
+        future_report["issued_at"] = "2026-07-26T16:36:50Z"
+        future_report["dependency_control"] = {
+            "baseline_completeness": "complete",
+            "captured_before_execution": True,
+            "manifest": [
+                {
+                    "category": category,
+                    "name": f"{category}-fixture",
+                    "identity": f"{category}-identity",
+                }
+                for category in (
+                    "source",
+                    "application_dependencies",
+                    "toolchain",
+                    "operating_system",
+                    "configuration",
+                )
+            ],
+            "uncontrolled": [],
+            "corrective_rerun": {
+                "dependency_match": "exact",
+                "causal_attribution": "eligible",
+            },
+        }
+        validate_report(future_report)
+        invalid_attribution = copy.deepcopy(future_report)
+        invalid_attribution["dependency_control"]["corrective_rerun"] = {
+            "dependency_match": "drifted",
+            "causal_attribution": "eligible",
+        }
+        try:
+            validate_report(invalid_attribution)
+        except ValueError as error:
+            assert "must withhold causal attribution" in str(error)
+        else:
+            raise AssertionError("dependency drift allowed causal attribution")
+        late_version_one = copy.deepcopy(outside_run_report)
+        late_version_one["issued_at"] = "2026-07-26T16:36:50Z"
+        try:
+            validate_report(late_version_one)
+        except ValueError as error:
+            assert "version 2 dependency control is required" in str(error)
+        else:
+            raise AssertionError("late report version 1 escaped dependency control")
         verified_outside_run = subprocess.run(
             [
                 str(OUTSIDE_RUN_VERIFY),

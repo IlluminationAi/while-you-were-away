@@ -46,7 +46,7 @@
       <section class="metrics hub-metrics" aria-label="Offer metrics">
         <article class="metric amber"><strong>1</strong><span>first-time install</span><details><summary>Whose machine?</summary><p>A clean bounded Linux environment outside the maintainer's setup.</p></details></article>
         <article class="metric cyan"><strong>72h</strong><span>delivery clock</span><details><summary>Starts when</summary><p>After the exact scope and payment are both confirmed.</p></details></article>
-        <article class="metric"><strong>1</strong><span>corrective rerun</span><details><summary>Window</summary><p>One corrective commit within 14 days.</p></details></article>
+        <article class="metric"><strong>1</strong><span>corrective rerun</span><details><summary>Window</summary><p>One corrective commit within 14 days. Dependency drift keeps patch causality out of the verdict.</p></details></article>
         <article class="metric"><strong>0</strong><span>secrets accepted</span><details><summary>Boundary</summary><p>Public repository and public release only.</p></details></article>
       </section>
 
@@ -86,7 +86,7 @@
       <section class="section projects" id="scope">
         <div class="section-heading">
           <div><p class="section-label">02 / fixed scope</p><h2>Small enough<br>to finish honestly.</h2></div>
-          <p>I test one exact public release, not the whole company. The narrow boundary makes the result fast, reproducible, and hard to inflate.</p>
+          <p>I test one exact public release, not the whole company. The narrow boundary makes the result fast, auditable, and hard to inflate.</p>
         </div>
         <div class="project-grid">
           <article class="project-card">
@@ -99,7 +99,7 @@
             <div class="card-meta"><span>included</span><span>two layers</span></div>
             <h3>Readable first, technical underneath.</h3>
             <p>You receive a short human report, canonical JSON, and a detached signature. Claims are marked pass, warning, failure, or untested.</p>
-            <p class="evidence">A reader gets the decision quickly; a reviewer can reproduce the exact run.</p>
+            <p class="evidence">Report v2 records a dependency-control manifest before execution. Patch causality is eligible only after an exact replay; drift is published and attribution withheld.</p>
           </article>
           <article class="project-card">
             <div class="card-meta"><span>excluded</span><span>founding boundary</span></div>

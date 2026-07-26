@@ -20,6 +20,18 @@ NAMESPACE = "outside-run-report"
 REPORT_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9.]+)*-[0-9]{8}$")
 OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+DEPENDENCY_CONTROL_EFFECTIVE = dt.datetime(
+    2026, 7, 26, 16, 36, 50, tzinfo=dt.timezone.utc
+)
+DEPENDENCY_CLASSES = frozenset(
+    {
+        "source",
+        "application_dependencies",
+        "toolchain",
+        "operating_system",
+        "configuration",
+    }
+)
 MAX_REPORT_BYTES = 512 * 1024
 MAX_SIGNATURE_BYTES = 16 * 1024
 MAX_SIGNERS_BYTES = 16 * 1024
@@ -57,8 +69,112 @@ def text_at(record: dict[str, Any], *path: str) -> str:
     return value
 
 
+def validate_dependency_control(report: dict[str, Any]) -> None:
+    control = object_at(report, "dependency_control")
+    completeness = control.get("baseline_completeness")
+    if completeness not in {"complete", "partial"}:
+        raise ValueError("dependency baseline completeness is unsupported")
+
+    captured_before = control.get("captured_before_execution")
+    if not isinstance(captured_before, bool):
+        raise ValueError("dependency capture timing must be boolean")
+
+    manifest = control.get("manifest")
+    if not isinstance(manifest, list) or not manifest:
+        raise ValueError("dependency manifest must be a nonempty list")
+    categories: set[str] = set()
+    identities: set[tuple[str, str]] = set()
+    for entry in manifest:
+        if not isinstance(entry, dict):
+            raise ValueError("each dependency manifest entry must be an object")
+        category = entry.get("category")
+        name = entry.get("name")
+        identity = entry.get("identity")
+        if category not in DEPENDENCY_CLASSES:
+            raise ValueError(f"unsupported dependency class: {category}")
+        if not isinstance(name, str) or not name:
+            raise ValueError("dependency manifest name must be nonempty text")
+        if not isinstance(identity, str) or not identity:
+            raise ValueError("dependency manifest identity must be nonempty text")
+        key = (category, name)
+        if key in identities:
+            raise ValueError("dependency manifest identities must be unique")
+        identities.add(key)
+        categories.add(category)
+
+    uncontrolled = control.get("uncontrolled")
+    if (
+        not isinstance(uncontrolled, list)
+        or not all(isinstance(item, str) and item for item in uncontrolled)
+        or len(uncontrolled) != len(set(uncontrolled))
+    ):
+        raise ValueError("uncontrolled dependencies must be unique nonempty text")
+
+    rerun = object_at(report, "dependency_control", "corrective_rerun")
+    dependency_match = rerun.get("dependency_match")
+    attribution = rerun.get("causal_attribution")
+    if dependency_match not in {"not_run", "exact", "drifted", "unavailable"}:
+        raise ValueError("corrective rerun dependency match is unsupported")
+    if attribution not in {"not_applicable", "eligible", "withheld"}:
+        raise ValueError("corrective rerun causal attribution is unsupported")
+
+    if completeness == "complete":
+        if captured_before is not True:
+            raise ValueError(
+                "complete dependency baseline must precede first execution"
+            )
+        if categories != DEPENDENCY_CLASSES:
+            raise ValueError(
+                "complete dependency baseline must cover all dependency classes"
+            )
+        if uncontrolled:
+            raise ValueError(
+                "complete dependency baseline cannot name uncontrolled dimensions"
+            )
+    elif not uncontrolled:
+        raise ValueError(
+            "partial dependency baseline must name uncontrolled dimensions"
+        )
+
+    if dependency_match == "not_run":
+        if attribution != "not_applicable":
+            raise ValueError(
+                "an unperformed corrective rerun has no causal attribution"
+            )
+    elif dependency_match == "exact":
+        if completeness == "partial" and attribution != "withheld":
+            raise ValueError(
+                "partial dependency baseline must withhold causal attribution"
+            )
+        if completeness == "complete" and attribution not in {
+            "eligible",
+            "withheld",
+        }:
+            raise ValueError(
+                "exact controlled rerun has an invalid attribution state"
+            )
+    elif attribution != "withheld":
+        raise ValueError(
+            "dependency drift or unavailability must withhold causal attribution"
+        )
+
+    if attribution == "eligible" and not (
+        completeness == "complete"
+        and captured_before is True
+        and dependency_match == "exact"
+    ):
+        raise ValueError(
+            "causal attribution requires a complete exact dependency replay"
+        )
+    if attribution == "not_applicable" and dependency_match != "not_run":
+        raise ValueError(
+            "completed corrective rerun must state an attribution outcome"
+        )
+
+
 def validate_report(report: dict[str, Any]) -> None:
-    if report.get("report_version") != 1:
+    report_version = report.get("report_version")
+    if report_version not in {1, 2}:
         raise ValueError("unsupported report version")
     report_id = text_at(report, "report_id")
     if REPORT_ID.fullmatch(report_id) is None:
@@ -67,6 +183,17 @@ def validate_report(report: dict[str, Any]) -> None:
     parsed = dt.datetime.fromisoformat(issued_at.replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         raise ValueError("issued_at lacks a timezone")
+    parsed = parsed.astimezone(dt.timezone.utc)
+    if (
+        report_version == 1
+        and parsed >= DEPENDENCY_CONTROL_EFFECTIVE
+    ):
+        raise ValueError(
+            "report version 2 dependency control is required after "
+            f"{DEPENDENCY_CONTROL_EFFECTIVE.isoformat()}"
+        )
+    if report_version == 2:
+        validate_dependency_control(report)
 
     release = object_at(report, "subject", "release")
     for name in ("tag_object", "commit", "tree"):

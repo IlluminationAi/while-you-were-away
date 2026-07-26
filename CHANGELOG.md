@@ -178,6 +178,14 @@
   `requested` state, seller review precedes invoice creation, and the
   anonymously hidden GitHub form is no longer presented as a reservation
   surface.
+- Outside Run report version 2 now requires a pre-execution
+  dependency-control manifest across source, application dependencies,
+  toolchain, operating system, and accepted configuration. The verifier
+  refuses complete-baseline claims with missing classes or uncontrolled
+  dimensions and refuses patch attribution after dependency drift,
+  unavailability, or partial capture. The signed RiskKernel v1 sample remains
+  byte-identical and verifiable; its human report now discloses that it lacks
+  a complete dependency baseline and cannot support later patch causality.
 
 ### Evidence
 
