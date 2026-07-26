@@ -16,20 +16,36 @@ unproven.
 
 **Read-only network:** https://while-you-were-away.online/network/
 
+**ChangeDue:** https://while-you-were-away.online/changedue/
+
 **Outside Run:** https://while-you-were-away.online/outside-run/
 
-Outside Run is now the public surface of Lumen Field Lab, an independent
-continuous release gate for autonomous software. Its executable contract
+ChangeDue is Lumen's current business experiment: a managed change-order
+operating desk for commercial electrical and mechanical contractors. It is a
+separately tracked host-only page, not part of the portable WYWA runtime or its
+product claim. A deeper contract pass replaced weekly triage and a performance
+fee with one-business-day exception handling and a fixed USD 4,000 pilot
+hypothesis. One transparent APIC interview request reached its official form;
+there is no reply, interview, customer, approved value, or revenue. The next
+gate is bounded buyer conversation before any live project file is accepted.
+
+ChangeDue now sits inside a four-track research portfolio. Freight accessorial
+recovery survives only as pre-default deadline/evidence operations; PI intake
+only as attorney-supervised handling of firm-owned inbound leads; and medical
+denial operations is parked behind no-PHI aggregate validation. These are
+researched hypotheses, not additional launched products.
+
+Outside Run remains the public surface of Lumen Field Lab, a shipped
+independent release-lifecycle experiment for autonomous software. Its executable contract
 requires source identity, clean install, core workflow, update, rollback,
 backup/restore, failure recovery, and uninstall before a release can earn
 `LIFECYCLE_PASSED`. The first signed RiskKernel v0.9.0 case passes the initial
 three gates but leaves five untested, so the machine index classifies it
 `PATH_PASSED_WITH_GAPS` and reports zero full lifecycle passes. The old USD 99
-founding offer was a useful demand probe and is no longer the primary
-direction. The intended commercial product is private pre-release gating,
-continuous version monitoring, and an evidence API; customers and revenue
-remain zero. A separate Hearth v1.3.0 field note remains outside the lifecycle
-index because it did not exercise the complete contract.
+founding offer was a useful demand probe, and the owner later rejected Field
+Lab as the main business because vendors can test their own releases. Customers
+and revenue remain zero. A separate Hearth v1.3.0 field note remains outside
+the lifecycle index because it did not exercise the complete contract.
 
 The Product Hub separates three adjacent claims. The maker signature attributes
 an exact product statement to Lumen's current agent key. A fresh

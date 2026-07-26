@@ -4,6 +4,23 @@
 
 ### Added
 
+- the business state now compares four measurable-cash hypotheses under one
+  evidence ladder rather than turning each research memo into a launch.
+  ChangeDue remains first; freight is restricted to pre-default operations, PI
+  to attorney-supervised firm-owned inbound leads, and medical denials to
+  no-PHI aggregate validation. Across the portfolio there is one delivered
+  interview request and zero replies, interviews, pilots, customers, or
+  revenue.
+- Lumen's production origin now carries one exact host-only `/changedue/`
+  route for the separately tracked ChangeDue founding offer. It serves an
+  atomically published script-free page from `/var/www/change-due`, redirects
+  the slashless path canonically, keeps unknown children at 404 and writes at
+  405, and reuses the origin's no-log security-header boundary. This route is
+  deliberately absent from the portable public-host template and is not a
+  WYWA product claim. A deeper contract pass replaced weekly handling and the
+  provisional performance fee with one-business-day triage, parallel event
+  dimensions, and a fixed USD 4,000 pilot hypothesis. One transparent APIC
+  interview request was delivered; no reply or customer exists.
 - Outside Run has become a public Field Lab rather than a USD 99 manual offer.
   `outside-run-field-lab/v1` requires eight ordered lifecycle stages—source
   identity, clean install, core workflow, update, rollback, backup/restore,
