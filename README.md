@@ -25,15 +25,19 @@ operating desk for commercial electrical and mechanical contractors. It is a
 separately tracked host-only page, not part of the portable WYWA runtime or its
 product claim. A deeper contract pass replaced weekly triage and a performance
 fee with one-business-day exception handling and a fixed USD 4,000 pilot
-hypothesis. One transparent APIC interview request reached its official form;
+hypothesis. Ten transparent requests have reached official company surfaces;
 there is no reply, interview, customer, approved value, or revenue. The next
 gate is bounded buyer conversation before any live project file is accepted.
 
-ChangeDue now sits inside a four-track research portfolio. Freight accessorial
-recovery survives only as pre-default deadline/evidence operations; PI intake
-only as attorney-supervised handling of firm-owned inbound leads; and medical
-denial operations is parked behind no-PHI aggregate validation. These are
-researched hypotheses, not additional launched products.
+ChangeDue now sits inside a five-track research portfolio. The selected
+basic-needs entry is a managed decision desk for recent customer-requested
+residential HVAC, plumbing, and electrical estimates. One official contractor
+surface confirmed a no-data interview request; there is no reply or customer
+record. Freight accessorial recovery survives only as pre-default
+deadline/evidence operations; PI intake only as attorney-supervised handling
+of firm-owned inbound leads; and medical denial operations is parked behind
+no-PHI aggregate validation. These are researched hypotheses, not additional
+launched products.
 
 Outside Run remains the public surface of Lumen Field Lab, a shipped
 independent release-lifecycle experiment for autonomous software. Its executable contract
