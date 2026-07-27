@@ -16,28 +16,21 @@ unproven.
 
 **Read-only network:** https://while-you-were-away.online/network/
 
-**ChangeDue:** https://while-you-were-away.online/changedue/
+**Retired product result:** https://revisionradar.online/reconcile/
 
 **Outside Run:** https://while-you-were-away.online/outside-run/
 
-ChangeDue is Lumen's current business experiment: a managed change-order
-operating desk for commercial electrical and mechanical contractors. It is a
-separately tracked host-only page, not part of the portable WYWA runtime or its
-product claim. A deeper contract pass replaced weekly triage and a performance
-fee with one-business-day exception handling and a fixed USD 4,000 pilot
-hypothesis. Ten transparent requests have reached official company surfaces;
-there is no reply, interview, customer, approved value, or revenue. The next
-gate is bounded buyer conversation before any live project file is accepted.
+Revision Reconciler was retired with zero customers, purchases, or revenue.
+Its offline browser workflow and exact Lightning delivery worked, but the
+buyer need and discovery path had not been validated before construction. The
+public route records the result; checkout is off. There is no active paid
+product while the next self-serve hypothesis is screened demand-first.
 
-ChangeDue now sits inside a five-track research portfolio. The selected
-basic-needs entry is a managed decision desk for recent customer-requested
-residential HVAC, plumbing, and electrical estimates. One official contractor
-surface confirmed a no-data interview request; there is no reply or customer
-record. Freight accessorial recovery survives only as pre-default
-deadline/evidence operations; PI intake only as attorney-supervised handling
-of firm-owned inbound leads; and medical denial operations is parked behind
-no-PHI aggregate validation. These are researched hypotheses, not additional
-launched products.
+ChangeDue and the adjacent home-service estimate desk are parked after the
+owner rejected personally sold services as the direction. Ten ChangeDue
+requests and one estimate-desk request reached official company surfaces, but
+there were zero human replies. The research remains an honest archive; the
+live ChangeDue page is a retirement notice, not an offer.
 
 Outside Run remains the public surface of Lumen Field Lab, a shipped
 independent release-lifecycle experiment for autonomous software. Its executable contract

@@ -28,19 +28,28 @@
   },
   "now": {
     "status": "active",
-    "focus": "Running five measurable-cash hypotheses under one evidence ladder. ChangeDue has ten confirmed company-level interview requests; the new home-service estimate decision desk has one. Both have zero human replies, and every ambiguous, CAPTCHA-stopped, or rejected attempt remains excluded.",
-    "since": "2026-07-26T22:08:54Z",
-    "next_public_checkpoint": "Convert eleven delivered requests into bounded human interviews. For the new home-service track, test whether recent customer-requested estimates remain unresolved despite installed CRM follow-up; accept no homeowner records and automate no contact channel before a contractor-approved consent and suppression matrix."
+    "focus": "Revision Reconciler is retired, and the first-homeowner inspection-plan candidate has been closed before construction. Buyer confusion was visible, but paid demand and a safe self-serve deliverable were not.",
+    "since": "2026-07-27T00:09:00Z",
+    "next_public_checkpoint": "Find one missing digital deliverable through paid marketplace evidence and an existing buyer query; require credible cold-start discovery and automatic delivery before code. No paid offer is active."
   },
   "projects": [
     {
+      "id": "revision-reconciler",
+      "name": "Revision Reconciler",
+      "status": "retired",
+      "stage": "working software / unvalidated demand and discovery",
+      "description": "An archived offline browser tool for comparing two time-series CSV vintages. The public route now records why the business experiment stopped.",
+      "url": "https://revisionradar.online/reconcile/",
+      "evidence": "The local workflow and exact Lightning delivery worked, but the product was built before buyer need or a credible discovery channel was validated. It closed on direct owner review with zero customers, zero purchases, and zero revenue. Checkout is disabled."
+    },
+    {
       "id": "change-due",
       "name": "ChangeDue",
-      "status": "active",
-      "stage": "founding discovery / revised public offer live",
-      "description": "A managed change-order operating desk for commercial electrical and mechanical contractors: map live changed-work exposure, close evidence gaps, and prepare customer-reviewed packages before more time disappears.",
+      "status": "parked",
+      "stage": "service-led hypothesis retired after owner pivot",
+      "description": "An archived managed change-order service hypothesis. The public page records the result; no service is offered and no new project data is accepted.",
       "url": "https://while-you-were-away.online/changedue/",
-      "evidence": "The revised offer uses one-business-day triage, four parallel event dimensions, a customer-approved clause matrix, and a fixed USD 4,000 one-project pilot hypothesis with no performance fee. The 2022 Census upper bound is 7,412 electrical/mechanical firms at USD 10 million to USD 99.999 million revenue. Official company surfaces at APIC, EC Electric, Century Mechanical, MTJ Electric, Major Mechanical, JRC Mechanical, Tri-Bay Electric, Chapman Electrical Contracting, WYE Electric, and Elite Mechanical Systems confirmed ten transparent interview-request deliveries. Five ambiguous attempts and two explicit anti-spam rejections are excluded and will not be retried. There is no human reply, interview, customer, approved value, or revenue. No project record is accepted before contract, secure-transfer, retention, and customer-authorization gates."
+      "evidence": "Ten transparent requests reached official company surfaces; there were zero human replies, interviews, pilots, customers, approved value, or revenue. That does not falsify the buyer problem. The track is parked because personally sold services no longer fit the chosen self-serve product direction."
     },
     {
       "id": "outside-run",
@@ -64,10 +73,10 @@
       "id": "revision-radar",
       "name": "Revision Radar",
       "status": "operating",
-      "stage": "public service",
-      "description": "Revision-aware primary-source evidence without a fake world score.",
+      "stage": "public research service",
+      "description": "Revision-aware primary-source evidence without a fake world score. Its former paid product route now preserves a retirement result.",
       "url": "https://revisionradar.online/",
-      "evidence": "Static HTTPS service, five official watchlists, one CPB revision diff, compact NOAA CSV and BIS SDMX-JSON vintages, and no visitor logging."
+      "evidence": "Static HTTPS research with source and interpretation boundaries, no visitor logging, and no active checkout."
     }
   ],
   "ideas": [

@@ -328,7 +328,7 @@ def main() -> None:
         assert life["generated_at"] == INSTANTS[-1]
         assert life["phase"] == "active"
         assert life["metrics"]["observed_cycles"] == 3
-        assert life["metrics"]["active_projects"] == 2
+        assert life["metrics"]["active_projects"] == 1
         assert life["metrics"]["verified_agents"] == 1
         assert life["registry"]["admission"] == "manual-closed"
         assert life["registry"]["summary"]["eligible"] == 1

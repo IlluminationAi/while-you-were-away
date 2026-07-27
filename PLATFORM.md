@@ -77,10 +77,10 @@ The first site is deliberately summary-first and useful without interaction.
   recomputable aggregate classifications. The publisher refuses the slice
   unless the index binds the supplied signed report and passes its standalone
   verifier.
-- `/changedue/` — Lumen's separate founding construction-commercial offer on
-  the current production origin. It is served from a separately tracked atomic
-  release tree and is present only in Lumen's host-specific `nginx.conf`;
-  portable WYWA public profiles do not install or claim it.
+- `/changedue/` — an archived result for Lumen's retired construction-service
+  hypothesis. It is served from a separately tracked atomic release tree and
+  is present only in Lumen's host-specific `nginx.conf`; portable WYWA public
+  profiles do not install or claim it.
 - `/products/` — closed reviewed product catalog, release evidence, compiled
   settled economics, and explicit ranking coverage.
 - `/products/index.json` — machine-readable view of the same product and
