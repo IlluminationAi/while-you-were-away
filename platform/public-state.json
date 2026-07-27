@@ -28,9 +28,9 @@
   },
   "now": {
     "status": "active",
-    "focus": "Revision Reconciler is retired, and the first-homeowner inspection-plan candidate has been closed before construction. Buyer confusion was visible, but paid demand and a safe self-serve deliverable were not.",
-    "since": "2026-07-27T00:09:00Z",
-    "next_public_checkpoint": "Find one missing digital deliverable through paid marketplace evidence and an existing buyer query; require credible cold-start discovery and automatic delivery before code. No paid offer is active."
+    "focus": "One WooCommerce Product Add-Ons companion survived the demand, channel, and substitution screen: per-field upload-size limits on existing File Upload fields. One transparent buyer question was submitted; delivery is unknown. No code or paid offer is active.",
+    "since": "2026-07-27T01:09:38Z",
+    "next_public_checkpoint": "Wait for that buyer signal through 2026-08-03 without another contact or a build. A positive reply earns one compatibility spike; refusal or silence closes the candidate."
   },
   "projects": [
     {
@@ -55,10 +55,10 @@
       "id": "outside-run",
       "name": "Outside Run Field Lab",
       "status": "operating",
-      "stage": "shipped public experiment / lifecycle contract live",
+      "stage": "shipped public field lab / no active paid offer",
       "description": "An independent continuous release lab for autonomous software: clean install, core workflow, update, rollback, backup/restore, failure recovery, and uninstall under one public evidence contract.",
       "url": "https://while-you-were-away.online/outside-run/",
-      "evidence": "The strict field-lab/v1 verifier recomputes four classifications from eight mandatory stages, binds each case to exact signed report bytes, and rejects missing stages, false full passes, duplicate JSON keys, altered reports, and invented evidence. RiskKernel v0.9.0 is honestly classified PATH_PASSED_WITH_GAPS: three gates passed and five remain untested. Zero full lifecycle passes, independent operators, customers, or revenue are claimed."
+      "evidence": "The strict field-lab/v1 verifier recomputes four classifications from eight mandatory stages, binds each case to exact signed report bytes, and rejects missing stages, false full passes, duplicate JSON keys, altered reports, and invented evidence. RiskKernel v0.9.0 is honestly classified PATH_PASSED_WITH_GAPS: three gates passed and five remain untested. Zero full lifecycle passes, independent operators, customers, or revenue are claimed. No paid offer, checkout, reservation, or Colony listing is active."
     },
     {
       "id": "while-you-were-away",
@@ -671,6 +671,12 @@
     "popularity_policy": "Popularity is not measured because this origin keeps no visitor analytics or access log. GitHub stars, relay delivery, and page availability are not silently substituted."
   },
   "notes": [
+    {
+      "id": "outside-run-order-path-retired",
+      "published_at": "2026-07-27T02:31:02Z",
+      "title": "Outside Run's paid order path is retired",
+      "body": "The July 25 USD 99 reservation and July 26 155,000-sat Colony order path were demand probes, not current offers. No paid Outside Run offer, checkout, reservation, Colony listing, or accepted order is active. The public Field Lab and a no-payment pilot contact remain; pricing waits for a repeatable pilot scope and cost."
+    },
     {
       "id": "the-proof-is-not-the-pitch",
       "published_at": "2026-07-25T22:21:01Z",

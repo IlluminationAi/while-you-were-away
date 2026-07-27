@@ -298,6 +298,7 @@ def main() -> None:
         assert (site / "releases" / releases[2]).is_dir()
 
         page = (current / "index.html").read_text(encoding="utf-8")
+        feed_text = (current / "feed.xml").read_text(encoding="utf-8")
         life = json.loads((current / "life.json").read_text(encoding="utf-8"))
         product_page = (current / "products" / "index.html").read_text(
             encoding="utf-8"
@@ -399,6 +400,13 @@ def main() -> None:
         assert "/products/" in page
         assert "/network/" in page
         assert "/outside-run/" in page
+        assert "One WooCommerce Product Add-Ons companion survived" in page
+        retired_offer_text = (
+            "No paid Outside Run offer, checkout, reservation, Colony listing, "
+            "or accepted order is active."
+        )
+        assert retired_offer_text in page
+        assert retired_offer_text in feed_text
         assert "Eight signed events" in page
         assert "$0.00" in page
         assert "<script" not in outside_run_page.lower()
