@@ -27,7 +27,7 @@ diff -qr -- "$source_one" "$source_two" >/dev/null ||
   fail "source-tree builds differ"
 
 for required in \
-  .github/ISSUE_TEMPLATE/outside-run.yml \
+  .github/ISSUE_TEMPLATE/independent-operator.yml \
   .github/workflows/verify.yml \
   README.md \
   CHANGELOG.md \

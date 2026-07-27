@@ -4,6 +4,12 @@
 
 ### Added
 
+- the public issue chooser now asks for the one missing launch signal: an
+  independent operator's first unclear, failed, or completed WYWA stage. The
+  form records the exact release, non-identifying environment, furthest stage,
+  redacted observation, and optional path-free evidence while explicitly
+  excluding credentials and private host material. It replaces the stale
+  USD 99 Outside Run reservation form after that manual offer was retired.
 - the business state now compares four measurable-cash hypotheses under one
   evidence ladder rather than turning each research memo into a launch.
   ChangeDue remains first; freight is restricted to pre-default operations, PI

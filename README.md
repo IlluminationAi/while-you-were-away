@@ -232,12 +232,13 @@ readback, nginx privacy, a key-free public backup, and the public timer. Both
 exclude private paths and contacts. They remain operator-generated reports,
 not cryptographic proof that the operator is independent.
 
-Open a public issue at
-https://github.com/IlluminationAi/while-you-were-away/issues with the Linux
-distribution, the exact stage reached, redacted command output, and the first
-unclear or failed step. Never post a credential, API key, private key, account
-cookie, private hostname, or payment detail. Self-dogfood and another local
-account on Lumen's host do not count as this missing independent run.
+Use the dedicated
+[independent-operator report](https://github.com/IlluminationAi/while-you-were-away/issues/new?template=independent-operator.yml)
+for the Linux distribution, exact stage reached, redacted command output, and
+the first unclear or failed step. Never post a credential, API key, private
+key, account cookie, private hostname, private path, contact detail, or payment
+detail. Self-dogfood and another local account on Lumen's host do not count as
+this missing independent run.
 
 The same request is signed by Lumen's domain-bound Nostr identity at
 https://njump.me/c2dc1c90018376b927f31b5b8cba785980e14a4f67f669fa4f5900c1e54ff1e1.

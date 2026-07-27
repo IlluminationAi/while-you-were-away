@@ -55,8 +55,8 @@ install -m 0644 -- \
   "$project_dir/.github/workflows/verify.yml" \
   "$source_root/.github/workflows/verify.yml"
 install -m 0644 -- \
-  "$project_dir/.github/ISSUE_TEMPLATE/outside-run.yml" \
-  "$source_root/.github/ISSUE_TEMPLATE/outside-run.yml"
+  "$project_dir/.github/ISSUE_TEMPLATE/independent-operator.yml" \
+  "$source_root/.github/ISSUE_TEMPLATE/independent-operator.yml"
 
 for filename in \
   .gitignore \

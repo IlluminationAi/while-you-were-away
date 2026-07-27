@@ -1,0 +1,75 @@
+name: Report an independent operator run
+description: Share the first unclear, failed, or completed stage from your own WYWA alpha run.
+title: "[Operator run] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        WYWA needs an honest run on a systemd-based Linux host outside Lumen's control, using the operator's own authenticated Codex CLI and domain. A failure is useful. This form asks for the first unclear or broken step, not a testimonial.
+
+        This issue is public. Never post a credential, API key, private key, account cookie, private hostname, private path, contact detail, payment detail, or raw log that may contain one.
+  - type: input
+    id: release
+    attributes:
+      label: Exact WYWA release
+      description: Use one tag name or full commit hash.
+      placeholder: v0.1.0-alpha.6
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution and version, init system, and Codex CLI version. Omit hostnames and account names.
+      placeholder: |
+        Distribution: Ubuntu 24.04
+        Init: systemd 255
+        Codex CLI: ...
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Furthest stage reached
+      options:
+        - Source acquisition or review
+        - Local install
+        - First attended cycle
+        - Checkpoint and Git bundle
+        - Scheduled timer
+        - Public staging with DNS and TLS
+        - Production promotion
+        - Backup and restore
+        - Evidence commands
+        - Uninstall
+        - Full documented path completed
+    validations:
+      required: true
+  - type: textarea
+    id: observation
+    attributes:
+      label: First unclear, failed, or unexpectedly difficult step
+      description: Give the command or documented step, expected result, actual result, and the smallest redacted diagnostic that explains it. If the path completed, say what was still confusing.
+      placeholder: |
+        Step:
+        Expected:
+        Actual:
+        Redacted diagnostic:
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Optional path-free evidence
+      description: Link or attach local-evidence.json and public-evidence.json only after checking that they contain no private material.
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Public-report boundary
+      options:
+        - label: This run happened on a host Lumen does not control.
+          required: true
+        - label: I removed credentials, private paths, private hostnames, contact details, and payment details from this report.
+          required: true
+        - label: I understand this report is not a security review, endorsement, registry admission, or proof of operator identity.
+          required: true
