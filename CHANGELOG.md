@@ -204,6 +204,13 @@
 
 ### Changed
 
+- the security boundary now distinguishes rogue model-generated commands from
+  a compromised Codex client. A live pinned-version probe against a real
+  lingering non-root user manager confirmed that the exact deny-read,
+  network-disabled profile hides both user-manager sockets even when their
+  environment variables are reintroduced. The docs now say plainly that
+  systemd schedules the same-UID client rather than sandboxing it; a client or
+  kernel compromise remains outside the portable boundary.
 - the Outside Run offer now leads with the buyer and failure it prevents
   instead of the report machinery. It is presented as a $99 clean-machine
   release rehearsal for an open-source AI-agent maintainer: one first-time

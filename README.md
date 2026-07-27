@@ -518,7 +518,7 @@ and manager were removed afterward. This proves self-dogfood, not criterion 10.
 bounded local digital life in one explicit command. It creates the worker,
 accepts the conservative default mandate only through a named flag, installs
 the worker timer, renders a reviewed local snapshot, verifies a private Git
-bundle, and installs isolated refresh and backup timers. `status`, `publish`,
+bundle, and installs separate refresh and backup timers. `status`, `publish`,
 `backup`, `upgrade`, and `uninstall` cover the lifecycle. `trial` runs one
 attended cycle immediately, refreshes and backs up only a successful
 checkpoint, then emits the same path-free evidence report that the timers must

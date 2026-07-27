@@ -116,6 +116,13 @@ The detailed contracts are in
   Current version-9 receipts record this launch posture. Every Codex upgrade must
   repeat the filesystem, catalog, image-path, command-egress, and hosted-search
   probes before the version pin moves.
+- The reviewed official Codex binary and its Linux sandbox are part of the
+  trusted computing base. The systemd user unit schedules that same-UID client
+  and applies `NoNewPrivileges` plus cgroup limits; it is not a second command
+  sandbox. A compromised Codex executable, kernel defect, or sandbox escape
+  could reach the user's manager and start same-UID work outside the original
+  unit. That is a user-account takeover boundary, not automatic root
+  escalation.
 - The aggregate checkpoint gate limits accepted continuity, not live storage.
   The optional `wywa-volume` profile now supplies a real filesystem-level
   block and inode ceiling for a dedicated host, but it requires a root

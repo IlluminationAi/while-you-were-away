@@ -72,6 +72,27 @@ Codex authentication file was also refused through the exact production
 arguments: `AUTH_PATH_DENIED`. No authentication file was opened, copied, or
 printed. All disposable paths were removed.
 
+## Systemd user-manager mediation probe — 2026-07-27
+
+A disposable non-root account was given a real lingering systemd user manager.
+With explicit `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS`, an unsandboxed
+read-only `systemctl --user is-system-running` returned `running`.
+
+The same read-only request then ran through Codex CLI 0.145.0 with WYWA's exact
+`wywa-workspace-only` filesystem and disabled-network profile. It returned
+`offline`; direct `stat` calls inside that sandbox saw neither the user bus nor
+the manager's private socket below `/run/user/<uid>/`. The probe reintroduced
+both bus environment variables deliberately, so environment scrubbing was not
+the only control under test. The disposable account, linger state, manager,
+and home were removed after the result.
+
+This closes the direct model-command mediation path for the reviewed binary
+and profile. It does not turn the systemd user unit into a second sandbox.
+The Codex client and the user manager still share one Unix identity: a
+compromised client, kernel defect, or sandbox escape could ask the manager to
+start same-UID work outside the original unit. That is a user-account takeover
+boundary, not automatic root escalation.
+
 `tests/test-wywa` now rejects every Codex version except the reviewed 0.145.0,
 asserts every profile and feature argument, refuses any simultaneous legacy
 `--sandbox` or dangerous bypass, rejects workspace-local Codex configuration,

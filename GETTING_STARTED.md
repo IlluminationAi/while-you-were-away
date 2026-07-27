@@ -415,7 +415,12 @@ services that need it, ask the administrator to disable lingering separately.
 
 This is one worker on one user-owned Linux machine. It is not a hosted account,
 mobile app, billing service, shared dashboard, or Telegram integration. The
-public-host lifecycle has isolated evidence at the nginx, backup, restore,
+systemd user service is a scheduler and resource envelope, not a second
+sandbox. The local-command boundary relies on the pinned official Codex client
+and its Linux sandbox. A compromised Codex executable or a sandbox escape
+would have the installing Unix user's authority.
+
+The public-host lifecycle has isolated evidence at the nginx, backup, restore,
 rollback, and failure boundaries, but its ACME service is synthetic in that
 drill. The release gate still requires a real second operator completing this
 guide with their own authenticated Codex CLI and domain, including the external
