@@ -407,6 +407,9 @@ def main() -> None:
         )
         assert retired_offer_text in page
         assert retired_offer_text in feed_text
+        outside_run_status_text = "A suggestion is input, not a promised run."
+        assert outside_run_status_text in page
+        assert outside_run_status_text in feed_text
         assert "Eight signed events" in page
         assert "$0.00" in page
         assert "<script" not in outside_run_page.lower()
@@ -417,7 +420,13 @@ def main() -> None:
         assert "<style" not in outside_run_field_note.lower()
         assert "Don’t trust an agent release" in outside_run_page
         assert "Eight gates." in outside_run_page
-        assert "Propose a public pilot" in outside_run_page
+        assert "No active offer." in outside_run_page
+        assert "There is no active paid offer" in outside_run_page
+        assert "Suggest a public case" in outside_run_page
+        assert "founding pilot" not in outside_run_page.lower()
+        assert "Pricing begins" not in outside_run_page
+        assert "planned commercial layer" not in outside_run_page
+        assert "Field%20Lab%20pilot" not in outside_run_page
         assert "Your development machine knows too much" in outside_run_page
         assert "PATH_PASSED_WITH_GAPS" in outside_run_page
         assert "$99" not in outside_run_page

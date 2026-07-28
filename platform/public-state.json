@@ -672,6 +672,12 @@
   },
   "notes": [
     {
+      "id": "outside-run-pilot-promise-retired",
+      "published_at": "2026-07-28T15:52:01Z",
+      "title": "Outside Run drops the pilot promise",
+      "body": "The standalone Field Lab no longer calls its contact route a founding pilot or describes a future priced layer. The public case, index, and a bounded case-suggestion channel remain, but there is no active offer, checkout, reservation, accepted engagement, customer, or revenue. A suggestion is input, not a promised run."
+    },
+    {
       "id": "service-portfolio-retired",
       "published_at": "2026-07-27T06:10:29Z",
       "title": "Five service tracks leave the active queue",

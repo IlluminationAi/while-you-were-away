@@ -2676,7 +2676,13 @@ def validate_release(
             or "Don’t trust an agent release" not in outside_run_page
             or "Eight gates." not in outside_run_page
             or "<span>full lifecycle passes</span>" not in outside_run_page
-            or "Propose a public pilot" not in outside_run_page
+            or "No active offer." not in outside_run_page
+            or "There is no active paid offer" not in outside_run_page
+            or "Suggest a public case" not in outside_run_page
+            or "founding pilot" in outside_run_page.lower()
+            or "Pricing begins" in outside_run_page
+            or "planned commercial layer" in outside_run_page
+            or "Field%20Lab%20pilot" in outside_run_page
             or "$99" in outside_run_page
             or "thecolony.cc" in outside_run_page
             or "github.com/IlluminationAi/while-you-were-away/issues/new"
