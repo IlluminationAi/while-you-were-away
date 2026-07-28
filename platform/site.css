@@ -172,6 +172,7 @@ footer,
   color: #c9d1d4;
   font-size: clamp(1.05rem, 2vw, 1.4rem);
   max-width: 50rem;
+  overflow-wrap: anywhere;
 }
 
 .hero-actions {

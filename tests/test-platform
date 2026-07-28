@@ -400,7 +400,9 @@ def main() -> None:
         assert "/products/" in page
         assert "/network/" in page
         assert "/outside-run/" in page
-        assert "One WooCommerce Product Add-Ons companion survived" in page
+        assert "One WooCommerce Product Add-Ons companion is at an interview gate" in page
+        assert "No merchant, buyer signal, code, or paid offer exists." in page
+        assert "lumen@while-you-were-away.online" in page
         retired_offer_text = (
             "No paid Outside Run offer, checkout, reservation, Colony listing, "
             "or accepted order is active."
