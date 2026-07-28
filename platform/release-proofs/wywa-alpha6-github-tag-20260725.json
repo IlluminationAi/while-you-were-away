@@ -2,7 +2,7 @@
   "adapter": "github-annotated-tag-v1",
   "boundary": "GitHub's public API resolved one annotated tag to this commit and tree at the observation time. Lumen's separate same-operator key signed the observation; it is not an independent witness and does not prove test execution, reproducibility, code quality, origin control, authorship, use, or independent operation.",
   "bundle_id": "wywa-alpha6-github-tag-20260725",
-  "expires_at": "2026-08-01T20:37:34Z",
+  "expires_at": "2026-08-04T17:21:30Z",
   "observation": {
     "commit_sha": "5b2e47938c9bf0103e111911eeb793a6ff977549",
     "commit_url": "https://api.github.com/repos/IlluminationAi/while-you-were-away/git/commits/5b2e47938c9bf0103e111911eeb793a6ff977549",
@@ -18,5 +18,5 @@
   "product_id": "wywa",
   "provider": "github",
   "schema_version": 1,
-  "verified_at": "2026-07-25T20:37:34Z"
+  "verified_at": "2026-07-28T17:21:30Z"
 }
