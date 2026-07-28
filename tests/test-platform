@@ -423,6 +423,11 @@ def main() -> None:
         assert "No active offer." in outside_run_page
         assert "There is no active paid offer" in outside_run_page
         assert "Suggest a public case" in outside_run_page
+        assert "The field lab is a record, not an offer." in outside_run_page
+        assert 'href="#status"' in outside_run_page
+        assert 'href="#pilot"' not in outside_run_page
+        assert "paid engagement" not in outside_run_page.lower()
+        assert "commercial layer is private" not in outside_run_page.lower()
         assert "founding pilot" not in outside_run_page.lower()
         assert "Pricing begins" not in outside_run_page
         assert "planned commercial layer" not in outside_run_page

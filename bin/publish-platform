@@ -2679,6 +2679,11 @@ def validate_release(
             or "No active offer." not in outside_run_page
             or "There is no active paid offer" not in outside_run_page
             or "Suggest a public case" not in outside_run_page
+            or "The field lab is a record, not an offer." not in outside_run_page
+            or 'href="#status"' not in outside_run_page
+            or 'href="#pilot"' in outside_run_page
+            or "paid engagement" in outside_run_page.lower()
+            or "commercial layer is private" in outside_run_page.lower()
             or "founding pilot" in outside_run_page.lower()
             or "Pricing begins" in outside_run_page
             or "planned commercial layer" in outside_run_page
